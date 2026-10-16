@@ -5,12 +5,21 @@ package cmd
 
 import (
 	"bytes"
+	"context"
 	"testing"
 
+<<<<<<< Updated upstream
 	"github.com/9Ashwin/claude-code-openai-bridge/errs"
 	"github.com/9Ashwin/claude-code-openai-bridge/internal/anthropic"
 	"github.com/9Ashwin/claude-code-openai-bridge/internal/config"
 	"github.com/9Ashwin/claude-code-openai-bridge/internal/source"
+=======
+	"github.com/9Ashwin/flow-one/errs"
+	"github.com/9Ashwin/flow-one/internal/anthropic"
+	"github.com/9Ashwin/flow-one/internal/config"
+	"github.com/9Ashwin/flow-one/internal/source"
+	"github.com/spf13/cobra"
+>>>>>>> Stashed changes
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -120,3 +129,22 @@ func configWithProducts(names ...string) config.Config {
 }
 
 var _ source.Stream = (*scriptedStream)(nil)
+
+func TestRunFromMenuProvidesContext(t *testing.T) {
+	// cobra 只在 Execute 里设置 ctx；从菜单直接调 RunE 时它是 nil，
+	// 一路传到上游客户端就是 context.WithTimeout(nil, …) —— 真机上直接段错误。
+	parent := &cobra.Command{}
+	seen := false
+	target := &cobra.Command{RunE: func(c *cobra.Command, _ []string) error {
+		seen = true
+		require.NotNil(t, c.Context(), "菜单里直接调 RunE 时必须补上 context")
+		return nil
+	}}
+	require.NoError(t, runFromMenu(parent, target))
+	assert.True(t, seen, "目标命令要真的被执行")
+
+	// 父命令已经有 context 时（正常走 cobra 的路径）应当照传
+	type key struct{}
+	parent.SetContext(context.WithValue(context.Background(), key{}, "v"))
+	require.NoError(t, runFromMenu(parent, target))
+}

@@ -4,6 +4,7 @@
 package cmd
 
 import (
+	"context"
 	"fmt"
 	"strings"
 
@@ -45,21 +46,21 @@ func runMenu(cmd *cobra.Command, cfg config.Config) error {
 		}
 		switch key {
 		case "1":
-			err = setupCmd.RunE(setupCmd, nil)
+			err = runFromMenu(cmd, setupCmd)
 		case "2":
-			err = switchCmd.RunE(switchCmd, nil)
+			err = runFromMenu(cmd, switchCmd)
 		case "3":
-			err = statusCmd.RunE(statusCmd, nil)
+			err = runFromMenu(cmd, statusCmd)
 		case "4":
 			return runServe(cmd.Context(), cfg)
 		case "5":
-			err = loginCmd.RunE(loginCmd, nil)
+			err = runFromMenu(cmd, loginCmd)
 		case "6":
-			err = doctorCmd.RunE(doctorCmd, nil)
+			err = runFromMenu(cmd, doctorCmd)
 		case "7":
-			err = modelsCmd.RunE(modelsCmd, nil)
+			err = runFromMenu(cmd, modelsCmd)
 		case "0":
-			err = uninstallCmd.RunE(uninstallCmd, nil)
+			err = runFromMenu(cmd, uninstallCmd)
 		case "Q":
 			return nil
 		}
@@ -72,6 +73,20 @@ func runMenu(cmd *cobra.Command, cfg config.Config) error {
 		}
 		ui.Blank()
 	}
+}
+
+// runFromMenu 在没有走 cobra 的 Execute 时替子命令补上 context。
+//
+// 从菜单里直接调 RunE 会绕过 cobra 的 ctx 传递：`cmd.Context()` 是 nil，
+// 一路传到上游客户端就是 `context.WithTimeout(nil, …)` —— 真机上是段错误
+// （`cannot create context from nil parent`）。这里补一次，所有菜单项都受益。
+func runFromMenu(parent, target *cobra.Command) error {
+	ctx := parent.Context()
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	target.SetContext(ctx)
+	return target.RunE(target, nil)
 }
 
 // describeConfiguredSources 给菜单题头用：一眼看出这次会挂哪几条。

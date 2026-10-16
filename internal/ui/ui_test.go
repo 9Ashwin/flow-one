@@ -87,3 +87,42 @@ func TestPasswordRefusesWithoutTTY(t *testing.T) {
 	_, err := Password("粘贴 key")
 	require.Error(t, err)
 }
+
+func TestSelectFrameUsesCarriageReturns(t *testing.T) {
+	// 真机踩过：raw 模式关掉 OPOST 之后 `\n` 只下移不回列 0，于是每一行都从上一行
+	// 结束的列开始写，选项越排越往右（用户截图里选项从第 50 列开始）。
+	// 所以帧必须用 `\r\n`，且帧首要有一个 `\r` 把上一次按键留下的列位置归零。
+	keys := "\x1b[B" + "\r" // ↓ 再回车
+	restore := SetInputForTest(strings.NewReader(keys), true)
+	defer restore()
+	var out strings.Builder
+	old := Out
+	Out = &out
+	defer func() { Out = old }()
+
+	_, err := Select("接哪一家？", []Option{
+		{Label: "WorkBuddy 国内版", Value: "cn"},
+		{Label: "OpenCode 免费档", Value: "oc"},
+	}, SelectOptions{})
+	require.NoError(t, err)
+
+	rendered := out.String()
+	assert.Contains(t, rendered, "\r", "帧首要有回车，把列位置归零")
+	// 除最后一行外，每一行之间都必须是 \r\n；出现裸 \n（前面不是 \r）就说明会往右飘
+	for i := 0; i < len(rendered); i++ {
+		if rendered[i] == '\n' {
+			require.Greater(t, i, 0)
+			assert.Equal(t, byte('\r'), rendered[i-1], "行尾必须是 \\r\\n，不能是裸 \\n")
+		}
+	}
+}
+
+func TestFrameStartsWithCarriageReturnAndTruncates(t *testing.T) {
+	// 输出不是真终端时（测试/管道）按 0 宽度处理 = 不截断
+	assert.Equal(t, "\ra\r\nb\r\n", frame([]string{"a", "b"}))
+
+	// 超宽行要按**显示宽度**截断：折行会让 clearDrawn 的行数算错，留下残字
+	assert.Equal(t, "你好…", truncateToWidth("你好世界啊", 5)) // 4 列 + 省略号 1 列
+	assert.Equal(t, "abcdef", truncateToWidth("abcdef", 10))
+	assert.Equal(t, "abcdef", truncateToWidth("abcdef", 0), "宽度未知时不截断")
+}

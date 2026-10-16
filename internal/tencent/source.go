@@ -417,6 +417,9 @@ func truncate(text string, limit int) string {
 // withTimeout 在调用方没给截止时间时补一个：Node 版对带了 signal 的调用不加自己的
 // 超时，这里的判据一致。
 func withTimeout(ctx context.Context, timeout time.Duration) (context.Context, context.CancelFunc) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	if _, ok := ctx.Deadline(); ok {
 		return context.WithCancel(ctx)
 	}

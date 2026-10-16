@@ -109,6 +109,9 @@ func fetchCapabilities(ctx context.Context, conn client) (map[string]capability,
 
 // withTimeout 给请求加一个上限；调用方的 ctx 更早结束就按调用方的来。
 func withTimeout(ctx context.Context, limit time.Duration) (context.Context, context.CancelFunc) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	if deadline, set := ctx.Deadline(); set && time.Until(deadline) < limit {
 		return ctx, func() {}
 	}

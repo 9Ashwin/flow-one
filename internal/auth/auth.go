@@ -124,6 +124,11 @@ func (c *Client) store() Store { return Store{Path: c.File} }
 // 传输层失败返回 error（轮询里的网络抖动据此 continue）；响应体不是 JSON 对象时
 // body 为 nil —— 交给状态码判断，与 Node 版一致。
 func (c *Client) control(ctx context.Context, method, url string, headers map[string]string, timeout time.Duration) (int, map[string]any, error) {
+	if ctx == nil {
+		// 兜底：nil 父 context 会让 context.WithTimeout 直接 panic，
+		// 而 CLI 崩掉对用户来说毫无信息量（真机上撞过一次）。
+		ctx = context.Background()
+	}
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 

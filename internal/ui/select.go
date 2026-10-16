@@ -54,7 +54,7 @@ func Select(message string, options []Option, opts SelectOptions) (string, error
 	draw := func() {
 		lines := renderSelect(message, hint, query, options, visible, cursor, opts)
 		clearDrawn(drawn)
-		fmt.Fprint(Out, strings.Join(lines, "\n")+"\n")
+		fmt.Fprint(Out, frame(lines))
 		drawn = len(lines)
 	}
 	draw()
@@ -85,7 +85,7 @@ func Select(message string, options []Option, opts SelectOptions) (string, error
 			if cursor < len(visible) && !visible[cursor].Disabled && !visible[cursor].Separator {
 				chosen := visible[cursor]
 				clearDrawn(drawn)
-				fmt.Fprintln(Out, Green("✔")+" "+message+" "+Bold(chosen.Label))
+				fmt.Fprint(Out, frame([]string{Green("✔") + " " + message + " " + Bold(chosen.Label)}))
 				return chosen.Value, nil
 			}
 		case opts.Filterable && key.text != "":
@@ -217,18 +217,69 @@ func countSelectable(list []Option) int {
 	return count
 }
 
+// frame 把一帧渲染成字节。
+//
+// **行尾必须是 `\r\n`，不能只用 `\n`**：raw 模式关掉了 OPOST，`\n` 在终端上只下移
+// 一行、不回列 0，于是每一行都从上一行结束的列开始写 —— 表现出来就是选项越排越往右
+// （真机截图里第一行 50 列宽，选项就从第 50 列开始）。同时在帧首补一个 `\r`，
+// 把上一次按键留下的列位置归零。
+func frame(lines []string) string {
+	width := terminalWidth()
+	trimmed := make([]string, 0, len(lines))
+	for _, line := range lines {
+		trimmed = append(trimmed, truncateToWidth(line, width))
+	}
+	return "\r" + strings.Join(trimmed, "\r\n") + "\r\n"
+}
+
+// terminalWidth 拿终端宽度；拿不到就返回 0（表示不截断）。
+func terminalWidth() int {
+	file := os.Stdout
+	if Out != os.Stdout {
+		return 0 // 输出被重定向（测试或管道）时不按终端宽度截断
+	}
+	width, _, err := term.GetSize(int(file.Fd()))
+	if err != nil || width <= 0 {
+		return 0
+	}
+	return width
+}
+
+// truncateToWidth 把一行按**显示宽度**截到终端宽度以内。
+//
+// 必须截断：一行折行后占两行，而 clearDrawn 是按「逻辑行数」上移的，行数对不上就会
+// 把上一帧的残字留在屏幕上。
+func truncateToWidth(line string, width int) string {
+	if width <= 0 || DisplayWidth(line) <= width {
+		return line
+	}
+	// 留一列给省略号，逐步裁到放得下（CJK 字符占两列，按 rune 裁不会切断半个字）
+	runes := []rune(line)
+	for len(runes) > 0 {
+		runes = runes[:len(runes)-1]
+		candidate := string(runes) + "…"
+		if DisplayWidth(candidate) <= width {
+			return candidate
+		}
+	}
+	return ""
+}
+
 func clearDrawn(count int) {
+	// 先回列 0：光标停在行中间时（比如上一个输入留下的 `› 1`），
+	// 不归零就直接写新一帧，整块会往右飘。
+	fmt.Fprint(Out, "\r")
 	if count == 0 {
 		return
 	}
 	fmt.Fprintf(Out, "\x1b[%dA", count)
 	for i := 0; i < count; i++ {
-		fmt.Fprint(Out, "\x1b[2K")
+		fmt.Fprint(Out, "\x1b[2K") // 2K 清整行，与列位置无关
 		if i < count-1 {
 			fmt.Fprint(Out, "\x1b[1B")
 		}
 	}
-	fmt.Fprintf(Out, "\x1b[%dA", count-1)
+	fmt.Fprintf(Out, "\x1b[%dA\r", count-1)
 }
 
 // ── 按键解析 ────────────────────────────────────────────────────────────────
