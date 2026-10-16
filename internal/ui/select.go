@@ -35,12 +35,10 @@ func Select(message string, options []Option, opts SelectOptions) (string, error
 	if !IsInteractive() {
 		return "", fmt.Errorf("需要终端交互来选择，但当前没有 TTY")
 	}
-	real := currentInput() == os.Stdin
-	var fd int
-	if real {
-		fd = int(os.Stdin.Fd())
-		if oldState, err := term.MakeRaw(fd); err == nil {
-			defer term.Restore(fd, oldState)
+	// 只有真终端才切 raw 模式；测试注入的 reader 直接按字节读
+	if currentInput() == os.Stdin {
+		if oldState, err := term.MakeRaw(int(os.Stdin.Fd())); err == nil {
+			defer term.Restore(int(os.Stdin.Fd()), oldState)
 		}
 	}
 	reader := bufio.NewReader(currentInput())

@@ -20,7 +20,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-	"unicode/utf8"
 
 	"golang.org/x/term"
 )
@@ -90,8 +89,8 @@ var Out io.Writer = os.Stdout
 // ErrOut 是错误与提示（stderr）—— 按 AGENTS.md 的契约，成功数据才进 stdout。
 var ErrOut io.Writer = os.Stderr
 
-func Note(text string)   { fmt.Fprintln(Out, text) }
-func Blank()             { fmt.Fprintln(Out) }
+func Note(text string)    { fmt.Fprintln(Out, text) }
+func Blank()              { fmt.Fprintln(Out) }
 func Success(text string) { fmt.Fprintln(Out, Green("✔")+" "+text) }
 func Warn(text string)    { fmt.Fprintln(ErrOut, Yellow("!")+" "+text) }
 func Fail(text string)    { fmt.Fprintln(ErrOut, Red("✖")+" "+text) }
@@ -138,21 +137,25 @@ func Banner(subtitle, version string) {
 // ── 输入缝 ──────────────────────────────────────────────────────────────────
 
 var (
-	inputMu     sync.Mutex
-	inputReader io.Reader = os.Stdin
-	inputIsTTY            = func() bool { return term.IsTerminal(int(os.Stdin.Fd())) }
+	inputMu      sync.Mutex
+	inputReader  io.Reader = os.Stdin
+	interactiveO *bool     // 非 nil 时强制「是不是终端」，测试用
 )
 
-// SetInputForTest 换掉输入来源与 TTY 判断（仅测试用）。
+// SetInputForTest 换掉输入来源，并强制「是不是终端」的判断（仅测试用）。
+//
+// 为什么连 TTY 判断一起换：用例里 stdout 不是终端，只换 stdin 会让
+// IsInteractive() 仍然返回 false，测试根本走不到交互路径。
 func SetInputForTest(reader io.Reader, isTTY bool) (restore func()) {
 	inputMu.Lock()
-	previousReader, previousTTY := inputReader, inputIsTTY
+	previousReader, previousOverride := inputReader, interactiveO
 	inputReader = reader
-	inputIsTTY = func() bool { return isTTY }
+	flag := isTTY
+	interactiveO = &flag
 	inputMu.Unlock()
 	return func() {
 		inputMu.Lock()
-		inputReader, inputIsTTY = previousReader, previousTTY
+		inputReader, interactiveO = previousReader, previousOverride
 		inputMu.Unlock()
 	}
 }
@@ -160,9 +163,12 @@ func SetInputForTest(reader io.Reader, isTTY bool) (restore func()) {
 // IsInteractive 报告能否进交互（stdin 与 stdout 都得是终端）。
 func IsInteractive() bool {
 	inputMu.Lock()
-	check := inputIsTTY
+	override := interactiveO
 	inputMu.Unlock()
-	return check() && term.IsTerminal(int(os.Stdout.Fd()))
+	if override != nil {
+		return *override
+	}
+	return term.IsTerminal(int(os.Stdin.Fd())) && term.IsTerminal(int(os.Stdout.Fd()))
 }
 
 func currentInput() io.Reader {
@@ -291,9 +297,7 @@ func (s *Spinner) Stop() {
 	<-s.done
 }
 
-// ── 宽度 ────────────────────────────────────────────────────────────────────
-
-var _ = utf8.RuneLen // 保留 utf8 依赖，宽度计算走 rune 遍历
+// ── 测试用 ──────────────────────────────────────────────────────────────────
 
 // ReadLineForTest 只给测试用：直接读一行，不打印提示。
 func ReadLineForTest() (string, error) {
