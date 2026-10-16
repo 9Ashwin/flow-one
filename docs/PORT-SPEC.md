@@ -138,7 +138,7 @@ Linux 是一等目标，不是「顺便」。移植时容易漏的几处：
 
 | 路径 | 做法 | 代价 |
 | --- | --- | --- |
-| npm（保住现状） | 主包 `flow-one` 只放一个 `bin/cli.js` 转发脚本；**每个平台一个可选依赖包**（`@ashwin99/flow-one-darwin-arm64` 等），主包用 `optionalDependencies` 列出它们，npm 只装匹配当前平台的那一个；转发脚本按 `process.platform` + `process.arch` 找到二进制并 `spawn(..., {stdio: 'inherit'})` | 要发布 1 + N 个包，CI 要交叉编译并上传 |
+| npm（保住现状） | 主包 `flow-one` 只放一个 `bin/cli.js` 转发脚本；**每个平台一个可选依赖包**（`flow-one-darwin-arm64` 等），主包用 `optionalDependencies` 列出它们，npm 只装匹配当前平台的那一个；转发脚本按 `process.platform` + `process.arch` 找到二进制并 `spawn(..., {stdio: 'inherit'})` | 要发布 1 + N 个包，CI 要交叉编译并上传 |
 | `go install` | `go install github.com/9Ashwin/flow-one@latest` | 只对装了 Go 的人可用 |
 | 一键脚本 / Releases | GitHub Releases 放 darwin/linux × arm64/amd64 四个二进制，配一个 `install.sh` | 要维护脚本与校验和 |
 

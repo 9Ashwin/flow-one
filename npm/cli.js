@@ -15,10 +15,10 @@ const { existsSync } = require('node:fs')
 const path = require('node:path')
 
 const PLATFORMS = {
-  'darwin-arm64': '@ashwin99/flow-one-darwin-arm64',
-  'darwin-x64': '@ashwin99/flow-one-darwin-x64',
-  'linux-arm64': '@ashwin99/flow-one-linux-arm64',
-  'linux-x64': '@ashwin99/flow-one-linux-x64',
+  'darwin-arm64': 'flow-one-darwin-arm64',
+  'darwin-x64': 'flow-one-darwin-x64',
+  'linux-arm64': 'flow-one-linux-arm64',
+  'linux-x64': 'flow-one-linux-x64',
 }
 
 function localBinary() {

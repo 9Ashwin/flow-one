@@ -30,7 +30,7 @@ for target in darwin/arm64 darwin/amd64 linux/arm64 linux/amd64; do
 
   cat > "$DIR/package.json" <<JSON
 {
-  "name": "@ashwin99/flow-one-$GOOS-$NPM_ARCH",
+  "name": "flow-one-$GOOS-$NPM_ARCH",
   "version": "$VERSION",
   "description": "flow-one 的 $GOOS-$NPM_ARCH 预编译二进制（由主包自动选中）",
   "license": "MIT",
