@@ -4,6 +4,7 @@
 package service
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -117,15 +118,96 @@ func RestartHint() string {
 	return "systemctl --user restart " + ServiceLabel + ".service"
 }
 
+// ── 用户会话环境（XDG_RUNTIME_DIR）──────────────────────────────────────────
+//
+// 2026-10-16 在无头 ubuntu 上真踩过：SSH 或非登录壳里 `XDG_RUNTIME_DIR` 常常是空的，
+// 于是 `systemctl --user` 一律报 `Failed to connect to bus: No medium found`。
+// 表现极具误导性 —— 向导说「配置已写入」，单元文件却从没落地，8788 上没人听，
+// 回到 Claude Code 只看到 ECONNREFUSED，人就去查模型、查密钥了。
+// dbus 其实一直在 `/run/user/<uid>/bus`，只是没人把这个路径指出来。
+
+// xdgRuntimeDirFor 算出 `systemctl --user` 该用的 XDG_RUNTIME_DIR。纯函数。
+//
+// 显式给了值就照用（可能是自定义位置）；空则补 `/run/user/<uid>`，但**目录不存在就
+// 不补** —— 那说明这台机器根本没有用户会话（容器里很常见），瞎凑一个路径只会让
+// 报错更难懂。
+func xdgRuntimeDirFor(current string, uid int, dirExists func(string) bool) (string, bool) {
+	if value := strings.TrimSpace(current); value != "" {
+		return value, true
+	}
+	fallback := fmt.Sprintf("/run/user/%d", uid)
+	if !dirExists(fallback) {
+		return "", false
+	}
+	return fallback, true
+}
+
+// runtimeDirEnv 在环境表里**替换** XDG_RUNTIME_DIR，而不是追加。
+//
+// 同名变量出现两次时 getenv 取第一个，所以追加是无效的 —— 必须先把旧条目摘掉。
+func runtimeDirEnv(env []string, current string, uid int, dirExists func(string) bool) []string {
+	dir, ok := xdgRuntimeDirFor(current, uid, dirExists)
+	filtered := make([]string, 0, len(env)+1)
+	for _, item := range env {
+		if strings.HasPrefix(item, "XDG_RUNTIME_DIR=") {
+			continue
+		}
+		filtered = append(filtered, item)
+	}
+	if ok {
+		filtered = append(filtered, "XDG_RUNTIME_DIR="+dir)
+	}
+	return filtered
+}
+
+func dirExists(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && info.IsDir()
+}
+
+// isSessionUnavailable 认「连不上用户 bus」这一类说法。
+func isSessionUnavailable(message string) bool {
+	lower := strings.ToLower(message)
+	switch {
+	case strings.Contains(lower, "failed to connect to bus"):
+		return true
+	case strings.Contains(lower, "no medium found"):
+		return true
+	case strings.Contains(lower, "failed to connect to system scope bus"):
+		return true
+	case strings.Contains(lower, "connection refused") && strings.Contains(lower, "bus"):
+		return true
+	default:
+		return false
+	}
+}
+
+// systemctlFailure 把 systemctl 的失败翻成类型化错误。
+//
+// 重点是把「连不上 bus」单独挑出来：它不是 systemd 坏了，而是当前这个壳里没有用户
+// 会话。这类错误必须给出**两条可执行的路**，否则人会被带到查模型、查密钥上去。
+func systemctlFailure(args []string, output string, cause error) *errs.Error {
+	message := strings.TrimSpace(output)
+	if message == "" && cause != nil {
+		message = cause.Error()
+	}
+	detail := "systemctl " + strings.Join(args, " ") + " 失败：" + message
+	if isSessionUnavailable(message) {
+		return errs.Config(errs.SubtypeSessionUnavailable, detail).
+			WithCause(cause).
+			WithHint("当前这个壳里没有用户会话（SSH / 非登录壳常见）。两条路：loginctl enable-linger $USER 之后重进登录壳再装，或者直接前台跑 claude-code-bridge")
+	}
+	return errs.Internal(errs.SubtypeUnexpected, detail).WithCause(cause)
+}
+
 // runSystemctl 跑一次 systemctl，失败时把它的输出带回来。
 func runSystemctl(args ...string) error {
-	output, err := exec.Command("systemctl", args...).CombinedOutput()
+	command := exec.Command("systemctl", args...)
+	// 补上 XDG_RUNTIME_DIR：SSH / 非登录壳里它是空的，systemctl --user 会连不上 bus
+	command.Env = runtimeDirEnv(os.Environ(), os.Getenv("XDG_RUNTIME_DIR"), os.Getuid(), dirExists)
+	output, err := command.CombinedOutput()
 	if err != nil {
-		message := strings.TrimSpace(string(output))
-		if message == "" {
-			message = err.Error()
-		}
-		return errs.Internal(errs.SubtypeUnexpected, "systemctl "+strings.Join(args, " ")+" 失败："+message)
+		return systemctlFailure(args, string(output), err)
 	}
 	return nil
 }

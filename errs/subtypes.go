@@ -30,6 +30,7 @@ const (
 	SubtypeServiceCodeMismatch  = "service_code_mismatch"
 	SubtypeNoSources            = "no_sources"
 	SubtypeServiceUnsupported   = "service_unsupported"
+	SubtypeSessionUnavailable   = "session_unavailable"
 
 	// ── network ──
 	SubtypeConnectFailed = "connect_failed"
@@ -57,7 +58,7 @@ var declared = map[string]struct{}{
 	SubtypeNotLoggedIn: {}, SubtypeLoginFailed: {}, SubtypeLoginTimeout: {},
 	SubtypeMissingAPIKey: {}, SubtypeRefreshFailed: {},
 
-	SubtypeSettingsMissing: {}, SubtypeSettingsInconsistent: {},
+	SubtypeSettingsMissing: {}, SubtypeSettingsInconsistent: {}, SubtypeSessionUnavailable: {},
 	SubtypeServiceCodeMismatch: {}, SubtypeNoSources: {}, SubtypeServiceUnsupported: {},
 
 	SubtypeConnectFailed: {}, SubtypeTimeout: {},

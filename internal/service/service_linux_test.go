@@ -6,6 +6,7 @@
 package service
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -208,4 +209,75 @@ func TestHintsOnLinux(t *testing.T) {
 	setup(t)
 	assert.Equal(t, "journalctl --user -u "+ServiceLabel, LogHint())
 	assert.Equal(t, "systemctl --user restart "+ServiceLabel+".service", RestartHint())
+}
+
+// ── XDG_RUNTIME_DIR：无头 ubuntu 上真踩过的坑 ────────────────────────────────
+
+func TestXdgRuntimeDirFallback(t *testing.T) {
+	yes := func(string) bool { return true }
+	no := func(string) bool { return false }
+
+	// 空 → 补 /run/user/<uid>（dbus 一直在这儿，只是没人指出来）
+	dir, ok := xdgRuntimeDirFor("", 1000, yes)
+	require.True(t, ok)
+	assert.Equal(t, "/run/user/1000", dir)
+
+	// 只有空白也算空（SSH 里各种奇怪取值的常见形态）
+	dir, ok = xdgRuntimeDirFor("   ", 1000, yes)
+	require.True(t, ok)
+	assert.Equal(t, "/run/user/1000", dir)
+
+	// 显式给了就照用，哪怕目录这会儿不在（可能是自定义位置）
+	dir, ok = xdgRuntimeDirFor("/custom/run", 1000, no)
+	require.True(t, ok)
+	assert.Equal(t, "/custom/run", dir)
+
+	// 变量空 + 目录不存在 → 不补。这台机器没有用户会话（容器里常见），
+	// 瞎凑一个路径只会让报错更难懂。
+	_, ok = xdgRuntimeDirFor("", 1000, no)
+	assert.False(t, ok)
+}
+
+func TestRuntimeDirEnvReplacesInsteadOfAppending(t *testing.T) {
+	// 同名变量出现两次时 getenv 取第一个，所以追加是无效的 —— 必须摘掉旧的。
+	env := runtimeDirEnv([]string{"PATH=/bin", "XDG_RUNTIME_DIR=/stale", "HOME=/root"}, "", 1000,
+		func(string) bool { return true })
+	assert.Equal(t, []string{"PATH=/bin", "HOME=/root", "XDG_RUNTIME_DIR=/run/user/1000"}, env)
+
+	// 拿不到会话时不要留一个假的 XDG_RUNTIME_DIR
+	env = runtimeDirEnv([]string{"PATH=/bin", "XDG_RUNTIME_DIR=/stale"}, "", 1000,
+		func(string) bool { return false })
+	assert.Equal(t, []string{"PATH=/bin"}, env)
+}
+
+func TestSystemctlFailureExplainsMissingUserSession(t *testing.T) {
+	// 「连不上 bus」必须给两条可执行的路，而不是泛化成 internal 错误 ——
+	// 上一个版本就是在这里把人带去查模型、查密钥的。
+	bus := "Failed to connect to bus: No medium found"
+	failure := systemctlFailure([]string{"--user", "daemon-reload"}, bus, errors.New("exit status 1"))
+	require.NotNil(t, failure)
+	assert.Equal(t, errs.CategoryConfig, failure.Category)
+	assert.Equal(t, errs.SubtypeSessionUnavailable, failure.Subtype)
+	assert.Contains(t, failure.Error(), "bus", "上游原话要带出来")
+	assert.Contains(t, failure.Hint, "enable-linger")
+	assert.Contains(t, failure.Hint, "前台跑")
+
+	// 其他失败原样带出，不掩盖真因
+	other := systemctlFailure([]string{"--user", "enable", "--now", "x.service"}, "Unit x.service not found.", errors.New("exit status 1"))
+	assert.Equal(t, errs.CategoryInternal, other.Category)
+	assert.Contains(t, other.Error(), "Unit x.service not found.")
+}
+
+func TestIsSessionUnavailable(t *testing.T) {
+	for _, text := range []string{
+		"Failed to connect to bus: No medium found",
+		"failed to connect to bus",
+		"no medium found",
+		"Failed to connect to system scope bus via local transport: Connection refused",
+	} {
+		assert.True(t, isSessionUnavailable(text), text)
+	}
+	for _, text := range []string{"Unit not found.", "Access denied", ""} {
+		assert.False(t, isSessionUnavailable(text), text)
+	}
 }

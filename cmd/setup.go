@@ -110,8 +110,14 @@ func runSetup(cmd *cobra.Command, cfg config.Config) error {
 			Command: []string{service.CurrentCLIPath(), "serve"},
 		})
 		if err != nil {
+			// 服务装不上必须说清下一步：错误自带的 hint 才是可执行的那条路
+			// （无头 Linux 上最常见的就是「没有用户会话」，那时唯一的出路是前台跑）。
 			ui.Fail(err.Error())
-			ui.Warn("先手动跑起来：" + fmt.Sprintf("BRIDGE_PORT=%d BRIDGE_API_KEY=%s claude-code-bridge serve", port, apiKey))
+			if typed, ok := errs.As(err); ok && typed.Hint != "" {
+				ui.Note("  " + ui.Gray("→ "+typed.Hint))
+			}
+			ui.Warn("先用前台方式跑起来：")
+			ui.Note("  " + ui.Gray(fmt.Sprintf("BRIDGE_PORT=%d BRIDGE_API_KEY=%s claude-code-bridge serve", port, apiKey)))
 		} else {
 			ui.Success(fmt.Sprintf("后台服务已更新（%s）", result.Kind))
 			for _, note := range result.Notes {
