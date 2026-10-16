@@ -9,4 +9,4 @@ node_modules/
 *.test
 coverage.out
 # npm 平台包里的二进制是构建产物，不入库
-npm/packages/*/bin/claude-code-bridge
+npm/packages/*/bin/
