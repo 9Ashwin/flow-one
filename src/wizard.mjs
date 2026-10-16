@@ -18,6 +18,8 @@ import net from 'node:net'
 import crypto from 'node:crypto'
 import process from 'node:process'
 import { CN, INTL } from './products.mjs'
+import { OPENCODE } from './opencode.mjs'
+import { SOURCES, needsLogin } from './sources.mjs'
 import { login, credentialStatus } from './auth.mjs'
 import { createDirectUpstream, createGatewayUpstream } from './upstreams.mjs'
 import { credentialFile } from './config.mjs'
@@ -130,6 +132,7 @@ function currentSettings() {
 }
 
 function loggedInLabel(product) {
+  if (!needsLogin(product)) return `${product.id} 无需登录`
   const status = credentialStatus(product)
   if (!status.loggedIn) return `${product.id} 未登录`
   return `${product.id} ${status.nickname === '' ? '已登录' : status.nickname}`
@@ -144,7 +147,7 @@ async function statusLine() {
   const service = serviceState()
   const state = running !== undefined ? green(`运行中（${port}）`) : service.installed ? '已安装但没在跑' : '未运行'
   note(`  ${gray('模型')} ${model === '' ? gray('未配置') : style.bold(model.replace('[1m]', ''))}   ${gray('服务')} ${state}`)
-  note(`  ${gray('账号')} ${gray(`${loggedInLabel(CN)} · ${loggedInLabel(INTL)}`)}`)
+  note(`  ${gray('账号')} ${gray(`${loggedInLabel(CN)} · ${loggedInLabel(INTL)}`)}   ${gray('OpenCode 免费档无需登录')}`)
 }
 
 // ── 登录 ────────────────────────────────────────────────────────────────────
@@ -186,11 +189,12 @@ export async function pickModel(rows, { limit = 10 } = {}) {
 
   const picked = await select({ message: '用哪个模型？', options })
   if (picked === '__manual__') {
-    return await input({
-      message: '模型 ID（直连形如 cn/xxx，网关形如 workbuddy/xxx）',
+    const id = await input({
+      message: '模型 ID（形如 cn/xxx、intl/xxx、oc/xxx）',
       initial: ranked[0]?.id ?? '',
       validate: value => (value === '' ? '不能为空' : undefined),
     })
+    return rows.find(row => row.id === id) ?? { id }
   }
   if (picked === '__filter__') {
     const keyword = await input({ message: '关键词', initial: 'deepseek' })
@@ -199,12 +203,14 @@ export async function pickModel(rows, { limit = 10 } = {}) {
       warn(`没有匹配 ${keyword} 的模型`)
       return await pickModel(rows, { limit })
     }
-    return await select({
+    const id = await select({
       message: '用哪个模型？',
       options: matched.map((row, index) => ({ label: row.id, hint: modelHint(row, index === 0), value: row.id })),
     })
+    return matched.find(row => row.id === id) ?? { id }
   }
-  return picked
+  // 返回整行：窗口大小决定要不要给 Claude Code 登记 `[1m]`，不能只传 id
+  return ranked.find(row => row.id === picked) ?? { id: picked }
 }
 
 /** 推荐模型排前面，其余保持远端顺序。 */
@@ -236,14 +242,14 @@ export async function setupWizard() {
   const serviceEnv = {}
   if (mode === 'direct') {
     const which = await select({
-      message: '装哪几条产品线？',
+      message: '挂哪几条来源？',
       options: [
-        { label: '国内版 + 国际版', hint: `${loggedInLabel(CN)} / ${loggedInLabel(INTL)}`, value: [CN, INTL] },
-        { label: '只要国内版（CodeBuddy）', hint: loggedInLabel(CN), value: [CN] },
-        { label: '只要国际版（WorkBuddy）', hint: loggedInLabel(INTL), value: [INTL] },
+        { label: '全部：WorkBuddy 两条线 + OpenCode 免费模型', hint: '推荐', value: [CN, INTL, OPENCODE] },
+        { label: '只要 WorkBuddy 两条线', hint: `${loggedInLabel(CN)} / ${loggedInLabel(INTL)}`, value: [CN, INTL] },
+        { label: '只要 OpenCode 免费模型', hint: '无需登录，装完即用', value: [OPENCODE] },
       ],
     })
-    await ensureLoggedIn(which)
+    await ensureLoggedIn(which.filter(needsLogin))
     upstream = createDirectUpstream({ products: which, credentialFile: credentialFile() }, { log: line => note(`  ${dim(line)}`) })
   } else {
     const base = await input({
@@ -277,7 +283,8 @@ export async function setupWizard() {
 
   blank()
   section('第 3 步 · 模型')
-  const model = await pickModel(rows)
+  const picked = await pickModel(rows)
+  const model = picked.id
   serviceEnv.BRIDGE_MODEL = model
 
   blank()
@@ -286,7 +293,10 @@ export async function setupWizard() {
   const port = await choosePort()
   const apiKey = crypto.randomBytes(24).toString('base64url')
   const settingsFile = claudeSettingsPath()
-  const applied = installClaudeSettings({ file: settingsFile, baseUrl: `http://127.0.0.1:${port}`, apiKey, model })
+  const applied = installClaudeSettings({
+    file: settingsFile, baseUrl: `http://127.0.0.1:${port}`, apiKey, model,
+    contextWindow: picked.contextWindow,
+  })
   success(`已写入 ${settingsFile}`)
   if (applied.backup !== undefined) note(`  ${gray(`原文件已备份：${applied.backup}`)}`)
 
@@ -323,7 +333,7 @@ export async function setupWizard() {
   blank()
   box([
     '配置完成',
-    `${gray('模型')}  ${model}`,
+    `${gray('模型')}  ${model}${picked.contextWindow === undefined ? '' : `  ${gray(`窗口 ${shortNumber(picked.contextWindow)}`)}`}`,
     `${gray('监听')}  http://127.0.0.1:${port}`,
     `${gray('服务')}  ${wantsService ? (health === undefined ? '已安装' : '运行中') : running === undefined ? '未常驻' : '复用已有实例'}`,
   ], { color: green })
@@ -350,7 +360,7 @@ export async function switchModel() {
   const env = installed.service?.env ?? {}
   const upstream = env.BRIDGE_MODE === 'gateway'
     ? createGatewayUpstream({ upstream: env.UPSTREAM_BASE_URL ?? 'http://127.0.0.1:8326', upstreamKey: env.UPSTREAM_API_KEY ?? '' })
-    : createDirectUpstream({ products: [CN, INTL], credentialFile: credentialFile() }, { log: () => {} })
+    : createDirectUpstream({ products: SOURCES, credentialFile: credentialFile() }, { log: () => {} })
 
   let rows = []
   try {
@@ -367,14 +377,16 @@ export async function switchModel() {
   const ranked = [...rows].sort((a, b) => rank(a.id) - rank(b.id))
   // 只展示前 12 个，所以「当前模型」的下标要在**截断之后**的列表里算。
   const shown = ranked.slice(0, 12)
-  const model = await select({
+  const chosen = await select({
     message: '换成哪个模型？',
     initial: Math.max(0, shown.findIndex(row => row.id === current)),
     options: shown.map((row, index) => ({ label: row.id, hint: modelHint(row, index === 0), value: row.id })),
   })
+  const model = chosen
+  const contextWindow = shown.find(row => row.id === chosen)?.contextWindow
 
-  installClaudeSettings({ file: claudeSettingsPath(), baseUrl: `http://127.0.0.1:${port}`, apiKey, model })
-  success(`配置已更新：${model}[1m]`)
+  installClaudeSettings({ file: claudeSettingsPath(), baseUrl: `http://127.0.0.1:${port}`, apiKey, model, contextWindow })
+  success(`配置已更新：${model}${contextWindow !== undefined && contextWindow > 200_000 ? '[1m]' : ''}`)
 
   if (installed.service?.path !== undefined && fs.existsSync(installed.service.path)) {
     const service = await installService({ port, apiKey, env: { ...env, BRIDGE_MODEL: model } })

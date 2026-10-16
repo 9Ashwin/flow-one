@@ -11,7 +11,8 @@
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { PRODUCTS, productByName } from './products.mjs'
+import { SOURCES, SOURCE_NAMES, sourceByName } from './sources.mjs'
+import { bridgeHome, credentialFile } from './home.mjs'
 
 export const DEFAULTS = {
   /** `direct` = 自己登录腾讯产品；`gateway` = 转发给任意 OpenAI 兼容端点。 */
@@ -32,8 +33,8 @@ export const DEFAULTS = {
   heartbeatMs: 15000,
   /** 是否对腾讯后端做已知内容指纹的窄改写（详见 src/fingerprint.mjs）。 */
   fingerprintRewrite: true,
-  /** 同时挂载的产品线，顺序决定「没有前缀的模型 ID」落到谁身上。 */
-  products: [PRODUCTS[0], PRODUCTS[1]],
+  /** 同时挂载的来源，顺序决定「没有前缀的模型 ID」落到谁身上。 */
+  products: [...SOURCES],
   quiet: false,
 }
 
@@ -42,14 +43,8 @@ const GATEWAY_DEFAULT_MODEL = 'workbuddy/deepseek-v4.1-flash'
 
 const SUBCOMMANDS = new Set(['login', 'status', 'models', 'setup', 'uninstall', 'switch'])
 
-export function bridgeHome(env = process.env, home = os.homedir()) {
-  const override = String(env.BRIDGE_HOME ?? '').trim()
-  return override !== '' ? path.resolve(override) : path.join(home, '.claude-code-openai-bridge')
-}
-
-export function credentialFile(env = process.env, home = os.homedir()) {
-  return path.join(bridgeHome(env, home), 'credentials.json')
-}
+/** 数据目录的位置住在 `home.mjs`（那里不 import 任何本项目模块，避免循环依赖）。 */
+export { bridgeHome, credentialFile }
 
 /**
  * dsh-our-free-model 的渠道网关把密钥放在 DSH home 下；网关模式未显式配置时
@@ -80,7 +75,7 @@ export const USAGE = `claude-code-openai-bridge —— 让 Claude Code CLI 用�
 
 选项：
   --mode <direct|gateway>  直连腾讯产品（默认），或转发给 OpenAI 兼容上游
-  --product <cn|intl>      只挂载指定的产品线，可重复；默认两条都挂
+  --product <cn|intl|oc>   只挂载指定的来源，可重复；默认三条都挂
   --host <地址>            监听地址（默认 ${DEFAULTS.host}）
   --port <端口>            监听端口（默认 ${DEFAULTS.port}）
   --model <ID>             默认模型 ID；直连模式不给则由上游清单决定
@@ -120,15 +115,15 @@ function truthy(value) {
   return /^(1|true|yes|on)$/i.test(String(value).trim())
 }
 
-/** 产品名列表 → 产品对象；未知名字直接报错，不做静默回退。 */
-function resolveProducts(names) {
+/** 来源名列表 → 来源对象；未知名字直接报错，不做静默回退。 */
+function resolveSources(names) {
   const picked = []
   for (const name of names) {
-    const product = productByName(name)
-    if (product === undefined) throw new Error(`未知产品：${name}（可选 cn / intl）`)
-    if (!picked.includes(product)) picked.push(product)
+    const source = sourceByName(name)
+    if (source === undefined) throw new Error(`未知来源：${name}（可选 ${SOURCE_NAMES}）`)
+    if (!picked.includes(source)) picked.push(source)
   }
-  return picked.length > 0 ? picked : [PRODUCTS[0], PRODUCTS[1]]
+  return picked.length > 0 ? picked : [...SOURCES]
 }
 
 const FLAGS = {
@@ -213,7 +208,7 @@ export function resolveConfig({ env = process.env, argv = [], home = os.homedir(
   if (config.mode !== 'direct' && config.mode !== 'gateway') {
     throw new Error(`--mode 只能是 direct 或 gateway，收到：${config.mode}`)
   }
-  config.products = resolveProducts(productNames)
+  config.products = resolveSources(productNames)
   config.credentialFile = credentialFile(env, home)
   config.home = bridgeHome(env, home)
 

@@ -15,7 +15,9 @@
 
 import { chat as buddyChat, listModels as buddyListModels } from './buddy.mjs'
 import { ensureCredential } from './auth.mjs'
-import { productByName } from './products.mjs'
+import { sourceByName } from './sources.mjs'
+import { failureOf, readSse } from './sse.mjs'
+import { chat as opencodeChat, listModels as opencodeListModels } from './opencode.mjs'
 
 const MODEL_TTL_MS = 60_000
 
@@ -25,50 +27,6 @@ function authHeaders(key) {
     accept: 'application/json',
     ...key === '' ? {} : { authorization: `Bearer ${key}` },
   }
-}
-
-/** 逐行解析 SSE；`[DONE]` 与注释行跳过，坏帧丢掉而不是打断整轮。 */
-export async function* readSse(body) {
-  const reader = body.getReader()
-  const decoder = new TextDecoder()
-  let buffer = ''
-  try {
-    for (;;) {
-      const { value, done } = await reader.read()
-      if (done) break
-      buffer += decoder.decode(value, { stream: true })
-      let at
-      while ((at = buffer.indexOf('\n')) >= 0) {
-        const line = buffer.slice(0, at).replace(/\r$/, '')
-        buffer = buffer.slice(at + 1)
-        if (!line.startsWith('data:')) continue
-        const payload = line.slice(5).trim()
-        if (payload === '' || payload === '[DONE]') continue
-        try {
-          yield JSON.parse(payload)
-        } catch { /* 坏帧丢掉比打断整轮更划算 */ }
-      }
-    }
-  } finally {
-    reader.cancel?.().catch(() => {})
-  }
-}
-
-async function failureOf(response) {
-  let message = `上游返回 ${response.status}`
-  try {
-    const raw = await response.text()
-    if (raw.trim() !== '') {
-      try {
-        const payload = JSON.parse(raw)
-        const detail = payload?.error?.message ?? payload?.msg ?? payload?.message ?? payload?.error
-        message = typeof detail === 'string' && detail !== '' ? detail : JSON.stringify(detail ?? payload).slice(0, 500)
-      } catch {
-        message = raw.trim().slice(0, 500)
-      }
-    }
-  } catch { /* 读不到正文，状态码本身就是信息 */ }
-  return { ok: false, status: response.status, message }
 }
 
 // ── 网关模式 ────────────────────────────────────────────────────────────────
@@ -114,10 +72,10 @@ export function createGatewayUpstream(config) {
 // ── 直连模式 ────────────────────────────────────────────────────────────────
 
 /**
- * 自己登录的那两个腾讯产品。
+ * 自己登录的腾讯产品 + 无需登录的 OpenCode 免费档。
  *
- * 模型 ID 一律带产品前缀（`cn/…`、`intl/…`），因此**一个进程可以同时服务国内版
- * 与国际版**：Claude Code 换一个 `ANTHROPIC_MODEL` 就换了产品线。
+ * 模型 ID 一律带来源前缀（`cn/…`、`intl/…`、`oc/…`），因此**一个进程能同时服务
+ * 三条线**：Claude Code 换一个 `ANTHROPIC_MODEL` 就换了来源。
  */
 export function createDirectUpstream(config, { log = () => {} } = {}) {
   const products = config.products
@@ -141,8 +99,10 @@ export function createDirectUpstream(config, { log = () => {} } = {}) {
     const rows = []
     for (const product of products) {
       try {
-        const credential = await ensureCredential(product, { log, file: config.credentialFile })
-        const models = await buddyListModels(product, credential, { log })
+        // 免费档不需要凭据，形状对了就能用；腾讯两条线要先登录
+        const models = product.kind === 'openai'
+          ? await opencodeListModels(product)
+          : await buddyListModels(product, await ensureCredential(product, { log, file: config.credentialFile }), { log })
         for (const model of models) {
           meta.set(`${product.id}/${model.id}`, model)
           // 前缀必须盖在展开之后：`...model` 里的裸 id 会把带前缀的 id 顶掉。
@@ -172,6 +132,7 @@ export function createDirectUpstream(config, { log = () => {} } = {}) {
     loadModels,
     async chat(body, { signal } = {}) {
       const { product, model } = productFor(body.model)
+      if (product.kind === 'openai') return await opencodeChat(product, model, body, { signal, log })
       const result = await buddyChat(product, { ...body, model: undefined }, {
         model,
         meta: meta.get(`${product.id}/${model}`),
@@ -182,9 +143,7 @@ export function createDirectUpstream(config, { log = () => {} } = {}) {
       if (!result.ok) return result
       // 流内的策略拦截是「HTTP 200 + 一帧 {code,msg}」，没有 choices；
       // 有效内容帧一定带 choices，据此把它翻成统一的分片错误。
-      const chunks = readSse(result.response.body, {
-        onRaw: () => {},
-      })
+      const chunks = readSse(result.response.body)
       return { ok: true, chunks: rejectInStream(chunks, product) }
     },
   }

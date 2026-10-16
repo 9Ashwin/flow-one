@@ -93,8 +93,10 @@ function backup(file) {
 /**
  * 把反代的接入参数写进 Claude Code 的 settings.json。
  *
- * 模型一律带 `[1m]` 后缀：那是 Claude Code 自己的「按 1M 上下文登记」标记，
- * 不带的话未识别的网关模型会按 200k 压缩上下文，并在启动时警告。
+ * `[1m]` 后缀按**模型真实窗口**决定：超过 200k 才加。那是 Claude Code 自己的
+ * 「按 1M 上下文登记」标记；给一个 200k 的模型加它，会让 Claude Code 到 1M 才压缩
+ * 上下文，然后撞上模型真实上限（OpenCode 免费档的 deepseek-v4.1-flash-free 就是
+ * 200k）。窗口未知时按不加处理 —— Claude Code 对未识别 ID 的默认假设正是 200k。
  * 顺带说明为什么**不**写 `modelOverrides`：官方给的消诊断办法是把键写成
  * Claude 的模型 ID（等于让 Claude Code 以为自己在跑 Opus），代价是它随之套用
  * 那个模型的窗口与行为，不值得为一行 stderr 噪声付。
@@ -106,9 +108,9 @@ export function installClaudeSettings(options) {
   const settings = readJson(file)
   const backupPath = backup(file)
   const model = options.model
-  // `[1m]` 是 Claude Code 自己的上下文后缀：加了它，未识别的网关模型才会按 1M
-  // 窗口压缩上下文，而不是默认 200k。它发请求前会把后缀剥掉，所以上游收到的是裸 ID。
-  const sized = model.endsWith('[1m]') ? model : `${model}[1m]`
+  // 窗口超过 200k 才登记 `[1m]`：它发请求前会把后缀剥掉，上游收到的永远是裸 ID。
+  const wants1M = model.endsWith('[1m]') || (Number.isFinite(options.contextWindow) && options.contextWindow > 200_000)
+  const sized = wants1M ? `${model.replace(/\[1m\]$/, '')}[1m]` : model.replace(/\[1m\]$/, '')
   const env = {
     ANTHROPIC_BASE_URL: options.baseUrl,
     ANTHROPIC_AUTH_TOKEN: options.apiKey,

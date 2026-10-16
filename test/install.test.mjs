@@ -22,7 +22,7 @@ test('写 Claude Code 配置：合并而不是覆盖，写前先备份', async (
     model: 'sonnet',
   }, null, 2))
 
-  const applied = installClaudeSettings({ file, baseUrl: 'http://127.0.0.1:8788', apiKey: 'k-1', model: 'cn/deepseek-v4.1-flash' })
+  const applied = installClaudeSettings({ file, baseUrl: 'http://127.0.0.1:8788', apiKey: 'k-1', model: 'cn/deepseek-v4.1-flash', contextWindow: 1_000_000 })
   assert.ok(fs.existsSync(applied.backup), '必须留下备份')
   const written = JSON.parse(fs.readFileSync(file, 'utf8'))
   // 别人的键一个都不能少
@@ -45,7 +45,7 @@ test('还原：只删自己写的且没被改过的键', async () => {
   const file = path.join(home, 'claude', 'settings.json')
   fs.mkdirSync(path.dirname(file), { recursive: true })
   fs.writeFileSync(file, JSON.stringify({ env: { KEEP: 'me' }, model: 'opus' }))
-  installClaudeSettings({ file, baseUrl: 'http://127.0.0.1:8788', apiKey: 'k-2', model: 'cn/x' })
+  installClaudeSettings({ file, baseUrl: 'http://127.0.0.1:8788', apiKey: 'k-2', model: 'cn/x', contextWindow: 1_000_000 })
   assert.equal(JSON.parse(fs.readFileSync(file, 'utf8')).model, 'cn/x[1m]', '顶层 model 与 env 必须同一个值')
 
   // 用户自己改了令牌，还原时就不能动它
@@ -116,4 +116,25 @@ test('向导能认出「端口上跑的是本工具」而不是当成占用者',
   } finally {
     server.close()
   }
+})
+
+test('[1m] 后缀按真实窗口决定：200k 的模型不能登记成 1M', async () => {
+  const home = scratch()
+  const { installClaudeSettings } = await import('../src/install.mjs')
+  const file = path.join(home, 'claude', 'settings.json')
+  fs.mkdirSync(path.dirname(file), { recursive: true })
+
+  // OpenCode 免费档的 deepseek-v4.1-flash-free 实测窗口是 200k：
+  // 给它加 [1m] 会让 Claude Code 到 1M 才压缩上下文，然后撞上模型真实上限。
+  const small = installClaudeSettings({ file, baseUrl: 'http://127.0.0.1:8788', apiKey: 'k', model: 'oc/deepseek-v4.1-flash-free', contextWindow: 200_000 })
+  assert.equal(small.env.ANTHROPIC_MODEL, 'oc/deepseek-v4.1-flash-free')
+  assert.equal(small.env.ANTHROPIC_DEFAULT_SONNET_MODEL, 'oc/deepseek-v4.1-flash-free')
+
+  // 窗口未知时也不加（Claude Code 对未识别 ID 的默认假设正是 200k）
+  const unknown = installClaudeSettings({ file, baseUrl: 'http://127.0.0.1:8788', apiKey: 'k', model: 'oc/whatever' })
+  assert.equal(unknown.env.ANTHROPIC_MODEL, 'oc/whatever')
+
+  // 超过 200k 才登记 1M
+  const big = installClaudeSettings({ file, baseUrl: 'http://127.0.0.1:8788', apiKey: 'k', model: 'intl/deepseek-v4.1-flash', contextWindow: 1_000_000 })
+  assert.equal(big.env.ANTHROPIC_MODEL, 'intl/deepseek-v4.1-flash[1m]')
 })
