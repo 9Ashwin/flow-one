@@ -34,7 +34,7 @@ import {
 
 const DEFAULT_PORT = 8788
 /** 面向 Claude Code 的推荐模型：这几个在本机实测跑通过。 */
-const PREFERRED_MODELS = ['deepseek-v4.1-flash', 'hy4-preview-f', 'deepseek-v4-flash', 'glm-5.3']
+const PREFERRED_MODELS = ['deepseek-v4.1-flash', 'deepseek-v4.1-flash-free', 'hy4-preview-f', 'deepseek-v4-flash', 'glm-5.3']
 
 function version() {
   try {
@@ -54,6 +54,7 @@ function shortNumber(value) {
 function modelHint(row, recommended = false) {
   const bits = []
   if (recommended) bits.push('推荐')
+  if (row.free === true) bits.push('免费')
   if (row.contextWindow !== undefined) bits.push(`窗口 ${shortNumber(row.contextWindow)}`)
   if (row.maxOutputTokens !== undefined) bits.push(`输出 ${shortNumber(row.maxOutputTokens)}`)
   if (Array.isArray(row.efforts) && row.efforts.length > 0) bits.push(`档位 ${row.efforts.join('/')}`)
@@ -147,14 +148,19 @@ async function statusLine() {
   const service = serviceState()
   const state = running !== undefined ? green(`运行中（${port}）`) : service.installed ? '已安装但没在跑' : '未运行'
   note(`  ${gray('模型')} ${model === '' ? gray('未配置') : style.bold(model.replace('[1m]', ''))}   ${gray('服务')} ${state}`)
-  note(`  ${gray('账号')} ${gray(`${loggedInLabel(CN)} · ${loggedInLabel(INTL)}`)}   ${gray('OpenCode 免费档无需登录')}`)
+  note(`  ${gray('来源')} ${gray(SOURCES.map(source => loggedInLabel(source)).join(' · '))}`)
 }
 
 // ── 登录 ────────────────────────────────────────────────────────────────────
 
-/** 逐条产品线登录；已登录的直接跳过，除非 `force`。 */
+/** 逐条来源登录；无需登录的跳过，已登录的也跳过，除非 `force`。 */
 export async function ensureLoggedIn(products, { force = false } = {}) {
   for (const product of products) {
+    // 无需登录的来源（OpenCode 免费档）也要明说一句，别让人以为它被漏掉了
+    if (!needsLogin(product)) {
+      success(`${product.label} 无需登录，直接可用`)
+      continue
+    }
     const status = credentialStatus(product)
     if (status.loggedIn && !force) {
       success(`${product.label} 已登录${status.nickname === '' ? '' : `（${status.nickname}）`}`)
@@ -166,7 +172,7 @@ export async function ensureLoggedIn(products, { force = false } = {}) {
       await login(product, { log: line => note(`  ${line}`) })
     } catch (error) {
       fail(error?.message ?? String(error))
-      if (!await confirm({ message: '跳过这条产品线，继续？', initial: true })) throw error
+      if (!await confirm({ message: `跳过这条来源（${product.id}），继续？`, initial: true })) throw error
     }
   }
 }
@@ -224,32 +230,32 @@ function rank(id) {
 
 export async function setupWizard() {
   heading('一键配置')
-  note(dim('  四步：选上游 → 选产品线并登录 → 选模型 → 写配置并常驻'))
+  note(dim('  四步：选上游 → 选来源并登录 → 选模型 → 写配置并常驻'))
 
   blank()
   section('第 1 步 · 上游')
   const mode = await select({
     message: '上游用哪种？',
     options: [
-      { label: '直连 WorkBuddy', hint: '推荐：用自己账号的额度，本工具自己登录', value: 'direct' },
+      { label: '直连各家官方接口', hint: '推荐：WorkBuddy 国内版 / 国际版 + OpenCode 免费档', value: 'direct' },
       { label: '转发给已有的 OpenAI 兼容网关', hint: '如 dsh-our-free-model 的 8326、LiteLLM、Ollama', value: 'gateway' },
     ],
   })
 
   blank()
-  section('第 2 步 · 产品线与登录')
+  section('第 2 步 · 来源与登录')
   let upstream
   const serviceEnv = {}
   if (mode === 'direct') {
     const which = await select({
       message: '挂哪几条来源？',
       options: [
-        { label: '全部：WorkBuddy 两条线 + OpenCode 免费模型', hint: '推荐', value: [CN, INTL, OPENCODE] },
+        { label: '三条都挂', hint: `推荐 · WorkBuddy 国内版 + 国际版 + OpenCode 免费档`, value: [CN, INTL, OPENCODE] },
         { label: '只要 WorkBuddy 两条线', hint: `${loggedInLabel(CN)} / ${loggedInLabel(INTL)}`, value: [CN, INTL] },
-        { label: '只要 OpenCode 免费模型', hint: '无需登录，装完即用', value: [OPENCODE] },
+        { label: '只要 OpenCode 免费档', hint: '无需登录，装完即用', value: [OPENCODE] },
       ],
     })
-    await ensureLoggedIn(which.filter(needsLogin))
+    await ensureLoggedIn(which)
     upstream = createDirectUpstream({ products: which, credentialFile: credentialFile() }, { log: line => note(`  ${dim(line)}`) })
   } else {
     const base = await input({
@@ -408,7 +414,11 @@ export async function switchModel() {
 
 export async function statusFlow() {
   heading('状态')
-  for (const product of [CN, INTL]) {
+  for (const product of SOURCES) {
+    if (!needsLogin(product)) {
+      note(`  ${product.id.padEnd(5)} ${product.label}  ${gray('无需登录（免费档）')}`)
+      continue
+    }
     const status = credentialStatus(product)
     if (!status.loggedIn) {
       note(`  ${product.id.padEnd(5)} ${product.label}  ${gray('未登录')}`)
@@ -473,14 +483,14 @@ export async function loginFlow() {
 /** 不给参数又是在终端里跑时进这里。返回 'serve' 表示要继续起服务。 */
 export async function mainMenu() {
   for (;;) {
-    banner('Claude Code ← WorkBuddy 本地反代', version())
+    banner('Claude Code ← WorkBuddy / OpenCode 本地反代', version())
     await statusLine()
     const choice = await menu({
       title: '请选择要做什么：',
       groups: [
         {
           items: [
-            { key: '1', label: '一键配置', hint: '登录 → 选模型 → 写 Claude Code 配置 → 后台常驻' },
+            { key: '1', label: '一键配置', hint: '配来源 → 选模型 → 写 Claude Code 配置 → 后台常驻' },
             { key: '2', label: '切换模型', hint: '改完自动重启服务' },
             { key: '3', label: '查看状态', hint: '登录有效期 / 服务 / 文件位置' },
           ],

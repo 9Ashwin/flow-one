@@ -1,15 +1,18 @@
 # claude-code-openai-bridge
 
-让 **Claude Code CLI** 用上 **WorkBuddy（国内版 CodeBuddy / 国际版）** 的本地反代。
+让 **Claude Code CLI** 用上 **WorkBuddy（国内版 CodeBuddy / 国际版）** 与
+**OpenCode 免费档**的本地反代。
 
-Claude Code 只会说 Anthropic 的 Messages 协议，而 WorkBuddy 的接口是 OpenAI 风格
-的 `/v2/chat/completions`。这个桥就干这一件事：**进门说 Anthropic，出门说 OpenAI**，
-顺手把登录、续期、模型目录、环境隔离都办了。零依赖，只用 Node 内置能力。
+Claude Code 只会说 Anthropic 的 Messages 协议，而这几家的接口都是 OpenAI 风格
+（WorkBuddy 的 `/v2/chat/completions`、OpenCode 的 `/inference/v1/chat/completions`）。
+这个桥就干这一件事：**进门说 Anthropic，出门说 OpenAI**，顺手把登录、续期、模型目录、
+免费档的形状门禁、环境隔离都办了。零依赖，只用 Node 内置能力。
 
 ```
-Claude Code CLI ──► 本桥 127.0.0.1:8788 ──► WorkBuddy 国内版 copilot.tencent.com
+Claude Code CLI ──► 本桥 127.0.0.1:8788 ──► WorkBuddy 国内版 copilot.tencent.com   cn/…
    (Anthropic            /v1/messages            (OpenAI 形状 SSE)
-    Messages)            ⇄ 翻译             ──► WorkBuddy 国际版 www.workbuddy.ai
+    Messages)            ⇄ 翻译             ──► WorkBuddy 国际版 www.workbuddy.ai   intl/…
+                                          ──► OpenCode 免费档 opencode.ai/inference oc/…
 ```
 
 ## 安装
@@ -45,12 +48,24 @@ npm i -g claude-code-openai-bridge
 ccb               # 在终端里直接跑，进交互式菜单
 ```
 
-选 `1` 之后它自己走完四步：选上游 → 选产品线并登录 → 选模型 → 写配置并常驻。
+选 `1` 之后它自己走完四步：选上游 → 选来源并登录 → 选模型 → 写配置并常驻。
+第 1 步问的是「直连各家官方接口」还是「转发给已有网关」；第 2 步才是选来源：
+
+```
+  ──────── 第 2 步 · 来源与登录 ────────
+? 挂哪几条来源？  ↑↓ 选择，或直接按编号，回车确认
+❯ 1. 三条都挂  推荐 · WorkBuddy 国内版 + 国际版 + OpenCode 免费档
+  2. 只要 WorkBuddy 两条线  cn 阿斯温月 / intl starry99c@163.com
+  3. 只要 OpenCode 免费档  无需登录，装完即用
+
+✔ WorkBuddy 国内版（CodeBuddy） 已登录（阿斯温月）
+✔ WorkBuddy 国际版 已登录（starry99c@163.com）
+✔ OpenCode 免费模型 无需登录，直接可用
+```
 列表型的挑选（模型清单）用 ↑↓ 或**直接按编号**，空格建不用记，每一行都带着窗口、
 输出上限与档位；结束会给一张摘要框。
 
-配置完直接运行 `claude` 就能用了。想还原：菜单里选「还原本工具写过的配置」，或者
-`node cli.mjs uninstall`。
+配置完直接运行 `claude` 就能用了。想还原：菜单里选「还原配置」，或者 `ccb uninstall`。
 
 ## 两种上游
 

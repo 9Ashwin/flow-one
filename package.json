@@ -2,7 +2,7 @@
   "name": "claude-code-openai-bridge",
   "version": "0.1.0",
   "private": false,
-  "description": "把 WorkBuddy（国内版 CodeBuddy / 国际版）接进 Claude Code CLI 的本地反代：Anthropic Messages ⇄ OpenAI Chat Completions，零依赖。",
+  "description": "把 WorkBuddy（国内版 CodeBuddy / 国际版）与 OpenCode 免费档接进 Claude Code CLI 的本地反代：Anthropic Messages ⇄ OpenAI Chat Completions，零依赖。",
   "type": "module",
   "main": "./src/server.mjs",
   "bin": {

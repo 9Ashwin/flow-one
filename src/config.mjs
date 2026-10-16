@@ -62,7 +62,7 @@ export function readDshGatewayKey(env = process.env, home = os.homedir()) {
   return { key: '', path: null }
 }
 
-export const USAGE = `claude-code-openai-bridge —— 让 Claude Code CLI 用上 WorkBuddy（国内版 / 国际版）
+export const USAGE = `claude-code-openai-bridge —— 让 Claude Code CLI 用上 WorkBuddy（国内版 / 国际版）与 OpenCode 免费档
 
 用法：
   claude-code-bridge                    启动反代
