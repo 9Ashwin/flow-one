@@ -386,3 +386,27 @@ npm i -g flow-one && fo status
 ## License
 
 MIT
+
+## 代码规范与门禁
+
+这个仓库的规范写在 [AGENTS.md](AGENTS.md) 里（错误契约、代码落点表与分层、套餐分离不变式、
+跨平台要求、测试与验证门禁），**门禁写成命令**，本地与 CI 跑的是同一套：
+
+```bash
+make verify     # 提交前跑这一条 = 语法检查 + 模块规约 + 全部单测
+make check      # 只跑静态检查（语法 + 无循环依赖 + 零第三方依赖 + 依赖方向）
+make test       # 只跑用例（node --test，零依赖）
+make help       # 列出所有目标
+```
+
+几条刻意的约束：
+
+- **零第三方依赖**：只用 `node:` 内置模块。`dependencies` 为空是安装体验的核心 ——
+  一条 `npm i -g flow-one` 装完就能用，pnpm / bun 也不需要额外放行安装脚本。
+- **单包，不分包**：约 4000 行、17 个模块，单包足够；拆成 workspaces 或多包发布只会
+  把「装一个」变成「解析一堆包」，还要为每个新包过一次 npm 的发布审查。
+  规模问题用拆函数、拆模块解决，`make check` 会在文件超过 500 行时提醒。
+- **不允许循环依赖**：ESM 下的环路表现为 TDZ 报错，报错点离成因很远，
+  所以交给机器兜住（`scripts/check-modules.mjs`）。`src/home.mjs` 故意什么都不 import，
+  它存在的意义就是打断 `config ↔ opencode` 那一环。
+- **每个行为变更都配回归测试**，用例不得碰真实家目录（一律用临时 `BRIDGE_HOME`）。
