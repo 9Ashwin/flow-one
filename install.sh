@@ -37,7 +37,7 @@ fi
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
-echo "下载 $NAME（$VERSION）"
+echo "下载 ${NAME}（${VERSION}）"
 if ! curl -fsSL "$URL" -o "$TMP/$NAME.tar.gz"; then
   echo "下载失败：$URL" >&2
   echo "→ 确认这个平台有发布产物：https://github.com/$REPO/releases" >&2
