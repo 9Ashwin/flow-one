@@ -14,7 +14,7 @@
  * 未就绪的两个错误码必须当成「继续等」而不是失败：`11217`（token 未就绪）、
  * `12151`（账号信息未完成）—— 把它们当错误会让登录在第一秒就失败。
  *
- * 凭据落在 `~/.claude-code-openai-bridge/credentials.json`（0600），与 DSH 或
+ * 凭据落在 `~/.flow-one/credentials.json`（0600），与 DSH 或
  * 官方客户端的数据目录互不干扰。
  *
  * @module src/auth.mjs
@@ -347,7 +347,7 @@ export async function refreshCredential(product, credential, { signal, file = st
 export async function ensureCredential(product, { log = () => {}, signal, file = storePath(), refresh = true, force = false } = {}) {
   const stored = readStore(file)[product.id]
   if (stored === undefined || text(stored.accessToken) === '') {
-    throw Object.assign(new Error(`${product.label}：尚未登录，请先执行：claude-code-bridge login ${product.id}`), { statusCode: 401 })
+    throw Object.assign(new Error(`${product.label}：尚未登录，请先执行：flow-one login ${product.id}`), { statusCode: 401 })
   }
   const expiresAt = Number(stored.expiresAt)
   const expiring = Number.isFinite(expiresAt) && expiresAt - Date.now() < REFRESH_MARGIN_MS

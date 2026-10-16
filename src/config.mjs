@@ -62,17 +62,17 @@ export function readDshGatewayKey(env = process.env, home = os.homedir()) {
   return { key: '', path: null }
 }
 
-export const USAGE = `claude-code-openai-bridge —— 让 Claude Code CLI 用上 WorkBuddy（国内版 / 国际版）与 OpenCode 免费档
+export const USAGE = `flow-one —— 让 Claude Code CLI 用上 WorkBuddy（国内版 / 国际版）与 OpenCode 免费档
 
 用法：
-  claude-code-bridge                    启动反代
-  claude-code-bridge login [cn|intl]    登录（不带产品名时两个都登）
-  claude-code-bridge status             查看登录状态
-  claude-code-bridge models             列出可用模型 ID
-  claude-code-bridge switch             交互式换模型（改配置并重启服务）
-  claude-code-bridge doctor             自检：配置 / 登录 / 两条门禁（会真发请求）
-  claude-code-bridge setup              交互式一键配置（登录 → 选模型 → 写配置 → 后台常驻）
-  claude-code-bridge uninstall          还原本工具写过的配置并卸载后台服务
+  flow-one                    启动反代
+  flow-one login [cn|intl]    登录（不带产品名时两个都登）
+  flow-one status             查看登录状态
+  flow-one models             列出可用模型 ID
+  flow-one switch             交互式换模型（改配置并重启服务）
+  flow-one doctor             自检：配置 / 登录 / 两条门禁（会真发请求）
+  flow-one setup              交互式一键配置（登录 → 选模型 → 写配置 → 后台常驻）
+  flow-one uninstall          还原本工具写过的配置并卸载后台服务
 
 选项：
   --mode <direct|gateway>  直连腾讯产品（默认），或转发给 OpenAI 兼容上游

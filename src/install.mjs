@@ -33,7 +33,14 @@ function launchdLoaded(label) {
     return false
   }
 }
-const SERVICE_LABEL = 'dev.claude-code-openai-bridge'
+export const SERVICE_LABEL = 'dev.flow-one'
+/**
+ * 改名前的服务名。
+ *
+ * 不清掉它，就会出现「旧服务还在跑、新服务又装一个」—— 两个进程抢同一个端口
+ * （谁赢取决于启动顺序），表现是服务时好时坏，而界面上完全看不出来。
+ */
+export const LEGACY_SERVICE_LABEL = 'dev.claude-code-openai-bridge'
 
 /**
  * `systemctl --user` 要用的 `XDG_RUNTIME_DIR`。
@@ -75,7 +82,7 @@ export function serviceLoadReason(message, file) {
   const text = String(message ?? '')
   if (/Failed to connect to bus|No medium found|System has not been booted with systemd/i.test(text)) {
     return `服务文件已写入 ${file}，但这台机器上没有可用的 systemd 用户会话（${text}）。`
-      + '要么先 `loginctl enable-linger $USER` 然后重进登录壳，要么直接前台跑 `ccb`。'
+      + '要么先 `loginctl enable-linger $USER` 然后重进登录壳，要么直接前台跑 `fo`。'
   }
   return `服务文件已写入 ${file}，但加载失败：${text}`
 }
@@ -262,7 +269,7 @@ export function systemdUnit({ port, apiKey, env: extra = {}, node = process.exec
   if (apiKey !== '') environment.push(`Environment=BRIDGE_API_KEY=${apiKey}`)
   for (const [key, value] of Object.entries(extra)) environment.push(`Environment=${key}=${value}`)
   return `[Unit]
-Description=claude-code-openai-bridge（Claude Code 的 WorkBuddy 反代）
+Description=flow-one（Claude Code 的 WorkBuddy 反代）
 After=network-online.target
 
 [Service]
@@ -276,33 +283,79 @@ WantedBy=default.target
 `
 }
 
-function servicePaths() {
+function servicePathsFor(label) {
   const home = os.homedir()
   if (process.platform === 'darwin') {
     return {
       kind: 'launchd',
-      path: path.join(home, 'Library', 'LaunchAgents', `${SERVICE_LABEL}.plist`),
+      path: path.join(home, 'Library', 'LaunchAgents', `${label}.plist`),
     }
   }
   if (process.platform === 'linux') {
     return {
       kind: 'systemd',
-      path: path.join(process.env.XDG_CONFIG_HOME ?? path.join(home, '.config'), 'systemd', 'user', `${SERVICE_LABEL}.service`),
+      path: path.join(process.env.XDG_CONFIG_HOME ?? path.join(home, '.config'), 'systemd', 'user', `${label}.service`),
     }
   }
   return { kind: 'unsupported', path: '' }
 }
 
+function servicePaths() {
+  return servicePathsFor(SERVICE_LABEL)
+}
+
+/** 改名前的服务文件位置（存在就说明是改名之前装的）。 */
+export function legacyServicePaths() {
+  return servicePathsFor(LEGACY_SERVICE_LABEL)
+}
+
 export function serviceState() {
   const { kind, path: file } = servicePaths()
-  return { kind, path: file, installed: file !== '' && fs.existsSync(file), supported: kind !== 'unsupported' }
+  const legacy = legacyServicePaths()
+  return {
+    kind,
+    path: file,
+    installed: file !== '' && fs.existsSync(file),
+    // 单独报出来：新名字的服务文件不存在时界面上是「未安装」，
+    // 可旧服务其实还在跑、占着端口 —— 这个状态最容易被误读。
+    legacyInstalled: legacy.path !== '' && fs.existsSync(legacy.path),
+    supported: kind !== 'unsupported',
+  }
+}
+
+/**
+ * 清掉改名前的旧服务：先让它从 launchd / systemd 里退出来，再删服务文件。
+ *
+ * 卸载失败也照样删文件：留下一个「还在跑、却已经没有服务文件」的进程，
+ * 比留下一个能被下次卸载清掉的文件更糟。
+ */
+export function removeLegacyService() {
+  const { kind, path: file } = legacyServicePaths()
+  if (kind === 'unsupported' || file === '' || !fs.existsSync(file)) return { removed: false }
+  try {
+    if (kind === 'launchd') {
+      try {
+        execFileSync('launchctl', ['bootout', `gui/${process.getuid()}/${LEGACY_SERVICE_LABEL}`], { stdio: 'ignore' })
+      } catch { /* 没加载过就算了 */ }
+    } else {
+      try {
+        systemctl(['--user', 'disable', '--now', `${LEGACY_SERVICE_LABEL}.service`])
+      } catch { /* 没装过就算了 */ }
+    }
+  } catch { /* 上面已经各自兜过，这里只为保证不把安装流程带崩 */ }
+  try {
+    fs.rmSync(file)
+  } catch {
+    return { removed: false, path: file }
+  }
+  return { removed: true, path: file }
 }
 
 /**
  * 服务文件里真正被执行的**那份代码在哪**。
  *
  * 真实踩过：全局安装（`npm i -g` / 早期那份 npm link 拷贝）会把服务指向
- * `…/lib/node_modules/claude-code-openai-bridge/cli.mjs`，那是一条**快照** ——
+ * `…/lib/node_modules/flow-one/cli.mjs`，那是一条**快照** ——
  * 之后无论 `git pull` 还是改仓库，服务跑的都还是旧代码，而界面上完全看不出来
  * （表现是「新功能在命令行有、服务里没有」，或「修好的指纹在服务里还报 400」）。
  *
@@ -361,6 +414,9 @@ export async function installService({ port, apiKey, env = {} }) {
   writeInstallState(state)
 
   const notes = []
+  // 装新的之前先清改名前的旧服务：两个都活着就会抢同一个端口
+  const legacy = removeLegacyService()
+  if (legacy.removed) notes.push(`已清理改名前的旧服务 ${LEGACY_SERVICE_LABEL}（避免新旧两个服务抢同一个端口）`)
   try {
     if (kind === 'launchd') {
       const domain = `gui/${process.getuid()}`
@@ -394,7 +450,13 @@ export async function installService({ port, apiKey, env = {} }) {
 
 export function uninstallService() {
   const { kind, path: file } = servicePaths()
-  if (file === '' || !fs.existsSync(file)) return { skipped: true, reason: '没有装过后台服务' }
+  // 改名前的旧服务也要带走：卸载就该什么都不剩
+  const legacy = removeLegacyService()
+  if (file === '' || !fs.existsSync(file)) {
+    return legacy.removed
+      ? { ok: true, kind, path: legacy.path, legacy: true }
+      : { skipped: true, reason: '没有装过后台服务' }
+  }
   try {
     if (kind === 'launchd') execFileSync('launchctl', ['bootout', `gui/${process.getuid()}/${SERVICE_LABEL}`], { stdio: 'pipe' })
     else systemctl(['disable', '--now', `${SERVICE_LABEL}.service`])

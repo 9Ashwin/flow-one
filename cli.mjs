@@ -53,7 +53,7 @@ async function commandLogin(config, commandArgs, log) {
   for (const product of productsFor(commandArgs, config)) {
     await login(product, { log, file: config.credentialFile })
   }
-  log('\n登录完成。可用模型 ID 见：claude-code-bridge models')
+  log('\n登录完成。可用模型 ID 见：flow-one models')
 }
 
 async function commandStatus(config, log) {
@@ -73,13 +73,13 @@ async function commandStatus(config, log) {
     // 再补一句根本不存在的 `login ocg`。同一个坑的另一半，用向导里已有的判据。
     if (product.auth === 'key') {
       const configured = hasGoCredential()
-      log(`${product.id.padEnd(5)} ${product.label}：${configured ? '已配 key' : '未配 key（在 `ccb setup` 里填）'}`)
+      log(`${product.id.padEnd(5)} ${product.label}：${configured ? '已配 key' : '未配 key（在 `fo setup` 里填）'}`)
       if (configured) any = true
       continue
     }
     const status = credentialStatus(product, { file: config.credentialFile })
     if (!status.loggedIn) {
-      log(`${product.id.padEnd(5)} ${product.label}：未登录（claude-code-bridge login ${product.id}）`)
+      log(`${product.id.padEnd(5)} ${product.label}：未登录（flow-one login ${product.id}）`)
       continue
     }
     any = true
@@ -122,7 +122,7 @@ async function commandServe(config, log) {
   const address = await bridge.listen()
   const host = address?.address === '::1' ? '[::1]' : config.host
   const base = `http://${host}:${address.port}`
-  log(`claude-code-openai-bridge 已启动`)
+  log(`flow-one 已启动`)
   log(`  上游：${upstream.describe()}`)
   log(`  监听：${base}`)
   if (config.apiKey === '') log('  门禁：未设置（仅监听回环；如需跨机使用请加 --api-key）')
@@ -140,7 +140,7 @@ async function commandServe(config, log) {
   if (rows.length > 0) {
     log(`\n可用模型 ${rows.length} 个，前几个：`)
     for (const row of rows.slice(0, 6)) log(`  ${row.id}`)
-    if (rows.length > 6) log(`  …（完整清单：claude-code-bridge models）`)
+    if (rows.length > 6) log(`  …（完整清单：flow-one models）`)
   }
 
   const shutdown = () => { void bridge.close().then(() => process.exit(0)) }

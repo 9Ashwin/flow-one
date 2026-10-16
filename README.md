@@ -1,4 +1,4 @@
-# claude-code-openai-bridge
+# flow-one
 
 让 **Claude Code CLI** 用上 **WorkBuddy（国内版 CodeBuddy / 国际版）** 与
 **OpenCode 免费档**的本地反代。
@@ -17,27 +17,27 @@ Claude Code CLI ──► 本桥 127.0.0.1:8788 ──► WorkBuddy 国内版 co
 
 ## 安装
 
-三种方式，任选一种。命令名有两个：**`ccb`** 与 **`claude-code-bridge`**，同一个入口。
+三种方式，任选一种。命令名有两个：**`fo`** 与 **`flow-one`**，同一个入口。
 
 **1. 不克隆，直接用**
 
 ```bash
-npx -y github:9Ashwin/claude-code-openai-bridge status     # 每次从 GitHub 取最新
-npm i -g github:9Ashwin/claude-code-openai-bridge          # 或者装成全局命令
+npx -y github:9Ashwin/flow-one status     # 每次从 GitHub 取最新
+npm i -g github:9Ashwin/flow-one          # 或者装成全局命令
 ```
 
 **2. 克隆后链成全局命令**（要改代码就用这个：`git pull` 之后命令即刻是新的）
 
 ```bash
-git clone https://github.com/9Ashwin/claude-code-openai-bridge.git
-cd claude-code-openai-bridge
-npm link          # 之后任意目录直接 ccb
+git clone https://github.com/9Ashwin/flow-one.git
+cd flow-one
+npm link          # 之后任意目录直接 fo
 ```
 
 **3. 从 npm 全局安装**（发布之后）
 
 ```bash
-npm i -g claude-code-openai-bridge
+npm i -g flow-one
 ```
 
 需要 Node ≥ 18.17（用到内置 `fetch`）。**没有依赖**，不会往 `node_modules` 里装东西。
@@ -45,7 +45,7 @@ npm i -g claude-code-openai-bridge
 ## 快速开始
 
 ```bash
-ccb               # 在终端里直接跑，进交互式菜单
+fo               # 在终端里直接跑，进交互式菜单
 ```
 
 选 `1` 之后它自己走完四步：**接哪一家 → 登录 → 选模型 → 写配置并常驻**。
@@ -92,7 +92,7 @@ Esc 清空、↑↓ 移动、回车确认（筛选结果里不再插分组标题
 列表型的挑选（模型清单）用 ↑↓ 或**直接按编号**，空格建不用记，每一行都带着窗口、
 输出上限与档位；结束会给一张摘要框。
 
-配置完直接运行 `claude` 就能用了。想还原：菜单里选「还原配置」，或者 `ccb uninstall`。
+配置完直接运行 `claude` 就能用了。想还原：菜单里选「还原配置」，或者 `fo uninstall`。
 
 ## 两种上游
 
@@ -157,7 +157,7 @@ FreeTierError: OpenCode's free tier can only be used from within OpenCode.
 那是 Claude Code 执行不了的工具名。
 
 **这两条门禁的完整事实、证据与复验方式在 [docs/gates.md](docs/gates.md)**；
-`ccb doctor` 会把它们**逐项重推一遍**（Go 套餐那条路也会：带会话头的一次最小对话、
+`fo doctor` 会把它们**逐项重推一遍**（Go 套餐那条路也会：带会话头的一次最小对话、
 不带会话头应被拒、模型清单要 key）（先验完整形状，再逐项去掉一个要件确认它确实
 还是必填），上游放松或收紧都会当场显形 —— 不用等用户来提「用不了」。`big-pickle` 等 `-free` 结尾的模型同样可用；
 不带 `-free` 的（`deepseek-v4.1-flash`、`deepseek-v4-pro` 等）属于 $10/月的
@@ -165,11 +165,11 @@ OpenCode Go 订阅，走了会报 `AuthError`。
 
 ## 命令行
 
-下面一律写 `ccb`，换成 `claude-code-bridge` 等价。
+下面一律写 `fo`，换成 `flow-one` 等价。
 
 | 命令 | 说明 |
 | --- | --- |
-| `ccb` | 终端里跑进菜单；无 TTY（systemd / 管道）直接起服务 |
+| `fo` | 终端里跑进菜单；无 TTY（systemd / 管道）直接起服务 |
 | `switch` | 只换模型（菜单里的「切换模型」） |
 | `doctor` | 自检：配置 / 登录 / 两条门禁（会真发几个请求） |
 | `setup` / `--setup` | 交互式一键配置 |
@@ -200,7 +200,7 @@ node cli.mjs --mode gateway --upstream http://127.0.0.1:8326 \
 | — | `BRIDGE_FINGERPRINT_REWRITE` | 开 | 腾讯内容指纹窄改写（见下） |
 | `--upstream` | `UPSTREAM_BASE_URL` | `http://127.0.0.1:8326` | 网关模式的 OpenAI 兼容上游 |
 | `--upstream-key` | `UPSTREAM_API_KEY` | 读 DSH 网关密钥 | 上游密钥 |
-| — | `BRIDGE_HOME` | `~/.claude-code-openai-bridge` | 凭据与安装状态目录 |
+| — | `BRIDGE_HOME` | `~/.flow-one` | 凭据与安装状态目录 |
 
 ## 它到底改了什么
 
@@ -212,11 +212,11 @@ node cli.mjs --mode gateway --upstream http://127.0.0.1:8326 \
    如果你的 `model` 是 `sonnet` 这类别名，会一起钉成我们的模型，免得 Claude Code
    去请求网关里不存在的别名。
    还原时**只删值仍等于本工具写入的那份**的键 —— 你自己改过的会被保留。
-2. **后台服务**：macOS 写 `~/Library/LaunchAgents/dev.claude-code-openai-bridge.plist`
+2. **后台服务**：macOS 写 `~/Library/LaunchAgents/dev.flow-one.plist`
    并 `launchctl bootstrap`；Linux 写 `~/.config/systemd/user/` 下的 unit 并
    `systemctl --user enable --now`。模式、上游、模型都写进服务环境，
    所以服务不带参数启动也能拿到同一份配置。
-3. **`~/.claude-code-openai-bridge/`**：登录凭据（0600）、`install.json`（记着
+3. **`~/.flow-one/`**：登录凭据（0600）、`install.json`（记着
    写了哪些键、装了什么服务，供还原用）、服务日志。
 
 ### 模型 ID 后面的 `[1m]`
@@ -304,7 +304,7 @@ message_delta → message_stop` 成帧，工具参数走 `input_json_delta`，
   OpenCode Go 订阅。
 - **服务跑的是「哪份代码」要看安装来源**：用全局安装（`npm i -g`）装的，服务指向
   `…/lib/node_modules/…/cli.mjs` 这份**快照**，之后 `git pull` 与改仓库都不会生效
-  （表现是「命令行有新功能、服务里没有」）。`ccb status` 会把服务代码路径打出来，
+  （表现是「命令行有新功能、服务里没有」）。`fo status` 会把服务代码路径打出来，
   与当前命令不一致时会直接警告并提示重装。
 - 只覆盖对话与模型目录。**每日签到领积分不在范围内**。
 
@@ -312,7 +312,7 @@ message_delta → message_stop` 成帧，工具参数走 `input_json_delta`，
 
 ```bash
 node --test        # 全部离线，不需要网络与账号
-ccb doctor         # 唯一会真发请求的检查（两条门禁 + 本地配置）
+fo doctor         # 唯一会真发请求的检查（两条门禁 + 本地配置）
 ```
 
 33 条用例，全部离线：翻译层纯函数、网关模式端到端（假上游 SSE）、直连模式登录轮询
@@ -350,7 +350,7 @@ done
 
 ## 发布到 npm（维护者）
 
-包名 `claude-code-openai-bridge` 在 npm 上**尚未被占用**（2026-10-16 查证）。`ccb`
+包名 `flow-one` 在 npm 上**尚未被占用**（2026-10-16 查证）。`fo`
 这个名字已被别人占用，所以它只作为本包提供的命令别名，不作包名。
 
 ```bash
@@ -367,8 +367,8 @@ npm publish --dry-run
 npm publish
 
 # 4. 核对
-npm view claude-code-openai-bridge version
-npm i -g claude-code-openai-bridge && ccb status
+npm view flow-one version
+npm i -g flow-one && fo status
 ```
 
 几条踩过的坑：
@@ -376,7 +376,7 @@ npm i -g claude-code-openai-bridge && ccb status
 - **发布前工作区要干净**：`git status` 有未提交改动时，包里会带上半成品。
 - **版本号只升不覆**：先 `npm version patch|minor|major`；同一个版本重发会被拒
   （`EPUBLISHCONFLICT`）。
-- **72 小时内可撤**：`npm unpublish claude-code-openai-bridge@0.1.0`；超过就只能发新版本。
+- **72 小时内可撤**：`npm unpublish flow-one@0.1.0`；超过就只能发新版本。
   所以第一次发之前，先 `npm i -g .` 在本地验一遍更稳。
 - **CI 里发布**要用 **Automation 类型**的 token（npm 网站 → Access Tokens），
   普通 token 遇到 2FA 会被拒；配成仓库 secret `NPM_TOKEN`，打 `v*` tag 时

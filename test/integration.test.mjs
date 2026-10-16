@@ -210,7 +210,7 @@ test('直连模式：自己登录腾讯产品，再把这条链路接到 Claude 
 
   // 用真实产品常量 + 本机端点：登录、续期、UA、报文形态全部按生产代码走。
   const product = { ...CN, id: 'cn', endpoint, apiDomain: '127.0.0.1', label: '替身产品' }
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'ccb-test-'))
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'fo-test-'))
   const credentialFile = path.join(home, 'credentials.json')
 
   const credential = await login(product, { file: credentialFile, log: () => {}, openBrowser: () => {} })
@@ -266,7 +266,7 @@ test('直连模式：上游流内的安全策略拦截被如实报出，而不�
   const endpoint = await listen(upstreamServer)
   t.after(() => upstreamServer.close())
 
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'ccb-test-'))
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'fo-test-'))
   const credentialFile = path.join(home, 'credentials.json')
   fs.writeFileSync(credentialFile, JSON.stringify({
     cn: { accessToken: 'at', refreshToken: 'rt', domain: '127.0.0.1', expiresAt: Date.now() + 3_600_000 },
@@ -336,7 +336,7 @@ test('login 是独立命令：轮询期间进程不能自己退出（子进程�
   const endpoint = await listen(server)
   t.after(() => server.close())
 
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'ccb-child-'))
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'fo-child-'))
   const file = path.join(home, 'credentials.json')
   const product = { ...CN, endpoint, apiDomain: '127.0.0.1', label: '子进程产品' }
   const script = `

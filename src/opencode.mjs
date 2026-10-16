@@ -221,7 +221,7 @@ export function projectId(home = bridgeHome()) {
 /**
  * 发往免费档的头集，照官方客户端的形状。
  *
- * ⚠️ `x-opencode-session-id` 这个别名头**实测当前已非必填**（2026-10-16 `ccb doctor`
+ * ⚠️ `x-opencode-session-id` 这个别名头**实测当前已非必填**（2026-10-16 `fo doctor`
  * 逐项重推判成 relaxed：去掉它照样 200），但仍照发 —— 与官方客户端同形，且上游哪天
  * 重新收紧时不必再改代码。规则与证据见 `docs/gates.md`。
  */

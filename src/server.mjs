@@ -192,7 +192,7 @@ export function createBridgeServer({ config, upstream, log = () => {} }) {
 
     if (path === '/health') {
       json(res, 200, {
-        ok: true, service: 'claude-code-openai-bridge',
+        ok: true, service: 'flow-one',
         upstream: upstream.describe(), models: known.size, model: config.model,
       })
       return

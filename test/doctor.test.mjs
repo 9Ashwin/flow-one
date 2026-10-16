@@ -22,7 +22,7 @@ function fakeGate({ alwaysReject = false } = {}) {
 }
 
 test('门禁探针：逐项重推，能判定哪一条必填、哪一条已被上游放松', async t => {
-  process.env.BRIDGE_HOME = (await import('node:fs')).mkdtempSync('/tmp/ccb-doc-')
+  process.env.BRIDGE_HOME = (await import('node:fs')).mkdtempSync('/tmp/fo-doc-')
   const { probeOpencodeGate } = await import('../src/doctor.mjs')
   const server = fakeGate()
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
@@ -41,7 +41,7 @@ test('门禁探针：逐项重推，能判定哪一条必填、哪一条已被�
 })
 
 test('门禁探针：完整形状被拒时判成「上游收紧」', async t => {
-  process.env.BRIDGE_HOME = (await import('node:fs')).mkdtempSync('/tmp/ccb-doc-')
+  process.env.BRIDGE_HOME = (await import('node:fs')).mkdtempSync('/tmp/fo-doc-')
   const { probeOpencodeGate } = await import('../src/doctor.mjs')
   const server = fakeGate({ alwaysReject: true })
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
@@ -87,7 +87,7 @@ test('本地体检：密钥不一致 / 模型不一致 / 服务跑着别的代�
 
 test('Go 套餐探针：会话头必填这条事实会被重推出来', async t => {
   const fs = await import('node:fs')
-  process.env.BRIDGE_HOME = fs.mkdtempSync('/tmp/ccb-goprobe-')
+  process.env.BRIDGE_HOME = fs.mkdtempSync('/tmp/fo-goprobe-')
   const { saveGoKey, OPENCODE_GO } = await import('../src/opencode.mjs')
   const { probeOpencodeGo } = await import('../src/doctor.mjs')
   // 假上游：只认「带 key + 带会话头」，缺会话头就回 MissingSessionID（真上游的行为）

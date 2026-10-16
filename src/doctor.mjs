@@ -22,7 +22,8 @@ import { credentialStatus, ensureCredential } from './auth.mjs'
 import { chat as buddyChat, listModels } from './buddy.mjs'
 import { toOpenAiRequest } from './anthropic.mjs'
 import { systemRewriterFor } from './fingerprint.mjs'
-import { claudeSettingsPath, currentCliPath, readInstallState, serviceCliPath, serviceState } from './install.mjs'
+import { LEGACY_SERVICE_LABEL, claudeSettingsPath, currentCliPath, readInstallState, serviceCliPath, serviceState } from './install.mjs'
+import { HOME_DIR, LEGACY_HOME_DIR, legacyHomeInUse } from './home.mjs'
 import fs from 'node:fs'
 
 // ── OpenCode 门禁 ───────────────────────────────────────────────────────────
@@ -231,10 +232,27 @@ export function classifyTencentFailure(message) {
  * 真实踩过的坑：密钥与服务不一致会 401、`model` 与 `ANTHROPIC_MODEL` 不一致会静默
  * 跑成另一个模型、服务指向全局安装快照会让 `git pull` 不生效。
  */
-export function localIssues({ settings, serviceEnv, serviceCli, runningCli, healthOk }) {
+export function localIssues({ settings, serviceEnv, serviceCli, runningCli, healthOk, service, legacyHome }) {
   const issues = []
   const env = settings?.env ?? {}
   const ok = []
+
+  // 改名（claude-code-openai-bridge → flow-one）留下的两处状态，都要说清怎么处理。
+  // 「旧服务还在跑、新服务没装」尤其容易被误读成「没装服务却又能用」。
+  if (service?.legacyInstalled === true && service?.installed !== true) {
+    issues.push({
+      level: 'warn',
+      text: `改名前的旧服务 ${LEGACY_SERVICE_LABEL} 还装着（占着端口，新服务没装）`,
+      fix: '跑一次「一键配置」会装成新名字并顺手清掉旧服务；只想清旧的：fo uninstall',
+    })
+  }
+  if (legacyHome === true) {
+    issues.push({
+      level: 'warn',
+      text: `数据目录还是改名前的 ~/${LEGACY_HOME_DIR}（照常用，登录态在里面）`,
+      fix: `想搬到新名字：mv ~/${LEGACY_HOME_DIR} ~/${HOME_DIR}`,
+    })
+  }
   if (typeof env.ANTHROPIC_BASE_URL === 'string' && env.ANTHROPIC_BASE_URL !== '') ok.push(`BASE_URL ${env.ANTHROPIC_BASE_URL}`)
   else issues.push({ level: 'fail', text: 'settings.json 里没有 ANTHROPIC_BASE_URL —— Claude Code 不会走本桥', fix: '运行「一键配置」重写' })
 
@@ -291,6 +309,7 @@ export function localSnapshot() {
     settingsFile,
     settings,
     service,
+    legacyHome: legacyHomeInUse(),
     serviceEnv: state?.service?.env,
     serviceCli: service.installed ? serviceCliPath() : undefined,
     runningCli: currentCliPath(),
@@ -313,7 +332,7 @@ export function credentialChecks() {
     }
     const status = credentialStatus(source)
     if (!status.loggedIn) {
-      rows.push({ label: source.label, ok: false, text: '未登录', fix: `ccb login ${source.id}` })
+      rows.push({ label: source.label, ok: false, text: '未登录', fix: `fo login ${source.id}` })
       continue
     }
     const soon = status.expiresAt !== undefined && status.expiresAt - Date.now() < 7 * 24 * 3600 * 1000

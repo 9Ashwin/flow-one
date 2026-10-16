@@ -99,7 +99,7 @@ export function box(lines, { color = cyan } = {}) {
 export function banner(subtitle, version = '') {
   blank()
   box([
-    `claude-code-openai-bridge${version === '' ? '' : `  ${version}`}`,
+    `flow-one${version === '' ? '' : `  ${version}`}`,
     subtitle,
   ])
 }

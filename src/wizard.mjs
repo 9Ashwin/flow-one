@@ -24,10 +24,8 @@ import { credentialChecks, localIssues, localSnapshot, probeOpencodeGate, probeO
 import { login, credentialStatus } from './auth.mjs'
 import { createDirectUpstream, createGatewayUpstream } from './upstreams.mjs'
 import { credentialFile } from './config.mjs'
-import {
-  installClaudeSettings, installService, uninstallClaudeSettings, uninstallService,
-  serviceState, claudeSettingsPath, readInstallState, serviceCliPath, currentCliPath,
-} from './install.mjs'
+import { installClaudeSettings, installService, uninstallClaudeSettings, uninstallService, serviceState, claudeSettingsPath, readInstallState, serviceCliPath, currentCliPath, LEGACY_SERVICE_LABEL } from './install.mjs'
+import { HOME_DIR, LEGACY_HOME_DIR, legacyHomeInUse } from './home.mjs'
 import {
   banner, blank, box, confirm, gray, green, heading, info, input, menu, note,
   section, select, password, spinner, style, success, warn, fail, dim, yellow,
@@ -86,7 +84,7 @@ export async function probeBridge(port) {
     const response = await fetch(`http://127.0.0.1:${port}/health`, { signal: AbortSignal.timeout(1200) })
     if (!response.ok) return undefined
     const body = await response.json()
-    return body?.service === 'claude-code-openai-bridge' ? body : undefined
+    return body?.service === 'flow-one' ? body : undefined
   } catch {
     return undefined
   }
@@ -358,7 +356,7 @@ export async function setupWizard() {
       spin.stop()
       if (health === undefined) {
         warn('12 秒内没等到 /health 应答。看日志：')
-        note(`  ${gray(service.kind === 'launchd' ? '~/.claude-code-openai-bridge/bridge.err.log' : 'journalctl --user -u dev.claude-code-openai-bridge')}`)
+        note(`  ${gray(service.kind === 'launchd' ? '~/.flow-one/bridge.err.log' : 'journalctl --user -u dev.flow-one')}`)
       }
     } else {
       fail(service.reason)
@@ -467,7 +465,7 @@ export async function statusFlow() {
     // Go 套餐的凭据是 key（存在 `opencode-go` 条目下），不是登录态；
     // credentialStatus 按 `ocg` 去读必然读空，配好了也会显示「未登录」。
     if (product.auth === 'key') {
-      note(`  ${product.id.padEnd(5)} ${product.label}  ${gray(hasGoCredential() ? '已配 key' : '未配 key（在 `ccb setup` 里填）')}`)
+      note(`  ${product.id.padEnd(5)} ${product.label}  ${gray(hasGoCredential() ? '已配 key' : '未配 key（在 `fo setup` 里填）')}`)
       continue
     }
     const status = credentialStatus(product)
@@ -484,13 +482,23 @@ export async function statusFlow() {
   const port = Number(new URL(settings.env?.ANTHROPIC_BASE_URL ?? 'http://127.0.0.1:0').port)
   const running = await probeBridge(port)
   blank()
-  note(`  服务      ${service.installed ? `已安装（${service.kind}）` : '未安装'} ${running === undefined ? gray('未在运行') : green(`运行中 ${port}`)}`)
+  if (!service.installed && service.legacyInstalled) {
+    // 这个状态最容易被误读：界面上是「未安装」，可旧服务其实正在跑、占着端口
+    note(`  服务      ${yellow('未安装（但改名前的旧服务还在跑）')} ${running === undefined ? gray('未在运行') : green(`运行中 ${port}`)}`)
+    note(gray('            → 跑一次「一键配置」会装成新名字并顺手清掉旧服务；只想清旧的：fo uninstall'))
+  } else {
+    note(`  服务      ${service.installed ? `已安装（${service.kind}）` : '未安装'} ${running === undefined ? gray('未在运行') : green(`运行中 ${port}`)}`)
+  }
+  if (legacyHomeInUse()) {
+    note(`  数据目录  ${gray(`还是改名前的 ~/${LEGACY_HOME_DIR}（照常用，登录态在里面）`)}`)
+    note(gray(`            → 想搬到新名字：mv ~/${LEGACY_HOME_DIR} ~/${HOME_DIR}`))
+  }
   note(`  服务文件  ${gray(service.path === '' ? '-' : service.path)}`)
   const runningCode = service.installed ? serviceCliPath() : undefined
   if (runningCode !== undefined && runningCode !== currentCliPath()) {
     // 这一条是真实踩过的坑：服务指向全局安装的快照，于是「命令行有、服务里没有」
     note(`  服务代码  ${yellow(runningCode)}`)
-    warn('服务跑的不是当前这份代码（全局安装是一份快照）；`ccb setup` 重装一次即可对齐')
+    warn('服务跑的不是当前这份代码（全局安装是一份快照）；`fo setup` 重装一次即可对齐')
   } else if (runningCode !== undefined) {
     note(`  服务代码  ${gray(runningCode)}`)
   }
@@ -615,7 +623,7 @@ export async function doctorFlow() {
   }
   if (gate.tightened === true) {
     fail('完整形状已被拒 —— 上游收紧了免费档门禁')
-    note(`  ${dim('规则与实测记录见 docs/gates.md，改完用 `ccb doctor` 复验')}`)
+    note(`  ${dim('规则与实测记录见 docs/gates.md，改完用 `fo doctor` 复验')}`)
   } else if (gate.inconclusive === true) {
     warn('没能判定门禁状态（网络或限流），稍后再试')
   } else {

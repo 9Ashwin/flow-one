@@ -7,7 +7,7 @@ import http from 'node:http'
 
 /** 隔离的 BRIDGE_HOME：项目 id 会落到那里，不碰真实家目录。 */
 function scratch() {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ccb-oc-'))
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'fo-oc-'))
   process.env.BRIDGE_HOME = dir
   return dir
 }

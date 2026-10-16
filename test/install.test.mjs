@@ -6,7 +6,7 @@ import path from 'node:path'
 
 /** 每个用例一个隔离的 BRIDGE_HOME：安装状态与凭据都写到那里，绝不碰真实的家目录。 */
 function scratch() {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ccb-install-'))
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'fo-install-'))
   process.env.BRIDGE_HOME = dir
   return dir
 }
@@ -67,9 +67,9 @@ test('还原：只删自己写的且没被改过的键', async () => {
 test('服务文件：launchd plist 与 systemd unit 都指向同一个入口', async () => {
   const home = scratch()
   const { launchAgentPlist, systemdUnit } = await import('../src/install.mjs')
-  const plist = launchAgentPlist({ port: 8788, apiKey: 'k-3', node: '/usr/local/bin/node', cli: '/opt/ccb/cli.mjs', logDir: home })
+  const plist = launchAgentPlist({ port: 8788, apiKey: 'k-3', node: '/usr/local/bin/node', cli: '/opt/fo/cli.mjs', logDir: home })
   assert.match(plist, /<string>\/usr\/local\/bin\/node<\/string>/)
-  assert.match(plist, /<string>\/opt\/ccb\/cli\.mjs<\/string>/)
+  assert.match(plist, /<string>\/opt\/fo\/cli\.mjs<\/string>/)
   assert.match(plist, /<key>BRIDGE_PORT<\/key>\s*<string>8788<\/string>/)
   assert.match(plist, /<key>BRIDGE_API_KEY<\/key>\s*<string>k-3<\/string>/)
   assert.match(plist, /<key>RunAtLoad<\/key>/)
@@ -81,8 +81,8 @@ test('服务文件：launchd plist 与 systemd unit 都指向同一个入口', a
   assert.match(withEnv, /<key>BRIDGE_MODEL<\/key>\s*<string>workbuddy\/x<\/string>/)
   assert.doesNotMatch(withEnv, /BRIDGE_API_KEY/, '空密钥不该写进服务文件')
 
-  const unit = systemdUnit({ port: 9000, apiKey: 'k-4', env: { BRIDGE_MODE: 'direct' }, node: '/usr/bin/node', cli: '/opt/ccb/cli.mjs' })
-  assert.match(unit, /ExecStart=\/usr\/bin\/node \/opt\/ccb\/cli\.mjs/)
+  const unit = systemdUnit({ port: 9000, apiKey: 'k-4', env: { BRIDGE_MODE: 'direct' }, node: '/usr/bin/node', cli: '/opt/fo/cli.mjs' })
+  assert.match(unit, /ExecStart=\/usr\/bin\/node \/opt\/fo\/cli\.mjs/)
   assert.match(unit, /Environment=BRIDGE_PORT=9000/)
   assert.match(unit, /Environment=BRIDGE_API_KEY=k-4/)
   assert.match(unit, /Environment=BRIDGE_MODE=direct/)
@@ -97,7 +97,7 @@ test('向导能认出「端口上跑的是本工具」而不是当成占用者',
   // 用户又没装服务 → Claude Code 连到一个没人听的端口。
   const server = http.createServer((req, res) => {
     res.writeHead(200, { 'content-type': 'application/json' })
-    res.end(JSON.stringify({ ok: true, service: 'claude-code-openai-bridge', model: 'cn/x' }))
+    res.end(JSON.stringify({ ok: true, service: 'flow-one', model: 'cn/x' }))
   })
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
   const port = server.address().port
@@ -147,11 +147,11 @@ test('服务代码路径解析：能看出服务跑的是哪份代码（全局�
   <key>ProgramArguments</key>
   <array>
     <string>/usr/local/bin/node</string>
-    <string>/Users/me/.nvm/lib/node_modules/claude-code-openai-bridge/cli.mjs</string>
+    <string>/Users/me/.nvm/lib/node_modules/flow-one/cli.mjs</string>
   </array>
 </dict></plist>`
-  assert.equal(cliPathFromServiceFile(snapshot, 'launchd'), '/Users/me/.nvm/lib/node_modules/claude-code-openai-bridge/cli.mjs')
-  assert.equal(cliPathFromServiceFile('[Service]\nExecStart=/usr/bin/node /opt/ccb/cli.mjs\n', 'systemd'), '/opt/ccb/cli.mjs')
+  assert.equal(cliPathFromServiceFile(snapshot, 'launchd'), '/Users/me/.nvm/lib/node_modules/flow-one/cli.mjs')
+  assert.equal(cliPathFromServiceFile('[Service]\nExecStart=/usr/bin/node /opt/fo/cli.mjs\n', 'systemd'), '/opt/fo/cli.mjs')
   assert.equal(cliPathFromServiceFile('', 'launchd'), undefined)
   assert.equal(cliPathFromServiceFile('<plist></plist>', 'launchd'), undefined)
 })
@@ -175,8 +175,8 @@ test('systemd 用户会话：XDG_RUNTIME_DIR 为空时补上 /run/user/<uid>', a
 test('服务加载失败：dbus 连不上时给可执行的下一步，而不是甩原文', async () => {
   const { serviceLoadReason } = await import('../src/install.mjs')
   const busDown = serviceLoadReason(
-    'Command failed: systemctl --user enable --now dev.claude-code-openai-bridge.service\nFailed to connect to bus: No medium found',
-    '/home/me/.config/systemd/user/dev.claude-code-openai-bridge.service',
+    'Command failed: systemctl --user enable --now dev.flow-one.service\nFailed to connect to bus: No medium found',
+    '/home/me/.config/systemd/user/dev.flow-one.service',
   )
   assert.match(busDown, /没有可用的 systemd 用户会话/)
   assert.match(busDown, /loginctl enable-linger/)
@@ -185,7 +185,7 @@ test('服务加载失败：dbus 连不上时给可执行的下一步，而不是
 })
 
 test('status：免费档报「无需登录」、Go 套餐报「配没配 key」，都不提不存在的 login', async () => {
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'ccb-status-'))
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'fo-status-'))
   const { spawn } = await import('node:child_process')
   const { fileURLToPath } = await import('node:url')
   const cli = fileURLToPath(new URL('../cli.mjs', import.meta.url))
