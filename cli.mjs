@@ -8,6 +8,10 @@
  */
 
 import process from 'node:process'
+import { createRequire } from 'node:module'
+import {
+  SUBTYPES, authError, exitCodeFor, renderError, toBridgeError, upstreamError, validationError,
+} from './src/errors.mjs'
 import { USAGE, resolveConfig } from './src/config.mjs'
 import { credentialStatus, login } from './src/auth.mjs'
 import { productByName } from './src/products.mjs'
@@ -18,7 +22,16 @@ import { createBridgeServer } from './src/server.mjs'
 import { isInteractive, note, style } from './src/prompt.mjs'
 import { doctorFlow, mainMenu, setupWizard, statusFlow, switchModel, uninstallFlow } from './src/wizard.mjs'
 
+/**
+ * 进度、告警一律走 stderr —— stdout 只放成功数据（AGENTS.md「输出分工」）。
+ * 日志混进 stdout，`fo models | jq` 就会拿到一锅粥。
+ */
 function makeLogger(quiet) {
+  return message => { if (!quiet) process.stderr.write(`${message}\n`) }
+}
+
+/** 成功数据（模型清单、status 报告）走 stdout，脚本可以直接接管道解析。 */
+function makeDataWriter(quiet) {
   return message => { if (!quiet) process.stdout.write(`${message}\n`) }
 }
 
@@ -28,7 +41,9 @@ function productsFor(commandArgs, config) {
   const picked = []
   for (const name of commandArgs) {
     const product = productByName(name)
-    if (product === undefined) throw new Error(`未知产品：${name}（可选 cn / intl）`)
+    if (product === undefined) {
+      throw validationError(SUBTYPES.UNKNOWN_SOURCE, `未知产品：${name}`).withHint('可选 cn / intl')
+    }
     if (!picked.includes(product)) picked.push(product)
   }
   return picked
@@ -56,7 +71,7 @@ async function commandLogin(config, commandArgs, log) {
   log('\n登录完成。可用模型 ID 见：flow-one models')
 }
 
-async function commandStatus(config, log) {
+async function commandStatus(config, out) {
   let any = false
   for (const product of config.products) {
     // 免费档本来就不需要登录，按「未登录」报会让人去跑一条根本不存在的
@@ -64,7 +79,7 @@ async function commandStatus(config, log) {
     // 真实踩过（2026-10-16）：用户照着这行去排查，以为免费档没配好，
     // 实际是后台服务压根没起来 —— 这条假线索把方向带偏了。
     if (!needsLogin(product)) {
-      log(`${product.id.padEnd(5)} ${product.label}：${product.hint ?? '无需登录'}`)
+      out(`${product.id.padEnd(5)} ${product.label}：${product.hint ?? '无需登录'}`)
       any = true
       continue
     }
@@ -73,37 +88,41 @@ async function commandStatus(config, log) {
     // 再补一句根本不存在的 `login ocg`。同一个坑的另一半，用向导里已有的判据。
     if (product.auth === 'key') {
       const configured = hasGoCredential()
-      log(`${product.id.padEnd(5)} ${product.label}：${configured ? '已配 key' : '未配 key（在 `fo setup` 里填）'}`)
+      out(`${product.id.padEnd(5)} ${product.label}：${configured ? '已配 key' : '未配 key（在 `fo setup` 里填）'}`)
       if (configured) any = true
       continue
     }
     const status = credentialStatus(product, { file: config.credentialFile })
     if (!status.loggedIn) {
-      log(`${product.id.padEnd(5)} ${product.label}：未登录（flow-one login ${product.id}）`)
+      out(`${product.id.padEnd(5)} ${product.label}：未登录（flow-one login ${product.id}）`)
       continue
     }
     any = true
-    log(`${product.id.padEnd(5)} ${product.label}：已登录${status.nickname === '' ? '' : ` · ${status.nickname}`}`)
-    log(`      ${formatExpiry(status)}${status.refreshable ? ' · 可静默续期' : ' · 无 refresh token，过期需重新登录'}`)
+    out(`${product.id.padEnd(5)} ${product.label}：已登录${status.nickname === '' ? '' : ` · ${status.nickname}`}`)
+    out(`      ${formatExpiry(status)}${status.refreshable ? ' · 可静默续期' : ' · 无 refresh token，过期需重新登录'}`)
   }
-  log(`\n凭据文件：${config.credentialFile}`)
-  if (!any) process.exitCode = 1
+  out(`\n凭据文件：${config.credentialFile}`)
+  // 报告（成功数据）已经发出去了，但一条可用来源都没有：这不是正常结果。
+  if (!any) {
+    throw authError(SUBTYPES.NOT_LOGGED_IN, '没有任何一条来源可用')
+      .withHint('腾讯两条线跑 flow-one login；OpenCode Go 套餐在 fo setup 里填 key')
+  }
 }
 
-async function commandModels(config, log) {
+async function commandModels(config, log, out) {
   const upstream = makeUpstream(config, log)
   const rows = await upstream.loadModels()
   if (rows.length === 0) {
-    log('没有拿到任何模型。直连模式请先 login；网关模式请检查 --upstream 与密钥。')
-    process.exitCode = 1
-    return
+    // 一条来源都没给出模型：这是上游的问题，不是「确实没有模型」的正常结果。
+    throw upstreamError(SUBTYPES.MODEL_UNAVAILABLE, '没有拿到任何模型')
+      .withHint('直连模式先跑 flow-one login；网关模式检查 --upstream 与密钥')
   }
   let current = ''
   for (const row of rows) {
     const product = row.product ?? ''
     if (product !== current) {
       current = product
-      if (product !== '') log(`\n[${product}]`)
+      if (product !== '') out(`\n[${product}]`)
     }
     const bits = [
       row.contextWindow === undefined ? '' : `窗口 ${row.contextWindow}`,
@@ -111,8 +130,9 @@ async function commandModels(config, log) {
       row.supportsImages === true ? '视觉' : '',
       Array.isArray(row.efforts) && row.efforts.length > 0 ? `档位 ${row.efforts.join('/')}` : '',
     ].filter(Boolean)
-    log(`  ${row.id}${bits.length === 0 ? '' : `   ${bits.join(' · ')}`}`)
+    out(`  ${row.id}${bits.length === 0 ? '' : `   ${bits.join(' · ')}`}`)
   }
+  // 计数是日志不是数据：清单留在 stdout 给脚本，计数走 stderr。
   log(`\n共 ${rows.length} 个模型。`)
 }
 
@@ -149,21 +169,36 @@ async function commandServe(config, log) {
   void bridge.warm()
 }
 
+/**
+ * `--json` 只决定**错误**怎么渲染（Go 版里它是 root 的 persistent flag）。
+ * 它还没进 config.mjs 的 flag 表，所以先在这里摘掉再交给解析器。
+ */
+const jsonOut = process.argv.slice(2).includes('--json')
+
+/** 版本号只有 package.json 一处真值：发版时别的地方不用跟着改。 */
+const { version } = createRequire(import.meta.url)('./package.json')
+
 async function main() {
-  const argv = process.argv.slice(2)
+  const argv = process.argv.slice(2).filter(argument => argument !== '--json')
+  // 版本是元信息：不读凭据、不发网络、不进菜单 —— 装完随手敲一下就该有输出。
+  if (argv.includes('--version') || argv.includes('-v')) {
+    process.stdout.write(`${version}\n`)
+    return
+  }
   const { help, command, commandArgs, config } = resolveConfig({ argv })
   if (help) {
     process.stdout.write(USAGE)
     return
   }
   const log = makeLogger(config.quiet)
-  if (command === 'setup') return await setupWizard()
+  const out = makeDataWriter(config.quiet)
+  if (command === 'setup') return await setupWizard({ service: config.service })
   if (command === 'uninstall') return await uninstallFlow()
   if (command === 'switch') return await switchModel()
   if (command === 'doctor') return await doctorFlow()
   if (command === 'login') return await commandLogin(config, commandArgs, log)
-  if (command === 'status') return await commandStatus(config, log)
-  if (command === 'models') return await commandModels(config, log)
+  if (command === 'status') return await commandStatus(config, out)
+  if (command === 'models') return await commandModels(config, log, out)
 
   // 裸跑且在终端里 → 进菜单。不带参数又没有 TTY（systemd、launchd、管道）时
   // 直接起服务，脚本与后台服务的行为因此不受菜单影响。
@@ -175,7 +210,10 @@ async function main() {
   return await commandServe(config, log)
 }
 
+// 命令边界：任何失败都在这里收敛成契约错误 → 渲染到 stderr → 用 category 推导退出码。
+// 退出码不看 subtype、不看 message（脚本据此分支才可靠）。
 main().catch(error => {
-  process.stderr.write(`${error?.message ?? error}\n`)
-  process.exitCode = 1
+  const typed = toBridgeError(error)
+  process.stderr.write(renderError(typed, { json: jsonOut }))
+  process.exitCode = exitCodeFor(typed.category)
 })

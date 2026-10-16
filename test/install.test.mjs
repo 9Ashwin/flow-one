@@ -205,3 +205,136 @@ test('status：免费档报「无需登录」、Go 套餐报「配没配 key」�
   assert.doesNotMatch(out, /login (oc|ocg)/)
   assert.doesNotMatch(out, /未登录/, '这两条来源根本没有「未登录」这个状态')
 })
+
+// ── 「要不要装成开机自启」这一问的记忆 ──────────────────────────────────────
+//
+// 用户的原始抱怨：装过一次后台服务之后，每次配置都还要再问一遍。规则见 AGENTS.md §6。
+
+/** 假的 serviceState：用例不碰本机的 launchd / systemd 也能喂出「装过 / 没装过」。 */
+function fakeService(overrides = {}) {
+  return { kind: 'launchd', path: '/tmp/dev.flow-one.plist', installed: false, legacyInstalled: false, supported: true, ...overrides }
+}
+
+/** 抓住 note / warn 打到 stdout 的内容，用来断言「屏幕上到底说了什么」（带颜色码，先剥掉）。 */
+function captureStdout() {
+  const original = process.stdout.write.bind(process.stdout)
+  const chunks = []
+  process.stdout.write = chunk => { chunks.push(String(chunk)); return true }
+  return {
+    stop() { process.stdout.write = original },
+    text() { return chunks.join('').replace(/\x1b\[[0-9;]*[A-Za-z]/g, '') },
+  }
+}
+
+test('后台服务：已经装过就不再问，直接更新', async () => {
+  const home = scratch()
+  const { decideService } = await import('../src/wizard.mjs')
+  let asked = false
+  const capture = captureStdout()
+  let wants
+  try {
+    wants = await decideService({
+      state: fakeService({ installed: true }),
+      // 账本里是「拒绝过」也不算数：服务就在那儿，直接更新它
+      choice: { asked: true, autoStart: false },
+      ask: async () => { asked = true; return false },
+    })
+  } finally {
+    capture.stop()
+  }
+  assert.equal(wants, true, '装过就直接更新')
+  assert.equal(asked, false, '用户的抱怨正是这一问每次配置都还要再来一遍')
+  assert.match(capture.text(), /后台服务已装.*本次直接更新/, '要说清楚为什么没问')
+  assert.equal(fs.existsSync(path.join(home, 'install.json')), false, '没问就不该写账本')
+})
+
+test('后台服务：没问过就问一次（默认「要」），并把答案落盘', async () => {
+  const home = scratch()
+  const { decideService } = await import('../src/wizard.mjs')
+  let asked = 0
+  const wants = await decideService({
+    state: fakeService(),
+    ask: async ({ message, initial }) => {
+      asked += 1
+      assert.match(message, /开机自启/)
+      assert.equal(initial, true, '默认是「要」')
+      return true
+    },
+  })
+  assert.equal(wants, true)
+  assert.equal(asked, 1, '从没表态时要问一次')
+  const file = path.join(home, 'install.json')
+  const ledger = JSON.parse(fs.readFileSync(file, 'utf8'))
+  assert.equal(ledger.autoStart, true)
+  assert.equal(ledger.autoStartAsked, true, '「问过」要单独记，否则「选了不装」和「没问过」分不开')
+  assert.equal(fs.statSync(file).mode & 0o777, 0o600, '账本与凭据同目录，权限不能松')
+})
+
+test('后台服务：上次选了不装就不再问，只提示怎么开启', async () => {
+  const home = scratch()
+  const { recordServiceChoice, serviceChoice } = await import('../src/install.mjs')
+  // 相当于上一次向导里，用户在「装成开机自启？」答了「不装」
+  recordServiceChoice(false)
+  assert.deepEqual(serviceChoice(), { asked: true, autoStart: false })
+
+  const { decideService } = await import('../src/wizard.mjs')
+  const capture = captureStdout()
+  let asked = false
+  let wants
+  try {
+    // choice 走默认值 → 真的从 BRIDGE_HOME/install.json 里读回上次的答案
+    wants = await decideService({ state: fakeService(), ask: async () => { asked = true; return true } })
+  } finally {
+    capture.stop()
+  }
+  assert.equal(wants, false)
+  assert.equal(asked, false, '拒绝过就别再问第二遍')
+  assert.match(capture.text(), /fo setup --service/, '要给出开启的办法，而不是只说一句「已跳过」')
+  assert.ok(fs.existsSync(path.join(home, 'install.json')))
+})
+
+test('后台服务：显式 --service / --no-service 最优先，且不写账本', async () => {
+  const home = scratch()
+  const { decideService } = await import('../src/wizard.mjs')
+  let asked = false
+  const spy = async () => { asked = true; return true }
+
+  // --no-service 压过「已经装了」：脚本要能明确表态不更新服务
+  assert.equal(await decideService({ service: false, state: fakeService({ installed: true }), ask: spy }), false)
+  // --service 压过「上次拒绝过」
+  assert.equal(await decideService({ service: true, state: fakeService(), choice: { asked: true, autoStart: false }, ask: spy }), true)
+  assert.equal(asked, false, '给了 flag 就不该再问')
+  assert.equal(fs.existsSync(path.join(home, 'install.json')), false, 'flag 是「这一次」的表态，不落账本')
+})
+
+test('卸载：把「要不要自启」的答案一起忘掉，下次配置重新问', async () => {
+  const home = scratch()
+  // 服务文件的位置由 HOME 推出：给一个临时 HOME 就能走到「本来就没装过服务」那条路，
+  // 既不碰真实家目录，也不会真去调 launchctl / systemctl。
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'fo-install-home-'))
+  const previous = { HOME: process.env.HOME, XDG_CONFIG_HOME: process.env.XDG_CONFIG_HOME }
+  process.env.HOME = dir
+  process.env.XDG_CONFIG_HOME = path.join(dir, 'config')
+  try {
+    const { recordServiceChoice, serviceChoice, uninstallService } = await import('../src/install.mjs')
+    recordServiceChoice(false)
+
+    assert.equal(uninstallService().skipped, true, '这台机器上本来就没装过服务')
+
+    const ledger = JSON.parse(fs.readFileSync(path.join(home, 'install.json'), 'utf8'))
+    assert.equal('autoStart' in ledger, false, '卸载后不该还留着「不装」的答案')
+    assert.equal('autoStartAsked' in ledger, false)
+    assert.deepEqual(serviceChoice(), { asked: false, autoStart: false })
+
+    // 用户既然卸载了，下次配置就该重新问一遍
+    const { decideService } = await import('../src/wizard.mjs')
+    let asked = 0
+    await decideService({ state: fakeService(), ask: async () => { asked += 1; return true } })
+    assert.equal(asked, 1)
+  } finally {
+    if (previous.HOME === undefined) delete process.env.HOME
+    else process.env.HOME = previous.HOME
+    if (previous.XDG_CONFIG_HOME === undefined) delete process.env.XDG_CONFIG_HOME
+    else process.env.XDG_CONFIG_HOME = previous.XDG_CONFIG_HOME
+  }
+})

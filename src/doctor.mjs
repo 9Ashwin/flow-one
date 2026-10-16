@@ -48,34 +48,40 @@ const gateStub = name => ({
  */
 const wrongSessionShape = () => `ses_${'0'.repeat(12)}${'A'.repeat(26)}`
 
-async function probeOnce(fetchImpl, baseUrl, body, headers, timeoutMs) {
+async function probeOnce(fetchImpl, baseUrl, body, headers, timeoutMs, anonymousKey) {
   try {
     const response = await fetchImpl(`${baseUrl}${OPENCODE.chatPath}`, {
       method: 'POST',
-      headers: { authorization: `Bearer ${OPENCODE.anonymousKey}`, 'content-type': 'application/json', accept: 'text/event-stream', ...headers },
+      headers: { authorization: `Bearer ${anonymousKey}`, 'content-type': 'application/json', accept: 'text/event-stream', ...headers },
       body: JSON.stringify(body),
       signal: AbortSignal.timeout(timeoutMs),
     })
-    if (response.ok) {
-      // 只要不是错误信封就算过；顺便把连接读掉，避免挂着的 socket
-      const text = await response.text()
-      return { status: response.status, errorType: undefined, ok: !/FreeTierError|AuthError/.test(text) }
-    }
+    // 正文一律读掉（免得挂着 socket），错误类型在**两条路**上都要认：上游偶尔用
+    // 200 回一个错误信封，只看状态码会把那种响应当成「过了」。
     const text = await response.text()
-    const type = /"(FreeTierError|AuthError|GoUsageLimitError|UsageLimitError)"/.exec(text)?.[1]
-    return { status: response.status, errorType: type, ok: false, message: text.slice(0, 200) }
+    const errorType = /"(FreeTierError|AuthError|GoUsageLimitError|UsageLimitError)"/.exec(text)?.[1]
+    if (response.ok && errorType === undefined) return { status: response.status, errorType: undefined, ok: true }
+    return { status: response.status, errorType, ok: false, message: text.slice(0, 200) }
   } catch (error) {
     return { status: 0, errorType: undefined, ok: false, message: error?.message ?? String(error) }
   }
 }
+
+/** 上游用「403 + FreeTierError」表示报文形状没被认出来；两处文案都见过，所以两个判据都认。 */
+const gateRejected = result => result.errorType === 'FreeTierError' || /free tier can only be used/i.test(result.message ?? '')
 
 /**
  * 重推一遍 OpenCode 免费档的门禁。
  *
  * 完整形状应得 200；四个「去掉一个要件」的变体应被拒。哪一条变体**没被拒**，
  * 说明那一条已经不再是必填项（上游放松了）；完整形状被拒，说明上游收紧了。
+ *
+ * @param {object} [options]
+ * @param {string} [options.baseUrl] 默认 `OPENCODE.baseUrl`；测试注入本机地址
+ * @param {Function} [options.fetchImpl] 默认全局 `fetch`；测试注入假 fetch（离线）
+ * @param {string} [options.anonymousKey] 默认 `OPENCODE.anonymousKey`（匿名档是字面量 `public`）
  */
-export async function probeOpencodeGate({ baseUrl = OPENCODE.baseUrl, fetchImpl = fetch, timeoutMs = 20_000 } = {}) {
+export async function probeOpencodeGate({ baseUrl = OPENCODE.baseUrl, fetchImpl = fetch, timeoutMs = 20_000, anonymousKey = OPENCODE.anonymousKey } = {}) {
   const base = { model: OPENCODE.defaultModel, max_tokens: 8, stream: true, messages: [{ role: 'user', content: 'ping' }] }
   const full = applyFreeTierGate({ ...base, tools: ['bash', 'glob', 'grep', 'read'].map(gateStub) })
   const project = projectId()
@@ -83,18 +89,18 @@ export async function probeOpencodeGate({ baseUrl = OPENCODE.baseUrl, fetchImpl 
   const headers = shapeHeaders({ project, session, request: requestId() })
   const rows = []
 
-  const complete = await probeOnce(fetchImpl, baseUrl, full.body, headers, timeoutMs)
+  const complete = await probeOnce(fetchImpl, baseUrl, full.body, headers, timeoutMs, anonymousKey)
+  // 四档：该过的过了 → pass；被门禁拒（上游收紧）→ fail；429 / 连不上 → 这一轮判不出来
+  const tightened = gateRejected(complete)
   rows.push({
     label: '完整形状（5 个头 + 会话形状 + 四个工具 + stream）',
     required: true,
-    // 完整形状该过；过不了才是真问题
-    verdict: complete.ok ? 'pass' : 'fail',
+    verdict: complete.ok ? 'pass' : tightened ? 'fail' : 'inconclusive',
     ...complete,
   })
   if (!complete.ok) {
     // 只有明确是 FreeTierError 才叫「上游收紧了」；限流 / 网络不通是另一回事，
     // 混为一谈会把人引到错误的方向。
-    const tightened = complete.errorType === 'FreeTierError' || /free tier can only be used/i.test(complete.message ?? '')
     return { baseUrl, rows, tightened, inconclusive: !tightened }
   }
 
@@ -106,12 +112,12 @@ export async function probeOpencodeGate({ baseUrl = OPENCODE.baseUrl, fetchImpl 
     { label: 'stream: false', body: { ...full.body, stream: false }, headers },
   ]
   for (const variant of variants) {
-    const result = await probeOnce(fetchImpl, baseUrl, variant.body, variant.headers, timeoutMs)
+    const result = await probeOnce(fetchImpl, baseUrl, variant.body, variant.headers, timeoutMs, anonymousKey)
     rows.push({
       label: variant.label,
       // 该被拒却被放行 ⇒ relaxed：这一条已不再是必填项（上游放松，不影响使用，但文档要跟着改）
       // 被拒 ⇒ pass：这一条确实是必填项，事实仍然成立
-      verdict: result.ok ? 'relaxed' : result.errorType === 'FreeTierError' ? 'pass' : 'inconclusive',
+      verdict: result.ok ? 'relaxed' : gateRejected(result) ? 'pass' : 'inconclusive',
       ...result,
     })
   }
@@ -148,10 +154,20 @@ export async function probeOpencodeGo(source = OPENCODE_GO, { fetchImpl = fetch,
   }
 
   const auth = { authorization: `Bearer ${credential.apiKey}` }
+  // 判定分三档，别把「判不出来」报成「这条路坏了」：
+  //   pass         出字了
+  //   fail         缺会话头（必填项这条事实被推翻）或凭据被拒 —— 都是真问题
+  //   inconclusive 额度受限 / 上游 5xx / 连不上 —— 与门禁无关，别误导人去查会话头
+  const verdictOf = (result, failPattern) => {
+    if (result.ok) return 'pass'
+    if (failPattern.test(result.message ?? '')) return 'fail'
+    if (result.status === 0 || result.status === 429 || result.status >= 500) return 'inconclusive'
+    return 'fail'
+  }
   const withSession = await call({ ...auth, [source.sessionHeader]: credential.session })
   rows.push({
     label: `带 ${source.sessionHeader} 的一次最小对话`,
-    verdict: withSession.ok ? 'pass' : /MissingSessionID/.test(withSession.message) ? 'fail' : 'fail',
+    verdict: verdictOf(withSession, /MissingSessionID/),
     ...withSession,
   })
   const withoutSession = await call(auth)
@@ -169,7 +185,7 @@ export async function probeOpencodeGo(source = OPENCODE_GO, { fetchImpl = fetch,
       return { status: 0, ok: false, message: error?.message ?? String(error) }
     }
   })()
-  rows.push({ label: '模型清单要 key', verdict: listing.ok ? 'pass' : 'fail', ...listing })
+  rows.push({ label: '模型清单要 key', verdict: verdictOf(listing, /Unauthorized|Forbidden|invalid/i), ...listing })
   return { configured: true, tail: goKeyTail(), rows }
 }
 
@@ -185,29 +201,60 @@ const FINGERPRINT_PAYLOAD = [
 /**
  * 用**本工具自己的翻译层 + 改写器**打一次真实上游：过不了就是 400 + 11128。
  *
- * 走真链路（而不是裸发一个请求）才有意义 —— 要验的正是「改写 + 发送」这一整套。
+ * 走真链路（而不是裸发一个请求）才有意义 —— 要验的正是「翻译 → 改写 → 发送」这一整套。
+ *
+ * @param {object} product 腾讯产品（`products.mjs` 的 CN / INTL）
+ * @param {object} [options]
+ * @param {object} [options.credential] 注入凭据；不给就读本机登录态（未登录 → 跳过并说明）
+ * @param {object[]} [options.models] 注入模型清单；不给就真取
+ * @param {Function} [options.chat] 发送那一步（默认 `buddy.mjs` 的 chat）。URL 与请求头由它
+ *   负责，这里**不再写一份字面量** —— 曾经重复写 `/v1` 拼出 `/inference/v1/v1/…` 拿 404
  */
-export async function probeTencentFingerprint(product, { log = () => {}, signal } = {}) {
-  const credential = await ensureCredential(product, { log })
-  const models = await listModels(product, credential, { log })
-  const meta = models.find(model => model.id.includes('deepseek-v4.1-flash')) ?? models[0]
-  if (meta === undefined) return { ok: false, status: 0, message: '模型清单是空的，无法探针' }
+export async function probeTencentFingerprint(product, {
+  log = () => {},
+  signal,
+  credential,
+  models,
+  chat = buddyChat,
+} = {}) {
+  let cred = credential
+  if (cred === undefined) {
+    try {
+      cred = await ensureCredential(product, { log, signal })
+    } catch (error) {
+      // 未登录不是门禁问题：这一节跳过并说明，别让整份自检跟着报错
+      return { ok: false, verdict: 'inconclusive', skipped: true, status: 0, message: `${product.label}未登录，跳过（${error.message}）` }
+    }
+  }
+  const list = models ?? await listModels(product, cred, { log, signal })
+  const meta = list.find(model => model.id.includes('deepseek-v4.1-flash')) ?? list[0]
+  if (meta === undefined) return { ok: false, verdict: 'inconclusive', status: 0, message: '模型清单是空的，无法探针' }
   const request = {
     model: meta.id, max_tokens: 8, stream: true,
     system: FINGERPRINT_PAYLOAD,
     messages: [{ role: 'user', content: 'ping' }],
   }
-  // 走**本工具自己的翻译层 + 改写器**：要验的正是「翻译 → 改写 → 发送」这一整套，
-  // 裸发一个手工请求证明不了改写器在真实链路上生效。
-  const body = toOpenAiRequest(request, { model: meta.id, rewriteSystem: systemRewriterFor(meta.id, true) })
-  if (body.error !== undefined) return { ok: false, status: 0, message: `翻译层出错：${body.error}` }
-  const result = await buddyChat(product, body, { model: meta.id, meta, signal, log })
+  // 改写器按**带来源前缀**的模型 ID 挑（`cn/…` / `intl/…`）；`meta.id` 是上游目录里的
+  // 裸 ID，拿它去问会永远拿到 undefined —— 那样子探针会把三条字面量原样发出去，
+  // 于是每一次都撞 11128，被报成「风控规则失效」，而真实链路（前缀模型）其实是好的。
+  const prefixed = `${product.id}/${meta.id}`
+  const { body, error } = toOpenAiRequest(request, { model: meta.id, rewriteSystem: systemRewriterFor(prefixed, true) })
+  if (error !== undefined) return { ok: false, verdict: 'inconclusive', status: 0, message: `翻译层出错：${error}` }
+  const result = await chat(product, body, { model: meta.id, meta, signal, log })
   if (result.ok) {
     const text = await result.response.text()
-    return { ok: true, status: result.response.status, message: text.slice(0, 120) }
+    const status = result.response.status
+    const { blocked, limited } = classifyTencentFailure(text)
+    // 流内拦截是「HTTP 200 + 一帧 {code,msg}」：状态码好看，内容却一个字都没出
+    if (blocked) return { ok: false, verdict: 'fail', status, message: text.slice(0, 200), blocked, limited }
+    if (limited) return { ok: false, verdict: 'inconclusive', status, message: text.slice(0, 200), blocked, limited }
+    return { ok: true, verdict: 'pass', status, message: text.slice(0, 120) }
   }
   const message = result.message ?? ''
-  return { ok: false, status: result.status, message: message.slice(0, 200), ...classifyTencentFailure(message) }
+  const { blocked, limited } = classifyTencentFailure(message)
+  // 额度/频率受限时**这一轮根本没验证到改写器**：报成「指纹规则失效」会把人引得去翻规则，
+  // 而实际只要等额度恢复。
+  return { ok: false, verdict: blocked ? 'fail' : 'inconclusive', status: result.status, message: message.slice(0, 200), blocked, limited }
 }
 
 /**

@@ -103,7 +103,8 @@ export function readInstallState(env = process.env, home = os.homedir()) {
 function writeInstallState(state, env = process.env, home = os.homedir()) {
   const file = installStatePath(env, home)
   fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 })
-  fs.writeFileSync(file, JSON.stringify(state, null, 2), { mode: 0o600 })
+  // 临时文件 + rename：账本是「记过什么」的唯一凭据，半个 JSON 等于把记录弄丢
+  writeJsonAtomic(file, state, 0o600)
 }
 
 /** Claude Code 的配置目录；`CLAUDE_CONFIG_DIR` 优先。 */
@@ -324,6 +325,26 @@ export function serviceState() {
 }
 
 /**
+ * 账本里记的「要不要装成开机自启」这一问的答案。
+ *
+ * 交互式配置会反复跑（再挂一家、换个模型都要跑一遍），问过就别再问第二遍
+ * —— 用户明确抱怨过「装过一次之后每次配置都还要再问一遍要不要开机自启」。
+ * 这里只读写答案，**问不问、怎么问**由向导决定（这一层不做交互）。
+ */
+export function serviceChoice() {
+  const state = readInstallState()
+  return { asked: state.autoStartAsked === true, autoStart: state.autoStart === true }
+}
+
+/** 记下这一问的答案：下次配置据此不再问。 */
+export function recordServiceChoice(autoStart) {
+  const state = readInstallState()
+  state.autoStart = autoStart === true
+  state.autoStartAsked = true
+  writeInstallState(state)
+}
+
+/**
  * 清掉改名前的旧服务：先让它从 launchd / systemd 里退出来，再删服务文件。
  *
  * 卸载失败也照样删文件：留下一个「还在跑、却已经没有服务文件」的进程，
@@ -452,6 +473,16 @@ export function uninstallService() {
   const { kind, path: file } = servicePaths()
   // 改名前的旧服务也要带走：卸载就该什么都不剩
   const legacy = removeLegacyService()
+  // 「装成开机自启」那一问也跟着忘掉：用户既然来卸载，下次配置就该重新问一遍。
+  // 这在「没装过服务」的提前返回**之前**做 —— 上次在向导里选了「不装」的用户
+  // 同样答过这一问，卸载之后不该还留着他的答案。
+  const state = readInstallState()
+  const remembered = 'service' in state || 'autoStart' in state || 'autoStartAsked' in state
+  delete state.service
+  delete state.autoStart
+  delete state.autoStartAsked
+  // 什么都没记过就别写：不为了「没删到东西」凭空造一个 install.json
+  if (remembered) writeInstallState(state)
   if (file === '' || !fs.existsSync(file)) {
     return legacy.removed
       ? { ok: true, kind, path: legacy.path, legacy: true }
@@ -462,8 +493,5 @@ export function uninstallService() {
     else systemctl(['disable', '--now', `${SERVICE_LABEL}.service`])
   } catch { /* 没在跑就算了，文件还是要删掉 */ }
   fs.rmSync(file, { force: true })
-  const state = readInstallState()
-  delete state.service
-  writeInstallState(state)
   return { ok: true, kind, path: file }
 }

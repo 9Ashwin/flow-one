@@ -82,6 +82,9 @@ export const USAGE = `flow-one —— 让 Claude Code CLI 用上 WorkBuddy（国
   --model <ID>             默认模型 ID；直连模式不给则由上游清单决定
   --map <A=B,C=D>          Claude 模型名 → 上游模型 ID 的显式映射
   --api-key <KEY>          本桥自己的门禁密钥（默认不校验，仅监听回环）
+  --json                   错误以一行 JSON 信封输出到 stderr（脚本用）
+  --service / --no-service 后台常驻：显式表态（覆盖上次记住的选择）
+  --version, -v            显示版本号
   --max-tokens <N>         下发前的 max_tokens 上限，0 表示不限制
   --heartbeat <毫秒>       思考期间的心跳间隔，0 关闭（默认 ${DEFAULTS.heartbeatMs}）
   --thinking               把上游的思考增量渲染成 thinking 块（默认丢弃）
@@ -179,6 +182,13 @@ export function resolveConfig({ env = process.env, argv = [], home = os.homedir(
     if (flag === '--no-fingerprint-rewrite') { config.fingerprintRewrite = false; continue }
     if (flag === '--setup' || flag === '--uninstall') { rest.push(flag.slice(2)); continue }
     if (flag === '--quiet') { config.quiet = true; continue }
+    // 三个「出现即生效」、不接参数的开关：
+    //   --json        错误渲染成一行 JSON 信封（脚本用；cli.mjs 在解析前也要认它，
+    //                 否则连「参数写错了」都没法输出 JSON —— 两边读的是同一份 argv，不冲突）
+    //   --service / --no-service  对「要不要后台常驻」显式表态，覆盖上次记住的选择
+    if (flag === '--json') { config.json = true; continue }
+    if (flag === '--service') { config.service = true; continue }
+    if (flag === '--no-service') { config.service = false; continue }
     if (!flag.startsWith('--')) { rest.push(flag); continue }
     const field = FLAGS[flag]
     if (field === undefined) throw new Error(`未知选项：${flag}（--help 查看用法）`)

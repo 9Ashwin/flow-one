@@ -24,7 +24,7 @@ import { credentialChecks, localIssues, localSnapshot, probeOpencodeGate, probeO
 import { login, credentialStatus } from './auth.mjs'
 import { createDirectUpstream, createGatewayUpstream } from './upstreams.mjs'
 import { credentialFile } from './config.mjs'
-import { installClaudeSettings, installService, uninstallClaudeSettings, uninstallService, serviceState, claudeSettingsPath, readInstallState, serviceCliPath, currentCliPath, LEGACY_SERVICE_LABEL } from './install.mjs'
+import { installClaudeSettings, installService, uninstallClaudeSettings, uninstallService, serviceState, serviceChoice, recordServiceChoice, claudeSettingsPath, readInstallState, serviceCliPath, currentCliPath, LEGACY_SERVICE_LABEL } from './install.mjs'
 import { HOME_DIR, LEGACY_HOME_DIR, legacyHomeInUse } from './home.mjs'
 import {
   banner, blank, box, confirm, gray, green, heading, info, input, menu, note,
@@ -267,7 +267,46 @@ function mountedSources(chosen) {
   return current.includes(chosen) ? current : [...current, chosen]
 }
 
-export async function setupWizard() {
+/**
+ * 决定这次要不要装后台服务，并**只在需要时问一次**。
+ *
+ * 用户明确抱怨过：装过一次之后，每次配置都还要再问一遍要不要开机自启。规则：
+ *   1. 显式 `--service` / `--no-service` 最优先（脚本化场景要能表态）；
+ *   2. 已经装过 → 不问，直接更新；
+ *   3. 问过且当时选了不装 → 不问，只提示怎么开启；
+ *   4. 从没表态 → 问一次（默认「要」），把答案记进 `install.json`。
+ *
+ * `state` / `choice` / `ask` 都可以注入，用例因此能在不碰 launchd / systemd 的前提下
+ * 断言「问了没问」。
+ */
+export async function decideService({ service, state = serviceState(), choice = serviceChoice(), ask = confirm } = {}) {
+  if (!state.supported) {
+    warn('这个平台没有实现后台常驻，跳过（服务相关命令在 macOS 与 Linux 上可用）')
+    return false
+  }
+  // flag 是「这一次」的表态，不落账本：脚本每次都带着它，而把一次性的选择记成
+  // 永久偏好，会让下一次交互式配置再也见不到这一问。
+  if (service !== undefined) return service
+  if (state.installed) {
+    note(dim(`  后台服务已装（${state.kind}），本次直接更新`))
+    return true
+  }
+  if (choice.asked && !choice.autoStart) {
+    note(dim('  按你上次的选择跳过后台服务；要开启：fo setup --service'))
+    return false
+  }
+  const wants = await ask({ message: '装成开机自启的后台服务？', initial: true })
+  recordServiceChoice(wants)
+  return wants
+}
+
+/**
+ * 一键配置。
+ *
+ * `options.service` 是调用方给的显式表态（`--service` / `--no-service`）；
+ * 不给（`undefined`）时按账本与现状自动决定，见 `decideService`。
+ */
+export async function setupWizard(options = {}) {
   heading('一键配置')
   note(dim('  一次配一家：接哪一家 → 登录 → 选模型 → 写配置并常驻'))
   note(dim('  想再挂一家，配完回菜单再选一次「一键配置」即可（不会顶掉先前的）'))
@@ -344,7 +383,7 @@ export async function setupWizard() {
   if (applied.backup !== undefined) note(`  ${gray(`原文件已备份：${applied.backup}`)}`)
 
   const running = await probeBridge(port)
-  const wantsService = await confirm({ message: '装成开机自启的后台服务？', initial: true })
+  const wantsService = await decideService({ service: options.service })
   let service
   let health
   if (wantsService) {
@@ -618,8 +657,11 @@ export async function doctorFlow() {
   for (const row of gate.rows) {
     if (row.verdict === 'pass') success(`${row.label} → ${row.status}${row.errorType === undefined ? '' : ` ${row.errorType}`}`)
     else if (row.verdict === 'relaxed') note(`  ${yellow('○')} ${row.label} → ${row.status} ${gray('（这一条已不再是必填项，上游放松了）')}`)
-    else if (row.verdict === 'fail' && gate.inconclusive === true) warn(`${row.label} → ${row.status || '连不上'} ${row.message ?? ''}`)
-    else fail(`${row.label} → ${row.status} ${row.errorType ?? ''} ${row.message ?? ''}`)
+    // 「判不出来」有三条来路，都得走 warn 而不是红：这一行自己判不出来、这一轮整体
+    // 判不出来（限流/连不上）、以及整轮收紧时其余行也一并降级。
+    else if (row.verdict === 'inconclusive' || (row.verdict === 'fail' && gate.inconclusive === true)) {
+      warn(`${row.label} → ${row.status || '连不上'} ${row.message ?? ''}`)
+    } else fail(`${row.label} → ${row.status} ${row.errorType ?? ''} ${row.message ?? ''}`)
   }
   if (gate.tightened === true) {
     fail('完整形状已被拒 —— 上游收紧了免费档门禁')
