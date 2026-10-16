@@ -233,7 +233,7 @@ export async function setupWizard() {
   const wantsService = await confirm({ message: '装成开机自启的后台服务？（不装的话每次要自己起）', initial: true })
   let service
   if (wantsService) {
-    service = installService({ port: Number(port), apiKey, env: serviceEnv })
+    service = await installService({ port: Number(port), apiKey, env: serviceEnv })
     if (service.ok) success(`已安装（${service.kind}）：${dim(service.path)}`)
     else {
       fail(service.reason)

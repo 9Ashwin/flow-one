@@ -21,6 +21,18 @@ import { fileURLToPath } from 'node:url'
 import { bridgeHome } from './config.mjs'
 
 const CLI_PATH = fileURLToPath(new URL('../cli.mjs', import.meta.url))
+
+const sleep = ms => new Promise(resolve => { setTimeout(resolve, ms) })
+
+/** launchd 里这个 label 是否已加载。 */
+function launchdLoaded(label) {
+  try {
+    execFileSync('launchctl', ['print', `gui/${process.getuid()}/${label}`], { stdio: 'ignore' })
+    return true
+  } catch {
+    return false
+  }
+}
 const SERVICE_LABEL = 'dev.claude-code-openai-bridge'
 
 export function installStatePath(env = process.env, home = os.homedir()) {
@@ -225,8 +237,15 @@ export function serviceState() {
   return { kind, path: file, installed: file !== '' && fs.existsSync(file), supported: kind !== 'unsupported' }
 }
 
-/** 装成开机自启的后台服务；返回它实际做了什么，供界面如实展示。 */
-export function installService({ port, apiKey, env = {} }) {
+/**
+ * 装成开机自启的后台服务；返回它实际做了什么，供界面如实展示。
+ *
+ * ⚠️ **重启路径必须等 bootout 落地**。`launchctl bootout` 是异步的，紧接着
+ * `bootstrap` 同一个 label 会失败成 `Bootstrap failed: 5: Input/output error`
+ * —— 用户在菜单里第二次点「一键配置」时必然撞上（真实缺陷，2026-10-16 修复）。
+ * 所以先轮询到它真的卸干净，再 bootstrap，并给 bootstrap 留几次重试。
+ */
+export async function installService({ port, apiKey, env = {} }) {
   const { kind, path: file } = servicePaths()
   if (kind === 'unsupported') {
     return { ok: false, kind, reason: `暂不支持 ${process.platform} 的自启，请自行把 \`node ${CLI_PATH}\` 放进你的启动项` }
@@ -245,10 +264,22 @@ export function installService({ port, apiKey, env = {} }) {
   try {
     if (kind === 'launchd') {
       const domain = `gui/${process.getuid()}`
-      try {
-        execFileSync('launchctl', ['bootout', `${domain}/${SERVICE_LABEL}`], { stdio: 'ignore' })
-      } catch { /* 之前没装过就会失败，正常 */ }
-      execFileSync('launchctl', ['bootstrap', domain, file], { stdio: 'pipe' })
+      if (launchdLoaded(SERVICE_LABEL)) {
+        try {
+          execFileSync('launchctl', ['bootout', `${domain}/${SERVICE_LABEL}`], { stdio: 'ignore' })
+        } catch { /* 已经没了也算成功 */ }
+        for (let attempt = 0; attempt < 40 && launchdLoaded(SERVICE_LABEL); attempt++) await sleep(250)
+      }
+      let loaded = false
+      for (let attempt = 0; attempt < 5 && !loaded; attempt++) {
+        try {
+          execFileSync('launchctl', ['bootstrap', domain, file], { stdio: 'pipe' })
+          loaded = true
+        } catch (error) {
+          if (attempt === 4) throw error
+          await sleep(400)
+        }
+      }
       notes.push('launchctl bootstrap 已加载')
     } else {
       execFileSync('systemctl', ['--user', 'daemon-reload'], { stdio: 'pipe' })

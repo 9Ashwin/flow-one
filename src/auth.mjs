@@ -36,7 +36,14 @@ const REFRESH_MARGIN_MS = 120_000
 const CODE_TOKEN_NOT_READY = 11217
 const CODE_ACCOUNT_NOT_READY = 12151
 
-const sleep = ms => new Promise(resolve => { setTimeout(resolve, ms).unref?.() })
+/**
+ * 登录轮询用的等待。
+ *
+ * ⚠️ **不能 unref**：`login` 是独立命令，等待期间进程里没有别的句柄，unref 会让
+ * Node 直接退出（表现为「打印完登录链接就没了」，用户授权后没人去取令牌）。
+ * 集成测试也照不出这个缺陷——测试进程自己有句柄撑着。真实缺陷，2026-10-16 修复。
+ */
+const sleep = ms => new Promise(resolve => { setTimeout(resolve, ms) })
 
 /** 凭据文件的位置与 `config.credentialFile` 同源，测试可整体改道 BRIDGE_HOME。 */
 export function storePath(env = process.env, home) {
@@ -282,6 +289,19 @@ async function pollAccount(product, state, token, options) {
   return undefined
 }
 
+/**
+ * 用已有的 state 把登录收尾：授权完成后（哪怕进程重启过、轮询被中断过）也能
+ * 把凭据取回来。state 由服务端签发，同一 state 只要还在有效期内就仍可兑换。
+ */
+export async function completeLogin(product, state, { signal, file = storePath(), log = () => {} } = {}) {
+  const token = await pollToken(product, state, { signal })
+  const account = await pollAccount(product, state, token, { signal })
+  const credential = { ...token, ...account === undefined ? {} : { account } }
+  saveCredential(product, credential, file)
+  log(`${product.label}：登录成功${account?.nickname ? `（${account.nickname}）` : ''}，凭据已保存`)
+  return credential
+}
+
 /** 完整登录：取 state → 用户浏览器授权 → 轮询令牌 → 轮询账号。 */
 export async function login(product, { log = () => {}, openBrowser = openInBrowser, signal, file = storePath() } = {}) {
   log(`${product.label}：正在获取登录地址……`)
@@ -290,12 +310,7 @@ export async function login(product, { log = () => {}, openBrowser = openInBrows
   log(`${product.label}：请在浏览器中完成登录：\n  ${url}`)
   openBrowser(url, log)
   log(`${product.label}：等待授权（最长 5 分钟）……`)
-  const token = await pollToken(product, state, { signal })
-  const account = await pollAccount(product, state, token, { signal })
-  const credential = { ...token, ...account === undefined ? {} : { account } }
-  saveCredential(product, credential, file)
-  log(`${product.label}：登录成功${account?.nickname ? `（${account.nickname}）` : ''}，凭据已保存`)
-  return credential
+  return await completeLogin(product, state, { signal, file, log })
 }
 
 // ── 续期 ────────────────────────────────────────────────────────────────────

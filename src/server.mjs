@@ -101,7 +101,10 @@ export function createBridgeServer({ config, upstream, log = () => {} }) {
 
   /** 上游认这个 ID 就原样透传，否则落到默认模型——Claude 的模型名一律走兜底。 */
   async function resolveModel(requested) {
-    const wanted = typeof requested === 'string' ? requested.trim() : ''
+    // Claude Code 的 `[1m]` 后缀理论上会在发请求前剥掉（实测 2.1.301 会），
+    // 但把它当成「上游模型名的一部分」去查表只会白掉一次兜底，索性在这里去掉。
+    const raw = typeof requested === 'string' ? requested.trim().replace(/\[[^\]]*\]$/, '') : ''
+    const wanted = raw
     if (wanted !== '' && config.modelMap[wanted] !== undefined) return config.modelMap[wanted]
     if (wanted !== '' && known.has(wanted)) return wanted
     if (Date.now() - modelsFetchedAt > MODEL_TTL_MS || known.size === 0) await refreshModels()

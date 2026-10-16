@@ -289,3 +289,72 @@ test('直连模式：上游流内的安全策略拦截被如实报出，而不�
   assert.match(error.data.error.message, /内容涉嫌违规/)
   assert.equal(frames.at(-1).event, 'message_stop')
 })
+
+test('模型名带 [1m] 后缀也能命中（Claude Code 理论上会剥掉，但别把兜底浪费在这上面）', async t => {
+  const seen = []
+  const upstreamServer = http.createServer(async (req, res) => {
+    const url = new URL(req.url, 'http://localhost')
+    if (url.pathname === '/v1/models') {
+      res.writeHead(200, { 'content-type': 'application/json' })
+      res.end(JSON.stringify({ data: [{ id: 'cn/deepseek-v4.1-flash' }] }))
+      return
+    }
+    seen.push(await readBody(req))
+    res.writeHead(200, { 'content-type': 'text/event-stream' })
+    res.end(sse([{ choices: [{ delta: { content: 'ok' }, finish_reason: 'stop' }] }]))
+  })
+  const upstreamUrl = await listen(upstreamServer)
+  t.after(() => upstreamServer.close())
+  const upstream = createGatewayUpstream({ upstream: upstreamUrl, upstreamKey: '' })
+  const bridge = createBridgeServer({ config: baseConfig({}), upstream, log: () => {} })
+  const address = await bridge.listen()
+  t.after(() => bridge.close())
+
+  const response = await fetch(`http://127.0.0.1:${address.port}/v1/messages`, {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ model: 'cn/deepseek-v4.1-flash[1m]', max_tokens: 16, messages: [{ role: 'user', content: 'hi' }] }),
+  })
+  assert.equal(response.status, 200)
+  assert.equal(seen[0].model, 'cn/deepseek-v4.1-flash', '后缀必须被剥掉，且走的是命中路径而不是兜底')
+})
+
+test('login 是独立命令：轮询期间进程不能自己退出（子进程回归）', async t => {
+  // 用子进程而不是本进程断言：测试进程自己有句柄撑着，sleep 被 unref 也照不出来。
+  // 真实缺陷（2026-10-16）：`node cli.mjs login` 打印完链接就退出，用户授权后没人取令牌。
+  let tokenPolls = 0
+  const server = http.createServer(async (req, res) => {
+    const url = new URL(req.url, 'http://localhost')
+    const send = payload => { res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify(payload)) }
+    if (url.pathname === '/v2/plugin/auth/state') return send({ data: { state: 'st-x', authUrl: 'http://example.invalid/login' } })
+    if (url.pathname === '/v2/plugin/auth/token') {
+      tokenPolls++
+      return send(tokenPolls === 1 ? { code: 11217 } : { data: { accessToken: 'at-x', refreshToken: 'rt-x', expiresIn: 3600, domain: '127.0.0.1' } })
+    }
+    if (url.pathname === '/v2/plugin/login/account') return send({ data: { uid: 'u-x', nickname: '子进程账号', type: 'personal' } })
+    send({ msg: 'not found' })
+  })
+  const endpoint = await listen(server)
+  t.after(() => server.close())
+
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'ccb-child-'))
+  const file = path.join(home, 'credentials.json')
+  const product = { ...CN, endpoint, apiDomain: '127.0.0.1', label: '子进程产品' }
+  const script = `
+    const { login } = await import(${JSON.stringify(new URL('../src/auth.mjs', import.meta.url).href)})
+    await login(${JSON.stringify(product)}, { file: ${JSON.stringify(file)}, log: () => {}, openBrowser: () => {} })
+    process.stdout.write('LOGGED_IN')
+  `
+  const { spawn } = await import('node:child_process')
+  const child = spawn(process.execPath, ['--input-type=module', '-e', script], { stdio: ['ignore', 'pipe', 'pipe'] })
+  let out = ''
+  let err = ''
+  child.stdout.on('data', chunk => { out += chunk })
+  child.stderr.on('data', chunk => { err += chunk })
+  const code = await new Promise(resolve => {
+    const timer = setTimeout(() => { child.kill('SIGKILL'); resolve('timeout') }, 20_000)
+    child.on('exit', status => { clearTimeout(timer); resolve(status) })
+  })
+  assert.equal(code, 0, `子进程应当正常退出（err: ${err}）`)
+  assert.match(out, /LOGGED_IN/, '等待期间进程必须活着，否则拿不到令牌')
+  assert.equal(JSON.parse(fs.readFileSync(file, 'utf8')).cn.accessToken, 'at-x')
+})
