@@ -32,6 +32,8 @@ type TranslateOptions struct {
 	// Rewriter 是内容风控改写器：**只有腾讯系来源非 nil**（套餐分离不变式）。
 	Rewriter     source.Rewriter
 	ShowThinking bool
+	// InputTokens 是本地估算的输入计数：上游没给 usage 时用它兜底。
+	InputTokens int
 }
 
 // Hooks 是翻译层的四件事。由 cmd 层接线到 internal/anthropic。
@@ -57,9 +59,11 @@ type Options struct {
 	ShowThinking bool
 	// MaxTokensCap 为 0 表示不额外限制。
 	MaxTokensCap int
-	Registry     *source.Registry
-	Hooks        Hooks
-	Log          func(format string, args ...any)
+	// InputTokens 是本地估算的输入计数（上游没给 usage 时兜底）。
+	InputTokens int
+	Registry    *source.Registry
+	Hooks       Hooks
+	Log         func(format string, args ...any)
 }
 
 // Server 是桥的 HTTP 服务。
@@ -247,6 +251,11 @@ func (s *Server) handleMessages(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	estimate := 0
+	if s.opts.Hooks.EstimateTokens != nil {
+		estimate = s.opts.Hooks.EstimateTokens(body)
+	}
+
 	meta := s.opts.Registry.Find(requestedModel)
 	stream, err := chosen.Chat(r.Context(), source.ChatRequest{Body: translated, Model: bare, Meta: meta})
 	if err != nil {
@@ -257,7 +266,11 @@ func (s *Server) handleMessages(w http.ResponseWriter, r *http.Request) {
 	}
 	defer stream.Close()
 
-	options := TranslateOptions{Model: bare, MaxTokensCap: s.opts.MaxTokensCap, Rewriter: chosen.Rewriter(), ShowThinking: s.opts.ShowThinking}
+	options := TranslateOptions{
+		Model: bare, MaxTokensCap: s.opts.MaxTokensCap,
+		Rewriter: chosen.Rewriter(), ShowThinking: s.opts.ShowThinking,
+		InputTokens: estimate,
+	}
 	if probe.Stream {
 		w.Header().Set("content-type", "text/event-stream")
 		w.Header().Set("cache-control", "no-cache")

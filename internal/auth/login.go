@@ -27,12 +27,12 @@ type AuthState struct {
 func (c *Client) FetchAuthState(ctx context.Context, p Product) (AuthState, error) {
 	endpoint := p.Endpoint + "/v2/plugin/auth/state?platform=" + url.QueryEscape(p.Platform)
 	headers := map[string]string{
-		"X-Domain":            p.APIDomain,
-		"X-No-Authorization":  "true",
-		"X-No-User-Id":        "true",
-		"X-No-Enterprise-Id":  "true",
+		"X-Domain":             p.APIDomain,
+		"X-No-Authorization":   "true",
+		"X-No-User-Id":         "true",
+		"X-No-Enterprise-Id":   "true",
 		"X-No-Department-Info": "true",
-		"User-Agent":          p.UserAgent,
+		"User-Agent":           p.UserAgent,
 	}
 	status, body, err := c.control(ctx, http.MethodPost, endpoint, headers, StateTimeout)
 	if err != nil {
@@ -255,11 +255,11 @@ func newUUID() string {
 //
 // 命令名在 browser_darwin.go / browser_linux.go 里按 build tag 分文件给出；起不来
 // （SSH、容器里没有这个命令）只记一行提示，不当作失败 —— 链接本来就打印出来了。
-func openInBrowser(url string, log func(string)) {
-	command := exec.Command(browserCommand, url)
+func openInBrowser(link string, log func(string)) {
+	command := exec.Command(browserCommand, link)
 	if err := command.Start(); err != nil {
 		if log != nil {
-			log("无法自动打开浏览器，请手动访问：" + url)
+			log("无法自动打开浏览器，请手动访问：" + link)
 		}
 		return
 	}

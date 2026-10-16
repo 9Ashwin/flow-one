@@ -12,6 +12,8 @@ import (
 
 	"github.com/9Ashwin/claude-code-openai-bridge/errs"
 	"github.com/9Ashwin/claude-code-openai-bridge/internal/build"
+	"github.com/9Ashwin/claude-code-openai-bridge/internal/config"
+	"github.com/9Ashwin/claude-code-openai-bridge/internal/ui"
 	"github.com/spf13/cobra"
 )
 
@@ -30,6 +32,25 @@ Claude Code 只会说 Anthropic 的 Messages 协议，这几家的接口都是 O
 	SilenceUsage:  true,
 	SilenceErrors: true,
 	Version:       build.String(),
+	// 不带子命令时的行为与 Node 版一致：有终端进菜单，没有终端直接起服务。
+	RunE: func(cmd *cobra.Command, _ []string) error {
+		cfg, err := loadConfig(cmd)
+		if err != nil {
+			return err
+		}
+		return runBare(cmd, cfg)
+	},
+}
+
+// runBare 是「不带子命令」的入口。
+//
+// systemd / launchd / 管道这类没有 TTY 的场景直接起服务（这是常驻时的正常路径）；
+// 有终端则进交互菜单。
+func runBare(cmd *cobra.Command, cfg config.Config) error {
+	if !ui.IsInteractive() {
+		return runServe(cmd.Context(), cfg)
+	}
+	return runMenu(cmd, cfg)
 }
 
 // Execute 跑根命令并返回进程退出码。
@@ -57,4 +78,5 @@ func fail(err error) int {
 
 func init() {
 	rootCmd.PersistentFlags().BoolVar(&jsonOut, "json", false, "错误以 JSON 信封输出到 stderr")
+	rootCmd.AddCommand(serveCmd, modelsCmd, loginCmd)
 }

@@ -387,3 +387,12 @@ func TestStreamFlagIsOnlySetForTrue(t *testing.T) {
 	assert.NotContains(t, translate(t, `{"messages":[{"role":"user","content":"hi"}],"stream":false}`, Options{Model: "m"}), "stream")
 	assert.NotContains(t, translate(t, `{"messages":[{"role":"user","content":"hi"}]}`, Options{Model: "m"}), "stream")
 }
+
+func TestStopSequencesAlwaysProduceAnArrayWhenGiven(t *testing.T) {
+	// stop_sequences 给的是一串非字符串时，Node 版发的是空数组而不是省略这个键。
+	body := translate(t, `{"messages":[{"role":"user","content":"hi"}],"stop_sequences":[1,2]}`, Options{Model: "m"})
+	assert.Equal(t, []any{}, body["stop"])
+
+	// 没给这个键时就不该出现。
+	assert.NotContains(t, translate(t, `{"messages":[{"role":"user","content":"hi"}]}`, Options{Model: "m"}), "stop")
+}

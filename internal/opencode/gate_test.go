@@ -65,8 +65,17 @@ func TestApplyFreeTierGateShapesTools(t *testing.T) {
 func TestApplyFreeTierGateKeepsNonFunctionTools(t *testing.T) {
 	body := map[string]any{"tools": []any{"not-a-tool", map[string]any{"type": "web_search"}}}
 	gated, gate := ApplyFreeTierGate(body)
-	names := toolNames(t, gated)
-	assert.Equal(t, []string{"bash", "glob", "grep", "read"}, names, "认不出的工具原样留着，四个桩补在后面")
+	tools, isList := gated["tools"].([]any)
+	require.True(t, isList)
+	require.Len(t, tools, 6)
+	// 认不出的工具原样留着（连位置都不动），四个桩补在后面
+	assert.Equal(t, "not-a-tool", tools[0])
+	assert.Equal(t, map[string]any{"type": "web_search"}, tools[1])
+	for index, want := range GateTools {
+		tool, _ := tools[index+2].(map[string]any)
+		function, _ := tool["function"].(map[string]any)
+		assert.Equal(t, want, function["name"])
+	}
 	assert.Empty(t, gate.Rename)
 	assert.Len(t, gate.Stubs, 4)
 }

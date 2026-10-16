@@ -37,9 +37,13 @@ type StreamTranslator struct {
 	write        func(frame []byte)
 	showThinking bool
 
-	nextIndex     int
-	textIndex     int // -1 表示文本块还没开场
-	thinkingIndex int // -1 表示推理块还没开场
+	// startInputTokens 是 message_start 里那个 input_tokens：它必须是构造时的
+	// 本地估算。上游的 usage 帧可能先于第一个 delta 到达，而 message_start 那时
+	// 已经写出去了 —— 之后能改的只有 message_delta。
+	startInputTokens int
+	nextIndex        int
+	textIndex        int // -1 表示文本块还没开场
+	thinkingIndex    int // -1 表示推理块还没开场
 	// slots 按**到达顺序**保存工具槽。Node 的 Map 也是插入序，而收尾补开场时
 	// 顺序决定块下标，所以这里不能换成 map（Go 的 map 遍历是随机的）。
 	slots []*toolSlot
@@ -65,13 +69,14 @@ type toolSlot struct {
 // NewStreamTranslator 造一个流式渲染器。Write 必须非 nil。
 func NewStreamTranslator(opts StreamOptions) *StreamTranslator {
 	return &StreamTranslator{
-		model:         opts.Model,
-		id:            opts.ID,
-		write:         opts.Write,
-		showThinking:  opts.ShowThinking,
-		textIndex:     -1,
-		thinkingIndex: -1,
-		usage:         Usage{InputTokens: opts.InputTokens},
+		model:            opts.Model,
+		id:               opts.ID,
+		write:            opts.Write,
+		showThinking:     opts.ShowThinking,
+		startInputTokens: opts.InputTokens,
+		textIndex:        -1,
+		thinkingIndex:    -1,
+		usage:            Usage{InputTokens: opts.InputTokens},
 	}
 }
 
@@ -80,6 +85,11 @@ func NewStreamTranslator(opts StreamOptions) *StreamTranslator {
 func (t *StreamTranslator) Push(payload []byte) bool {
 	if t.finished {
 		return true
+	}
+	if t.failure != nil {
+		// 已经报过错的一轮不再渲染。调用方本该在看到 false 之后停下来，万一它没停，
+		// 也不能把错误之后的帧当成正常内容吐给客户端。
+		return false
 	}
 	chunk := parseObject(payload)
 	if chunk == nil {
@@ -207,7 +217,7 @@ func (t *StreamTranslator) start() {
 			Content:      []any{},
 			StopReason:   nil,
 			StopSequence: nil,
-			Usage:        Usage{InputTokens: t.usage.InputTokens},
+			Usage:        Usage{InputTokens: t.startInputTokens},
 		},
 	})
 }

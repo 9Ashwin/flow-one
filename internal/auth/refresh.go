@@ -27,10 +27,10 @@ func (c *Client) Refresh(ctx context.Context, p Product, credential Credential) 
 			WithHint(ProductHint(p.ID))
 	}
 	headers := map[string]string{
-		"X-Domain":             p.APIDomain,
-		"User-Agent":           p.UserAgent,
-		"Authorization":        "Bearer " + credential.AccessToken,
-		"X-Refresh-Token":      credential.RefreshToken,
+		"X-Domain":              p.APIDomain,
+		"User-Agent":            p.UserAgent,
+		"Authorization":         "Bearer " + credential.AccessToken,
+		"X-Refresh-Token":       credential.RefreshToken,
 		"X-Auth-Refresh-Source": "ide-main",
 	}
 	status, body, err := c.control(ctx, http.MethodPost, p.Endpoint+"/v2/plugin/auth/token/refresh", headers, RequestTimeout)

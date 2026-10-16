@@ -245,3 +245,34 @@ func TestStreamDoesNotEmitEmptyTextOrThinkingBlocks(t *testing.T) {
 
 	assert.Equal(t, []string{"message_start", "message_delta", "message_stop"}, frames.events())
 }
+
+func TestStreamMessageStartKeepsTheConstructionEstimate(t *testing.T) {
+	// 差分跑出来的一个真 bug：usage 帧可能先于第一个 delta 到达，而 message_start
+	// 那时已经写出去了。第一帧报的是构造时的本地估算，收尾帧才报上游的计数。
+	stream, frames := newStream(StreamOptions{Model: "m", ID: "msg_1", InputTokens: 9})
+
+	stream.Push([]byte(`{"usage":{"prompt_tokens":11,"completion_tokens":3}}`))
+	stream.End()
+
+	start := frames.payloadAt(t, 0)["message"].(map[string]any)["usage"].(map[string]any)
+	assert.Equal(t, float64(9), start["input_tokens"], "第一帧报本地估算")
+	final := frames.payloadAt(t, 1)["usage"].(map[string]any)
+	assert.Equal(t, float64(11), final["input_tokens"], "收尾帧报上游计数")
+	assert.Equal(t, float64(3), final["output_tokens"])
+}
+
+func TestStreamIgnoresFramesAfterAFailure(t *testing.T) {
+	// 调用方本该在 false 之后停手；万一它继续喂帧，也不能把错误之后的内容
+	// 当成正文发给客户端。
+	stream, frames := newStream(StreamOptions{Model: "m", ID: "msg_1"})
+
+	assert.False(t, stream.Push([]byte(`{"error":{"message":"内容被安全策略拦截"}}`)))
+	assert.False(t, stream.Push([]byte(`{"choices":[{"delta":{"content":"不该出现"}}]}`)))
+	assert.NotContains(t, frames.joined(), "不该出现", "错误之后的帧不能再变成正文")
+	assert.Empty(t, frames.events(), "这一轮的内容一个块都不该开场")
+
+	// 收尾只能走 Fail：错的是这一轮，不是这一帧。
+	stream.Fail(stream.Failure().Message)
+	assert.Equal(t, []string{"message_start", "error", "message_stop"}, frames.events())
+	assert.NotContains(t, frames.joined(), "message_delta")
+}

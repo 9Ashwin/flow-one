@@ -28,16 +28,18 @@ type Options struct {
 //
 // 可省字段一律 omitempty：上游对多余的空字段并不宽容，免费档尤其会拿形状做门禁。
 type outBody struct {
-	Model           string       `json:"model"`
-	Messages        []outMessage `json:"messages"`
-	Tools           []outTool    `json:"tools,omitempty"`
-	ToolChoice      any          `json:"tool_choice,omitempty"`
-	Stream          bool         `json:"stream,omitempty"`
-	MaxTokens       *int64       `json:"max_tokens,omitempty"`
-	Temperature     *float64     `json:"temperature,omitempty"`
-	TopP            *float64     `json:"top_p,omitempty"`
-	Stop            []string     `json:"stop,omitempty"`
-	ReasoningEffort string       `json:"reasoning_effort,omitempty"`
+	Model       string       `json:"model"`
+	Messages    []outMessage `json:"messages"`
+	Tools       []outTool    `json:"tools,omitempty"`
+	ToolChoice  any          `json:"tool_choice,omitempty"`
+	Stream      bool         `json:"stream,omitempty"`
+	MaxTokens   *int64       `json:"max_tokens,omitempty"`
+	Temperature *float64     `json:"temperature,omitempty"`
+	TopP        *float64     `json:"top_p,omitempty"`
+	// Stop 用指针：stop_sequences 给了、但里面一个字符串都没有时，要发空数组而不是
+	// 省略这个键 —— 上游两边都收，这里与 Node 版逐键对齐。
+	Stop            *[]string `json:"stop,omitempty"`
+	ReasoningEffort string    `json:"reasoning_effort,omitempty"`
 }
 
 type outMessage struct {
@@ -241,7 +243,7 @@ func ToOpenAIRequest(body []byte, opts Options) ([]byte, error) {
 				stop = append(stop, text)
 			}
 		}
-		translated.Stop = stop
+		translated.Stop = &stop
 	}
 	if effort, ok := effortFor(request["thinking"]); ok {
 		translated.ReasoningEffort = effort

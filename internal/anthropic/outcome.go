@@ -49,6 +49,9 @@ type Outcome struct {
 	Thinking string
 	// ToolCalls 按下标归并；上游跳号留下的位置是 nil。那些洞在出站时被跳过，
 	// 但 stop_reason 的判据看的是**槽位数**（与 Node 版一致）。
+	//
+	// 这里比 Node 版宽容一点：Node 的 for...of 会遍历到洞里的 undefined 并抛
+	// TypeError（上游跳一次号就把整轮打成 500），Go 版把洞当成「这一槽还没出现过」。
 	ToolCalls []*ToolCall
 	// Usage 是上游最后一帧带的计数；上游一次都没给时是 nil。
 	Usage *UpstreamUsage

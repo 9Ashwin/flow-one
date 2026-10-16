@@ -6,7 +6,6 @@ package opencode
 import (
 	"context"
 	"net/http"
-	"strings"
 	"testing"
 
 	"github.com/9Ashwin/claude-code-openai-bridge/errs"
@@ -185,8 +184,11 @@ func TestGoTierMetadata(t *testing.T) {
 	assert.Equal(t, "deepseek-v4.1-flash", goTier.DefaultModel())
 }
 
-func TestSourceEndpointsDiffer(t *testing.T) {
-	// 两条路的端点不同是刻意的：把它们合成一条会同时弄坏两边
-	assert.True(t, strings.HasSuffix(freeBaseURL+freeChatPath, "/inference/v1/v1/chat/completions"))
-	assert.True(t, strings.HasSuffix(goBaseURL+goChatPath, "/zen/go/v1/chat/completions"))
+func TestSourceEndpoints(t *testing.T) {
+	// 两条路的端点不同是刻意的：免费档在 /inference/v1，Go 套餐在 /zen/go/v1，
+	// 把它们合成一条会同时弄坏两边。
+	assert.Equal(t, "https://opencode.ai/inference/v1/chat/completions", freeBaseURL+freeChatPath)
+	assert.Equal(t, "https://opencode.ai/inference/v1/models", freeBaseURL+freeModelsPath)
+	assert.Equal(t, "https://opencode.ai/zen/go/v1/chat/completions", goBaseURL+goChatPath)
+	assert.Equal(t, "https://opencode.ai/zen/go/v1/models", goBaseURL+goModelsPath)
 }
