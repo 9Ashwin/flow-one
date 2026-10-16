@@ -1,0 +1,79 @@
+name: go
+
+on:
+  push:
+    branches: [go-rewrite, main]
+  pull_request:
+
+jobs:
+  # 门禁：格式、vet、单测。macOS 与 Linux 都要跑 —— 服务管理、打开浏览器这些
+  # 分平台实现各自有 build tag，只测一边等于没测。
+  test:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        go: ['1.23', 'stable']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ matrix.go }}
+          cache: true
+      - name: gofmt 检查
+        run: |
+          unformatted="$(gofmt -l . | grep -v '^\.tmp/' || true)"
+          if [ -n "$unformatted" ]; then
+            echo "以下文件未格式化，请跑 make fmt："
+            echo "$unformatted"
+            exit 1
+          fi
+      - name: go vet
+        run: go vet ./...
+      - name: 单测
+        run: go test ./...
+
+  # 额外一轮带竞态检测：来源实现会被多个请求并发读（模型清单缓存），
+  # 这一轮专门抓那类问题。
+  race:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: stable
+          cache: true
+      - name: go test -race
+        run: go test -race ./...
+
+  # 交叉编译：Linux 是一等目标，必须能出二进制（哪怕 runner 是 macOS）。
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - goos: darwin
+            goarch: arm64
+          - goos: darwin
+            goarch: amd64
+          - goos: linux
+            goarch: arm64
+          - goos: linux
+            goarch: amd64
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: stable
+          cache: true
+      - name: make build
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: '0'
+        run: make build
+      - name: 产物自检（--version 能跑起来）
+        if: matrix.goos == 'linux' && matrix.goarch == 'amd64'
+        run: ./claude-code-bridge --version
