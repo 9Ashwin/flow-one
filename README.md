@@ -234,14 +234,40 @@ launchd 自启与 `/health`。
 [dsh-our-free-model](https://github.com/Ebony-Vinyl/dsh-our-free-model)（MIT）中被实测
 验证过的逆向结论，本项目的实现与之独立。
 
-## 发布（维护者）
+## 发布到 npm（维护者）
 
-包名 `claude-code-openai-bridge` 在 npm 上**尚未被占用**（2026-10-16 查证；`ccb` 这个名字已被别人占用，所以发布用全名，`ccb` 只是本包提供的命令别名）。
+包名 `claude-code-openai-bridge` 在 npm 上**尚未被占用**（2026-10-16 查证）。`ccb`
+这个名字已被别人占用，所以它只作为本包提供的命令别名，不作包名。
 
 ```bash
-npm login          # 交互式，需要 npm 账号与一次性验证码
-npm publish        # prepublishOnly 会先跑一遍 node --test，测试不过发不出去
+# 0. 前提：registry 必须是官方源 —— 国内镜像只能装、不能发
+npm config get registry          # 应为 https://registry.npmjs.org/
+
+# 1. 登录（没有账号先去 npmjs.com 注册）
+npm login                        # 开了双因素会要一次性验证码
+
+# 2. 先空跑：会执行 prepublishOnly（node --test）并列出将要发布的内容
+npm publish --dry-run
+
+# 3. 正式发布
+npm publish
+
+# 4. 核对
+npm view claude-code-openai-bridge version
+npm i -g claude-code-openai-bridge && ccb status
 ```
+
+几条踩过的坑：
+
+- **发布前工作区要干净**：`git status` 有未提交改动时，包里会带上半成品。
+- **版本号只升不覆**：先 `npm version patch|minor|major`；同一个版本重发会被拒
+  （`EPUBLISHCONFLICT`）。
+- **72 小时内可撤**：`npm unpublish claude-code-openai-bridge@0.1.0`；超过就只能发新版本。
+  所以第一次发之前，先 `npm i -g .` 在本地验一遍更稳。
+- **CI 里发布**要用 **Automation 类型**的 token（npm 网站 → Access Tokens），
+  普通 token 遇到 2FA 会被拒；配成仓库 secret `NPM_TOKEN`，打 `v*` tag 时
+  `npm publish --provenance --access public`。需要这条工作流可以说一声，我加个
+  `.github/workflows/release.yml`。
 
 ## License
 
