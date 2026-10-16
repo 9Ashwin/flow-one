@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"os"
 	"regexp"
+	"strings"
 	"testing"
 
 	"github.com/9Ashwin/claude-code-openai-bridge/errs"
@@ -64,20 +65,56 @@ func TestSaveGoKeyRejectsEmptyKey(t *testing.T) {
 	assert.Equal(t, errs.SubtypeMissingArgument, typed.Subtype)
 }
 
-func TestSaveGoKeyDoesNotClobberBrokenStore(t *testing.T) {
+func TestSaveGoKeyBacksUpBrokenStoreBeforeRewriting(t *testing.T) {
 	home := scratch(t)
-	// 坏掉的凭据文件不能当成空表覆盖：那会顺手毁掉腾讯两条线的登录态
+	// 坏掉的凭据文件里可能躺着腾讯两条线的登录态：不能静默整表重写（先备份再说），
+	// 也不能直接拒绝写（那会让人连重新配 key 都做不了）——
+	// 这条策略与 internal/auth 的 Store.update 保持一致。
 	broken := `{"cn": {"accessToken": "x"` // 少一个右括号
 	require.NoError(t, writeFile(t, home+"/credentials.json", broken))
 
-	_, err := SaveGoKey("oc_sk_test_5555555555555555555555555555")
-	require.Error(t, err)
-	typed, isTyped := errs.As(err)
-	require.True(t, isTyped)
-	assert.Equal(t, errs.SubtypeParseFailed, typed.Subtype)
-	raw, readErr := os.ReadFile(home + "/credentials.json")
-	require.NoError(t, readErr)
-	assert.Equal(t, broken, string(raw), "坏文件必须原样留着，等用户自己修")
+	saved, err := SaveGoKey("oc_sk_test_5555555555555555555555555555")
+	require.NoError(t, err)
+	assert.Regexp(t, uuidPattern, saved.Session)
+
+	// 原文留在备份里（0600）
+	entries, err := os.ReadDir(home)
+	require.NoError(t, err)
+	backups := []string{}
+	for _, entry := range entries {
+		if strings.Contains(entry.Name(), "credentials.json.bak-") {
+			backups = append(backups, entry.Name())
+		}
+	}
+	require.Len(t, backups, 1, "坏文件必须先备份：%v", backups)
+	backup, err := os.ReadFile(home + "/" + backups[0])
+	require.NoError(t, err)
+	assert.Equal(t, broken, string(backup), "备份里是原文")
+	info, err := os.Stat(home + "/" + backups[0])
+	require.NoError(t, err)
+	assert.Equal(t, os.FileMode(0o600), info.Mode().Perm())
+
+	// 写出来的是一份合法凭据
+	stored, ok := ReadGoKey()
+	require.True(t, ok)
+	assert.Equal(t, "oc_sk_test_5555555555555555555555555555", stored.APIKey)
+}
+
+func TestReadGoKeyDoesNotTouchTheFileOnBrokenStore(t *testing.T) {
+	home := scratch(t)
+	broken := `{"cn": {`
+	require.NoError(t, writeFile(t, home+"/credentials.json", broken))
+
+	// 读路径（向导与 status 会频繁调用）不能有副作用：不备份、不改写
+	_, ok := ReadGoKey()
+	assert.False(t, ok)
+	assert.Empty(t, GoKeyTail())
+	entries, err := os.ReadDir(home)
+	require.NoError(t, err)
+	assert.Len(t, entries, 1, "读一次不该多出备份文件：%v", entries)
+	raw, err := os.ReadFile(home + "/credentials.json")
+	require.NoError(t, err)
+	assert.Equal(t, broken, string(raw))
 }
 
 func TestSaveGoKeyKeepsOtherEntries(t *testing.T) {

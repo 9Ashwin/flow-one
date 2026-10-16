@@ -4,6 +4,7 @@
 package opencode
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -71,6 +72,9 @@ func GoKeyTail() string {
 //
 // 会话 id 在这里生成一次并落盘复用：它只影响服务端路由亲和，但每次换一个会让同一台
 // 机器被看成很多独立客户端（DSH 桌面端那边就是固定写死一个 UUID 的）。
+//
+// 凭据文件坏掉时**先备份再重写**（与 internal/auth 的 Store 同一套策略）：备份里有原文，
+// 用户不会丢东西，也不会因为一个逗号卡住配不了 key。
 func SaveGoKey(apiKey string) (GoKey, error) {
 	file, err := credentialPath()
 	if err != nil {
@@ -80,9 +84,15 @@ func SaveGoKey(apiKey string) (GoKey, error) {
 	if trimmed == "" {
 		return GoKey{}, errs.Validation(errs.SubtypeMissingArgument, "key 不能为空").WithParam("apiKey")
 	}
-	store, err := readStoreStrict(file)
+	store, broken, err := loadStore(file)
 	if err != nil {
 		return GoKey{}, err
+	}
+	if broken != nil {
+		if err := backupBrokenStore(file, broken); err != nil {
+			return GoKey{}, err
+		}
+		store = map[string]any{}
 	}
 	existing, _ := store[goEntry].(map[string]any)
 	session, _ := existing["session"].(string)
@@ -123,33 +133,45 @@ func credentialPath() (string, error) {
 	return config.CredentialPath(home), nil
 }
 
-// readStore 读整份凭据文件；不存在或坏掉都当空表（读不到不该挡住写入）。
+// readStore 读整份凭据文件；不存在或坏掉都当空表，且**不写任何东西**（读路径不该有副作用：
+// HasGoKey / GoKeyTail 会被向导和 status 频繁调用）。
 func readStore(file string) map[string]any {
-	store, _ := readStoreStrict(file)
+	store, _, _ := loadStore(file)
 	return store
 }
 
-// readStoreStrict 与 readStore 的区别：文件存在但**不是合法 JSON** 时报错。
-//
-// Node 版在同样的情况下会把坏文件当成空表，然后把整份凭据覆盖掉 —— 那会顺手毁掉
-// 腾讯两条线已经登录好的凭据。宁可报错让用户修，也不静默吃掉别人的登录态。
-func readStoreStrict(file string) (map[string]any, error) {
+// loadStore 读凭据表。broken 非 nil 表示文件存在但不是合法 JSON，内容是原文 ——
+// 调用方要写它之前得先备份（见 SaveGoKey）。
+func loadStore(file string) (store map[string]any, broken []byte, err error) {
 	payload, err := os.ReadFile(file)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return map[string]any{}, nil
+			return map[string]any{}, nil, nil
 		}
-		return nil, errs.Wrap(err, errs.CategoryInternal, errs.SubtypeIOFailed, fmt.Sprintf("读不到凭据文件 %s", file))
+		return nil, nil, errs.Wrap(err, errs.CategoryInternal, errs.SubtypeIOFailed, fmt.Sprintf("读不到凭据文件 %s", file))
 	}
-	store := map[string]any{}
-	if len(strings.TrimSpace(string(payload))) == 0 {
-		return store, nil
+	if len(bytes.TrimSpace(payload)) == 0 {
+		return map[string]any{}, nil, nil
 	}
-	if err := json.Unmarshal(payload, &store); err != nil || store == nil {
-		return nil, errs.Internal(errs.SubtypeParseFailed, fmt.Sprintf("凭据文件不是合法 JSON：%s", file)).
-			WithHint("修好或删掉它再重试（不会覆盖坏文件）")
+	table := map[string]any{}
+	if err := json.Unmarshal(payload, &table); err != nil || table == nil {
+		return map[string]any{}, payload, nil
 	}
-	return store, nil
+	return table, nil, nil
+}
+
+// backupBrokenStore 把坏掉的凭据文件复制成 `credentials.json.bak-<时间戳>`。
+//
+// 策略与 internal/auth 的 Store.update 一致（**先备份再重写**，不是拒绝写）：
+// 凭据文件里躺着腾讯两条线的登录态，静默整表重写会把还能手工救回来的内容（比如多了一个
+// 逗号）一起毁掉；但直接拒绝写又会让人连「重新配 key / 重新登录」都做不了。
+func backupBrokenStore(file string, payload []byte) error {
+	backup := fmt.Sprintf("%s.bak-%s", file, time.Now().UTC().Format("2006-01-02T15-04-05-000Z"))
+	if err := os.WriteFile(backup, payload, 0o600); err != nil {
+		return errs.Wrap(err, errs.CategoryInternal, errs.SubtypeIOFailed, "备份坏掉的凭据文件失败："+backup).
+			WithHint("先手工把 credentials.json 修成合法 JSON，或把它挪走")
+	}
+	return nil
 }
 
 // writeStore 原子写回凭据文件：目录 0700、文件 0600，两边平台一致。

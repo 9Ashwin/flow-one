@@ -50,8 +50,18 @@ func setup(t *testing.T) (*fakeSystemctl, string, string) {
 	t.Setenv("XDG_CONFIG_HOME", "")
 	fake := &fakeSystemctl{}
 	systemctl = fake.run
-	t.Cleanup(func() { systemctl = runSystemctl })
+	// 默认「问不出来」：用例不该去问本机的 logind
+	lingerState = func() (bool, bool) { return false, false }
+	t.Cleanup(func() {
+		systemctl = runSystemctl
+		lingerState = queryLinger
+	})
 	return fake, home, bridgeHome
+}
+
+// withLinger 让 loadService 里的 lingering 探测返回指定的结果。
+func withLinger(enabled bool, known bool) {
+	lingerState = func() (bool, bool) { return enabled, known }
 }
 
 func unitFile(home string) string {
@@ -103,6 +113,31 @@ func TestInstallOnLinuxReloadsThenEnables(t *testing.T) {
 	assert.True(t, state.Installed)
 	assert.True(t, state.Supported)
 	assert.Equal(t, KindSystemd, state.Kind)
+}
+
+func TestInstallOnLinuxHintsLingerOnlyWhenNeeded(t *testing.T) {
+	_, _, _ = setup(t)
+
+	// 没开 lingering：这正是「装了自启但注销就停」的坑，装完第一次要说一句
+	withLinger(false, true)
+	t.Setenv("USER", "ashwin")
+	result, err := Install(Options{Port: 8788, Command: []string{"/opt/ccb/bridge"}})
+	require.NoError(t, err)
+	require.Len(t, result.Notes, 2)
+	assert.Equal(t, "systemctl --user enable --now 已完成", result.Notes[0])
+	assert.Contains(t, result.Notes[1], "loginctl enable-linger ashwin")
+
+	// 已经开了：不打扰
+	withLinger(true, true)
+	result, err = Install(Options{Port: 8788, Command: []string{"/opt/ccb/bridge"}})
+	require.NoError(t, err)
+	assert.Len(t, result.Notes, 1, "开了 lingering 就别刷提示")
+
+	// 问不出来（没有 loginctl / 输出不认识）：不猜，什么都不说
+	withLinger(false, false)
+	result, err = Install(Options{Port: 8788, Command: []string{"/opt/ccb/bridge"}})
+	require.NoError(t, err)
+	assert.Len(t, result.Notes, 1)
 }
 
 func TestInstallOnLinuxHonorsXDGConfigHome(t *testing.T) {
