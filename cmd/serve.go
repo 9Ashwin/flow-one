@@ -93,19 +93,7 @@ func anthropicHooks(cfg config.Config) server.Hooks {
 				ShowThinking: opts.ShowThinking,
 				Write:        func(frame []byte) { _, _ = w.Write(frame) },
 			})
-			for {
-				payload, ok, err := stream.Next()
-				if err != nil {
-					// 中途断流要如实告诉客户端，而不是干净收尾（那是另一个坑）
-					translator.Fail(err.Error())
-					return nil
-				}
-				if !ok {
-					break
-				}
-				translator.Push(payload)
-			}
-			translator.End()
+			pumpStream(stream, translator)
 			return nil
 		},
 		Message: func(stream source.Stream, opts server.TranslateOptions) ([]byte, error) {
@@ -130,6 +118,35 @@ func anthropicHooks(cfg config.Config) server.Hooks {
 		},
 		EstimateTokens: anthropic.EstimateInputTokens,
 	}
+}
+
+// pumpStream 把上游分片喂给翻译器，并按正确的方式收尾。
+//
+// 三种收尾方式**不能混**：
+//   - 读流出错（连接断了）→ Fail：客户端必须知道这一轮没正常结束；
+//   - Push 返回 false（上游在流里报了错：腾讯 11128、OpenCode 门禁）→ Fail，
+//     带上 Failure 里的理由。**漏了这一步就只发 message_delta + message_stop，
+//     客户端会把被拦的一轮当成正常回答** —— 这是差分测试抓出来的真 bug；
+//   - 正常读完 → End。
+func pumpStream(stream source.Stream, translator *anthropic.StreamTranslator) {
+	for {
+		payload, ok, err := stream.Next()
+		if err != nil {
+			translator.Fail(err.Error())
+			return
+		}
+		if !ok {
+			break
+		}
+		if !translator.Push(payload) {
+			break
+		}
+	}
+	if failure := translator.Failure(); failure != nil {
+		translator.Fail(failure.Message)
+		return
+	}
+	translator.End()
 }
 
 // newMessageID 生成 Anthropic 形状的消息 id（msg_ + 24 位 hex）。

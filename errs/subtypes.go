@@ -15,6 +15,7 @@ const (
 	SubtypeInvalidURL      = "invalid_upstream_url"
 	SubtypeUnknownSource   = "unknown_source"
 	SubtypeMissingArgument = "missing_argument"
+	SubtypeInvalidRequest  = "invalid_request"
 
 	// ── authentication ──
 	SubtypeNotLoggedIn   = "not_logged_in"
@@ -51,7 +52,7 @@ const (
 // declared 是 subtype 的封闭集合。
 var declared = map[string]struct{}{
 	SubtypeInvalidFlag: {}, SubtypeInvalidModel: {}, SubtypeInvalidPort: {},
-	SubtypeInvalidURL: {}, SubtypeUnknownSource: {}, SubtypeMissingArgument: {},
+	SubtypeInvalidURL: {}, SubtypeUnknownSource: {}, SubtypeMissingArgument: {}, SubtypeInvalidRequest: {},
 
 	SubtypeNotLoggedIn: {}, SubtypeLoginFailed: {}, SubtypeLoginTimeout: {},
 	SubtypeMissingAPIKey: {}, SubtypeRefreshFailed: {},

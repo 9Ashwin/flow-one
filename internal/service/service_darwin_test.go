@@ -108,13 +108,16 @@ func TestInstallOnDarwinWaitsForBootoutBeforeBootstrap(t *testing.T) {
 		250 * time.Millisecond, 250 * time.Millisecond, 250 * time.Millisecond,
 	}, fake.sleeps, "要轮询到 label 真的卸载")
 
-	// 账本：记住装了哪一份代码，供 status / doctor 对比
+	// 账本：记住装了哪一份代码、服务环境是什么，供 status / doctor 对比
 	record, recorded := Record()
 	require.True(t, recorded)
 	assert.Equal(t, KindLaunchd, record.Kind)
 	assert.Equal(t, file, record.Path)
 	assert.Equal(t, 8788, record.Port)
 	assert.Equal(t, "/opt/ccb/bridge", record.CLIPath)
+	assert.Equal(t, "8788", record.Env["BRIDGE_PORT"])
+	assert.Equal(t, "k", record.Env["BRIDGE_API_KEY"], "doctor 要靠它对出「密钥与服务不一致」")
+	assert.Equal(t, "oc/x", record.Env["BRIDGE_MODEL"])
 
 	state, err := Inspect()
 	require.NoError(t, err)

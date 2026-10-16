@@ -37,6 +37,22 @@ func TestRewriteDropsBillingHeaderLine(t *testing.T) {
 	// 只认这一行：别的 x-*-header 不动
 	untouched := "x-billing-header: whatever\n正文"
 	assert.Equal(t, untouched, RewriteFingerprints(untouched))
+
+	// 判据是**行首**的键名：正文里提到它（不在行首）不该被删掉
+	mentioned := "文档里提到 x-anthropic-billing-header: 这个键名，但这一行不是它"
+	assert.Equal(t, mentioned, RewriteFingerprints(mentioned))
+
+	// 没有冒号的残句不算（Node 版的 pattern 也要求冒号）
+	noColon := "x-anthropic-billing-header 后面没有冒号"
+	assert.Equal(t, noColon, RewriteFingerprints(noColon))
+}
+
+// 字面量规则是 /g：同一段文本里出现多次就都改。
+func TestRewriteReplacesEveryOccurrence(t *testing.T) {
+	find := "You are Claude Code, Anthropic's official CLI for Claude"
+	want := "You are Claude Code, an official CLI for Claude"
+
+	assert.Equal(t, want+"\n"+want, RewriteFingerprints(find+"\n"+find))
 }
 
 // 规则 2：身份句改写（同义，模型读到的身份没变）。

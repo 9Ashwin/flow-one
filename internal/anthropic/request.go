@@ -112,11 +112,11 @@ func ToOpenAIRequest(body []byte, opts Options) ([]byte, error) {
 	}
 	request, ok := asObject(parsed)
 	if !ok {
-		return nil, errs.Validation(errs.SubtypeMissingArgument, "请求体必须是 JSON 对象").WithParam("body")
+		return nil, errs.Validation(errs.SubtypeInvalidRequest, "请求体必须是 JSON 对象").WithParam("body")
 	}
 	rows, ok := asArray(request["messages"])
 	if !ok || len(rows) == 0 {
-		return nil, errs.Validation(errs.SubtypeMissingArgument, "`messages` 必须是非空数组").WithParam("messages")
+		return nil, errs.Validation(errs.SubtypeInvalidRequest, "`messages` 必须是非空数组").WithParam("messages")
 	}
 
 	messages := []outMessage{}

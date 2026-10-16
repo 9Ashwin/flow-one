@@ -45,7 +45,17 @@ var loginCmd = &cobra.Command{
 				if err != nil {
 					return err
 				}
-				fmt.Fprintf(cmd.OutOrStdout(), "✔ %s 已登录（%s）\n", product.Label, credential.Account.Nickname)
+				// 账号信息可能拿不到（账号端点 404 或超时）：Node 版是 `account?.nickname`，
+				// 这里同样不能假定非 nil —— 登录本身是成功的，别因此 panic。
+				nickname := ""
+				if credential.Account != nil {
+					nickname = credential.Account.Nickname
+				}
+				if nickname == "" {
+					fmt.Fprintf(cmd.OutOrStdout(), "✔ %s 已登录\n", product.Label)
+				} else {
+					fmt.Fprintf(cmd.OutOrStdout(), "✔ %s 已登录（%s）\n", product.Label, nickname)
+				}
 			case "ocg", "opencode-go", "go":
 				value, err := ui.Password("OpenCode API key")
 				if err != nil {

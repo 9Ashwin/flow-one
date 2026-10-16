@@ -264,7 +264,10 @@ func Install(opts Options) (InstallResult, error) {
 		return InstallResult{Kind: kind, Path: file}, err
 	}
 	state := claude.ReadInstallState(home)
-	state[serviceKey] = Recorded{Kind: kind, Path: file, Port: opts.Port, Env: opts.Env, CLIPath: command[0]}
+	// 账本里记**生效的**服务环境（含 BRIDGE_PORT 与 BRIDGE_API_KEY）：doctor 拿它跟
+	// settings.json 的 ANTHROPIC_AUTH_TOKEN / BASE_URL 端口对比，少了这两项那两条
+	// 「密钥不一致」「端口不一致」的检查就永远不触发。
+	state[serviceKey] = Recorded{Kind: kind, Path: file, Port: opts.Port, Env: effectiveEnv(opts), CLIPath: command[0]}
 	if err := claude.WriteInstallState(home, state); err != nil {
 		return InstallResult{Kind: kind, Path: file}, err
 	}
@@ -360,6 +363,16 @@ func serviceEnv(opts Options) []envPair {
 		pairs = append(pairs, envPair{Key: key, Value: values[key]})
 	}
 	return pairs
+}
+
+// effectiveEnv 把生效的服务环境摊成 map，供账本记录。
+func effectiveEnv(opts Options) map[string]string {
+	pairs := serviceEnv(opts)
+	values := make(map[string]string, len(pairs))
+	for _, pair := range pairs {
+		values[pair.Key] = pair.Value
+	}
+	return values
 }
 
 // logDirOf 是服务日志目录：调用方给的优先，否则 BRIDGE_HOME。

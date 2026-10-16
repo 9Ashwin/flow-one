@@ -226,7 +226,7 @@ func TestToOpenAIRequestRejectsUnusableBodies(t *testing.T) {
 			typed, ok := errs.As(err)
 			require.True(t, ok, "必须是类型化错误，服务端靠 Category 定 HTTP 状态")
 			assert.Equal(t, errs.CategoryValidation, typed.Category)
-			assert.Equal(t, errs.SubtypeMissingArgument, typed.Subtype)
+			assert.Equal(t, errs.SubtypeInvalidRequest, typed.Subtype)
 			assert.Equal(t, tc.param, typed.Param)
 		})
 	}
