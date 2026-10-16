@@ -29,14 +29,21 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/9Ashwin/claude-code-openai-bridge/errs"
-	"github.com/9Ashwin/claude-code-openai-bridge/internal/claude"
-	"github.com/9Ashwin/claude-code-openai-bridge/internal/config"
+	"github.com/9Ashwin/flow-one/errs"
+	"github.com/9Ashwin/flow-one/internal/claude"
+	"github.com/9Ashwin/flow-one/internal/config"
 )
 
 // ServiceLabel 是服务的名字（launchd 的 label / systemd 的 unit 名），
 // 卸载、查询与日志提示都用它。
-const ServiceLabel = "dev.claude-code-openai-bridge"
+const ServiceLabel = "dev.flow-one"
+
+// LegacyServiceLabel 是改名（claude-code-openai-bridge → flow-one）之前的服务名。
+//
+// 改名后如果不管旧服务，会变成「旧服务还在跑、新服务又装一个」——两个进程抢同一个
+// 端口（谁赢取决于启动顺序），表现是服务时好时坏，而界面上完全看不出来。
+// 所以装新的之前先清旧的；卸载时也把旧的清掉（卸载就该什么都不剩）。
+const LegacyServiceLabel = "dev.claude-code-openai-bridge"
 
 // 账本里「后台服务」那一节的键。
 const (
@@ -64,6 +71,12 @@ type State struct {
 	Path string
 	// Installed 按「服务文件是否存在」判断 —— 它说的是「装过」，不是「正在跑」。
 	Installed bool
+	// LegacyInstalled 报告改名前的旧服务还在（`dev.claude-code-openai-bridge`）。
+	//
+	// 单独报出来是因为这个状态最容易被误读：新名字的服务文件不存在，界面上就是
+	// 「未安装」，可旧服务其实正在跑、占着端口 —— 用户会以为「没装服务却又能用」，
+	// 或者装完新的之后两个进程抢同一个端口。
+	LegacyInstalled bool
 	// Supported 报告本平台有没有实现。
 	Supported bool
 }
@@ -132,7 +145,16 @@ func Inspect() (State, error) {
 			installed = true
 		}
 	}
-	return State{Kind: kind, Path: file, Installed: installed, Supported: kind != KindUnsupported}, nil
+	legacyInstalled := false
+	if legacy, legacyErr := legacyServicePath(); legacyErr == nil && legacy != "" {
+		if _, statErr := os.Stat(legacy); statErr == nil {
+			legacyInstalled = true
+		}
+	}
+	return State{
+		Kind: kind, Path: file, Installed: installed,
+		LegacyInstalled: legacyInstalled, Supported: kind != KindUnsupported,
+	}, nil
 }
 
 // CLIPath 报告服务文件里真正被执行的那份代码在哪；没装或读不出来返回 ""。
@@ -166,7 +188,7 @@ func CurrentCLIPath() string {
 // 所以两边的断言都能在任一平台上跑。
 //
 // 两种形态都要认：`[node, /abs/cli.mjs]`（解释器 + 脚本，Node 版留下的 plist 就是这种）
-// 与 `[/abs/claude-code-bridge, serve]`（二进制 + 子命令）。判据是「第二个参数是不是
+// 与 `[/abs/flow-one, serve]`（二进制 + 子命令）。判据是「第二个参数是不是
 // 绝对路径」。只取第一条会把前者报成 `…/bin/node` —— doctor 会因此误报
 // 「服务跑的不是当前这份代码」，而那条检查存在的全部意义就是抓这个。
 func CLIPathFromServiceFile(text string, kind Kind) string {
@@ -184,7 +206,7 @@ func CLIPathFromServiceFile(text string, kind Kind) string {
 // 两种形态都要认，只取第一条或只取最后一条都会错一种：
 //
 //	[node, /abs/path/cli.mjs]          → /abs/path/cli.mjs（解释器 + 脚本）
-//	[/abs/path/claude-code-bridge, serve] → /abs/path/claude-code-bridge（二进制 + 子命令）
+//	[/abs/path/flow-one, serve] → /abs/path/flow-one（二进制 + 子命令）
 //
 // 判据是「第二个参数是不是绝对路径」：`serve` 不是，于是落到第一条。
 // 早先只取第一条，doctor 会对着 Node 版留下的 plist 报「服务跑的是 …/bin/node」——
@@ -199,7 +221,7 @@ func launchdCLIPath(command []string) string {
 	return command[0]
 }
 
-// systemdCLIPath 同理：`ExecStart=/usr/bin/node /opt/ccb/cli.mjs` 要取脚本路径。
+// systemdCLIPath 同理：`ExecStart=/usr/bin/node /opt/bridge/cli.mjs` 要取脚本路径。
 // 参数切分复用 parseSystemdExecStart 背后的分词器（它处理了引号与转义）。
 func systemdCLIPath(args []string) string {
 	if len(args) == 0 {
@@ -284,6 +306,11 @@ func Install(opts Options) (InstallResult, error) {
 	if err := os.MkdirAll(filepath.Dir(file), 0o700); err != nil {
 		return InstallResult{Kind: kind}, errs.Wrap(err, errs.CategoryInternal, errs.SubtypeIOFailed, "建不了服务目录 "+filepath.Dir(file))
 	}
+	// 装新的之前先清改名前的旧服务：两个都活着就会抢同一个端口
+	legacyNotes, err := removeLegacyService()
+	if err != nil {
+		return InstallResult{Kind: kind, Path: file}, err
+	}
 	text, err := renderServiceFile(opts)
 	if err != nil {
 		return InstallResult{Kind: kind}, err
@@ -309,7 +336,27 @@ func Install(opts Options) (InstallResult, error) {
 			fmt.Sprintf("服务文件已写入 %s，但加载失败：%v", file, err)).
 			WithHint(manualHint(command, opts))
 	}
-	return InstallResult{Kind: kind, Path: file, Notes: notes}, nil
+	return InstallResult{Kind: kind, Path: file, Notes: append(legacyNotes, notes...)}, nil
+}
+
+// removeLegacyService 清掉改名前的旧服务：先让它从 launchd / systemd 里退出来，
+// 再删服务文件。返回给用户看的说明（没清到东西就返回 nil）。
+//
+// 卸载失败也照样删文件：留下一个还在跑、却已经没有服务文件的进程，比留下一个能被
+// 下次卸载清掉的文件更糟。
+func removeLegacyService() ([]string, error) {
+	file, err := legacyServicePath()
+	if err != nil || file == "" {
+		return nil, err
+	}
+	if _, statErr := os.Stat(file); statErr != nil {
+		return nil, nil // 没有旧服务：什么都不做，也不打扰用户
+	}
+	_ = unloadLegacyService(file)
+	if err := os.Remove(file); err != nil {
+		return nil, errs.Wrap(err, errs.CategoryInternal, errs.SubtypeIOFailed, "删不掉改名前的旧服务文件 "+file)
+	}
+	return []string{"已清理改名前的旧服务 " + LegacyServiceLabel + "（避免新旧两个服务抢同一个端口）"}, nil
 }
 
 // Uninstall 卸掉常驻服务并清掉账本里那一节。
@@ -335,6 +382,10 @@ func Uninstall() (UninstallResult, error) {
 	_ = unloadService(file)
 	if err := os.Remove(file); err != nil {
 		return UninstallResult{}, errs.Wrap(err, errs.CategoryInternal, errs.SubtypeIOFailed, "删不掉 "+file)
+	}
+	// 改名前的旧服务也要一并带走：卸载就该什么都不剩
+	if _, err := removeLegacyService(); err != nil {
+		return UninstallResult{}, err
 	}
 	home, err := config.Home()
 	if err != nil {

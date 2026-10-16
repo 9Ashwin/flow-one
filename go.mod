@@ -1,4 +1,4 @@
-module github.com/9Ashwin/claude-code-openai-bridge
+module github.com/9Ashwin/flow-one
 
 go 1.26.5
 

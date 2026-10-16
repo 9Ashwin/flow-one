@@ -15,16 +15,16 @@ import (
 	"strings"
 	"time"
 
-	"github.com/9Ashwin/claude-code-openai-bridge/errs"
-	"github.com/9Ashwin/claude-code-openai-bridge/internal/auth"
-	"github.com/9Ashwin/claude-code-openai-bridge/internal/claude"
-	"github.com/9Ashwin/claude-code-openai-bridge/internal/config"
-	"github.com/9Ashwin/claude-code-openai-bridge/internal/gateway"
-	"github.com/9Ashwin/claude-code-openai-bridge/internal/opencode"
-	"github.com/9Ashwin/claude-code-openai-bridge/internal/service"
-	"github.com/9Ashwin/claude-code-openai-bridge/internal/source"
-	"github.com/9Ashwin/claude-code-openai-bridge/internal/tencent"
-	"github.com/9Ashwin/claude-code-openai-bridge/internal/ui"
+	"github.com/9Ashwin/flow-one/errs"
+	"github.com/9Ashwin/flow-one/internal/auth"
+	"github.com/9Ashwin/flow-one/internal/claude"
+	"github.com/9Ashwin/flow-one/internal/config"
+	"github.com/9Ashwin/flow-one/internal/gateway"
+	"github.com/9Ashwin/flow-one/internal/opencode"
+	"github.com/9Ashwin/flow-one/internal/service"
+	"github.com/9Ashwin/flow-one/internal/source"
+	"github.com/9Ashwin/flow-one/internal/tencent"
+	"github.com/9Ashwin/flow-one/internal/ui"
 	"github.com/spf13/cobra"
 )
 
@@ -117,7 +117,7 @@ func runSetup(cmd *cobra.Command, cfg config.Config) error {
 				ui.Note("  " + ui.Gray("→ "+typed.Hint))
 			}
 			ui.Warn("先用前台方式跑起来：")
-			ui.Note("  " + ui.Gray(fmt.Sprintf("BRIDGE_PORT=%d BRIDGE_API_KEY=%s claude-code-bridge serve", port, apiKey)))
+			ui.Note("  " + ui.Gray(fmt.Sprintf("BRIDGE_PORT=%d BRIDGE_API_KEY=%s flow-one serve", port, apiKey)))
 		} else {
 			ui.Success(fmt.Sprintf("后台服务已更新（%s）", result.Kind))
 			for _, note := range result.Notes {
@@ -308,7 +308,7 @@ func decideService(cfg config.Config) (bool, error) {
 		return true, nil
 	}
 	if choice, ok := service.LastChoice(); ok && choice.Asked && !choice.AutoStart {
-		ui.Note(ui.Dim("  按你上次的选择跳过后台服务；要开启：claude-code-bridge setup --service"))
+		ui.Note(ui.Dim("  按你上次的选择跳过后台服务；要开启：flow-one setup --service"))
 		return false, nil
 	}
 	wants, err := ui.Confirm("装成开机自启的后台服务？", true)
@@ -411,7 +411,7 @@ func waitHealthy(port int) bool {
 			}
 			decodeErr := json.NewDecoder(response.Body).Decode(&payload)
 			response.Body.Close()
-			if decodeErr == nil && payload.Service == "claude-code-bridge" {
+			if decodeErr == nil && payload.Service == "flow-one" {
 				return true
 			}
 		}

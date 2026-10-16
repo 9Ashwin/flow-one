@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/9Ashwin/claude-code-openai-bridge/errs"
+	"github.com/9Ashwin/flow-one/errs"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -207,4 +207,80 @@ func TestHintsOnDarwin(t *testing.T) {
 	assert.Equal(t, filepath.Join(bridgeHome, "bridge.err.log"), LogHint())
 	assert.True(t, strings.HasPrefix(RestartHint(), "launchctl kickstart -k gui/"))
 	assert.Contains(t, RestartHint(), ServiceLabel)
+}
+
+func TestInstallCleansUpLegacyServiceFromBeforeRename(t *testing.T) {
+	// 改名后如果不管旧服务，会出现「旧服务还在跑、新服务又装一个」——
+	// 两个进程抢同一个端口，界面上完全看不出来。
+	fake, home, _ := setup(t)
+	fake.loaded = []bool{false}
+
+	legacyFile := filepath.Join(home, "Library", "LaunchAgents", LegacyServiceLabel+".plist")
+	require.NoError(t, os.MkdirAll(filepath.Dir(legacyFile), 0o700))
+	require.NoError(t, os.WriteFile(legacyFile, []byte("<plist/>"), 0o600))
+
+	result, err := Install(Options{Port: 8788, Command: []string{"/opt/flow-one"}})
+	require.NoError(t, err)
+
+	// 旧服务文件必须没了
+	_, statErr := os.Stat(legacyFile)
+	assert.True(t, os.IsNotExist(statErr), "改名前的旧服务文件要被清掉")
+	// 先从 launchd 退出来，再 bootstrap 新的
+	require.GreaterOrEqual(t, len(fake.calls), 2)
+	assert.Equal(t, "bootout", fake.calls[0][0])
+	assert.Contains(t, strings.Join(fake.calls[0], " "), LegacyServiceLabel)
+	// 并且要告诉用户做过这件事
+	assert.Contains(t, strings.Join(result.Notes, " "), "改名前的旧服务")
+	// 新服务照常装好
+	assert.FileExists(t, serviceFile(home))
+}
+
+func TestInstallWithoutLegacyServiceStaysQuiet(t *testing.T) {
+	// 全新机器上不该多出任何「已清理旧服务」的噪音
+	fake, _, _ := setup(t)
+	fake.loaded = []bool{false}
+	result, err := Install(Options{Port: 8788, Command: []string{"/opt/flow-one"}})
+	require.NoError(t, err)
+	assert.NotContains(t, strings.Join(result.Notes, " "), "旧服务")
+	for _, call := range fake.calls {
+		assert.NotContains(t, strings.Join(call, " "), LegacyServiceLabel,
+			"没有旧服务就不该为它调 launchctl")
+	}
+}
+
+func TestUninstallAlsoRemovesLegacyService(t *testing.T) {
+	// 卸载就该什么都不剩：改名前的旧服务也要带走
+	fake, home, _ := setup(t)
+	fake.loaded = []bool{false}
+	require.NoError(t, os.MkdirAll(filepath.Dir(serviceFile(home)), 0o700))
+	require.NoError(t, os.WriteFile(serviceFile(home), []byte("<plist/>"), 0o600))
+	legacyFile := filepath.Join(home, "Library", "LaunchAgents", LegacyServiceLabel+".plist")
+	require.NoError(t, os.WriteFile(legacyFile, []byte("<plist/>"), 0o600))
+
+	_, err := Uninstall()
+	require.NoError(t, err)
+	assert.NoFileExists(t, serviceFile(home))
+	assert.NoFileExists(t, legacyFile, "旧服务文件也要被卸载带走")
+}
+
+func TestInspectReportsLegacyServiceStillInstalled(t *testing.T) {
+	// 这个状态最容易被误读：新名字的服务文件不存在（界面上「未安装」），
+	// 可改名前的旧服务其实正在跑、占着端口。必须分开报。
+	_, home, _ := setup(t)
+	assert.False(t, mustInspect(t).LegacyInstalled, "干净机器上不该报旧服务")
+
+	legacyFile := filepath.Join(home, "Library", "LaunchAgents", LegacyServiceLabel+".plist")
+	require.NoError(t, os.MkdirAll(filepath.Dir(legacyFile), 0o700))
+	require.NoError(t, os.WriteFile(legacyFile, []byte("<plist/>"), 0o600))
+
+	state := mustInspect(t)
+	assert.True(t, state.LegacyInstalled)
+	assert.False(t, state.Installed, "新名字的服务确实还没装")
+}
+
+func mustInspect(t *testing.T) State {
+	t.Helper()
+	state, err := Inspect()
+	require.NoError(t, err)
+	return state
 }

@@ -8,11 +8,11 @@ import (
 	"os"
 	"strings"
 
-	"github.com/9Ashwin/claude-code-openai-bridge/errs"
-	"github.com/9Ashwin/claude-code-openai-bridge/internal/config"
-	"github.com/9Ashwin/claude-code-openai-bridge/internal/opencode"
-	"github.com/9Ashwin/claude-code-openai-bridge/internal/source"
-	"github.com/9Ashwin/claude-code-openai-bridge/internal/tencent"
+	"github.com/9Ashwin/flow-one/errs"
+	"github.com/9Ashwin/flow-one/internal/config"
+	"github.com/9Ashwin/flow-one/internal/opencode"
+	"github.com/9Ashwin/flow-one/internal/source"
+	"github.com/9Ashwin/flow-one/internal/tencent"
 )
 
 // buildRegistry 按配置把来源装起来。

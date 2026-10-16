@@ -40,7 +40,7 @@
 
 ```go
 errs.Validation(errs.SubtypeInvalidPort, "端口不合法").WithParam("BRIDGE_PORT")
-errs.Auth(errs.SubtypeNotLoggedIn, "WorkBuddy 国内版 未登录").WithHint("claude-code-bridge login cn")
+errs.Auth(errs.SubtypeNotLoggedIn, "WorkBuddy 国内版 未登录").WithHint("flow-one login cn")
 errs.Config(errs.SubtypeSettingsMissing, "读不到 settings.json")
 errs.Network(errs.SubtypeConnectFailed, "连不上网关").WithCause(err)
 errs.Upstream(errs.SubtypeContentBlocked, "请求被拦截").WithCode(11128)
@@ -79,4 +79,4 @@ Error: 端口不合法
 ```
 
 **stdout 只放成功数据**（模型清单、状态 JSON），进度与告警一律走 stderr ——
-这样 `claude-code-bridge models --as-json | jq` 永远不会被日志污染。
+这样 `flow-one models --as-json | jq` 永远不会被日志污染。

@@ -1,11 +1,11 @@
 {
-  "name": "claude-code-openai-bridge",
+  "name": "flow-one",
   "version": "0.2.0",
   "description": "让 Claude Code CLI 用上 WorkBuddy（国内版 / 国际版）与 OpenCode（免费档 / Go 套餐）的本地反代",
   "license": "MIT",
   "bin": {
-    "claude-code-bridge": "npm/cli.js",
-    "ccb": "npm/cli.js"
+    "flow-one": "npm/cli.js",
+    "fo": "npm/cli.js"
   },
   "files": [
     "npm/cli.js",
@@ -16,21 +16,21 @@
     "node": ">=18.17"
   },
   "optionalDependencies": {
-    "@9ashwin/ccb-darwin-arm64": "0.2.0",
-    "@9ashwin/ccb-darwin-x64": "0.2.0",
-    "@9ashwin/ccb-linux-arm64": "0.2.0",
-    "@9ashwin/ccb-linux-x64": "0.2.0"
+    "@9ashwin/flow-one-darwin-arm64": "0.2.0",
+    "@9ashwin/flow-one-darwin-x64": "0.2.0",
+    "@9ashwin/flow-one-linux-arm64": "0.2.0",
+    "@9ashwin/flow-one-linux-x64": "0.2.0"
   },
   "scripts": {
     "prepublishOnly": "node npm/verify-packaging.js"
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/9Ashwin/claude-code-openai-bridge.git"
+    "url": "git+https://github.com/9Ashwin/flow-one.git"
   },
-  "homepage": "https://github.com/9Ashwin/claude-code-openai-bridge#readme",
+  "homepage": "https://github.com/9Ashwin/flow-one#readme",
   "bugs": {
-    "url": "https://github.com/9Ashwin/claude-code-openai-bridge/issues"
+    "url": "https://github.com/9Ashwin/flow-one/issues"
   },
   "keywords": [
     "claude-code",

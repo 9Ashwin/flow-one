@@ -11,8 +11,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/9Ashwin/claude-code-openai-bridge/errs"
-	"github.com/9Ashwin/claude-code-openai-bridge/internal/config"
+	"github.com/9Ashwin/flow-one/errs"
+	"github.com/9Ashwin/flow-one/internal/config"
 )
 
 // 卸载与加载的重试节奏。bootout 是异步的，等它落地要轮询；bootstrap 也可能因为
@@ -41,6 +41,21 @@ func platformServicePath() (string, error) {
 		return "", errs.InternalFrom(err).WithHint("设置 HOME 或改用 Linux 侧的 systemd")
 	}
 	return filepath.Join(home, "Library", "LaunchAgents", ServiceLabel+".plist"), nil
+}
+
+// legacyServicePath 是改名前的 agent 文件位置（存在就说明是改名之前装的）。
+func legacyServicePath() (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", nil
+	}
+	return filepath.Join(home, "Library", "LaunchAgents", LegacyServiceLabel+".plist"), nil
+}
+
+// unloadLegacyService 让旧服务从 launchd 退出（没加载过就算了）。
+func unloadLegacyService(string) error {
+	_ = launchctl("bootout", launchdDomain()+"/"+LegacyServiceLabel)
+	return nil
 }
 
 func renderServiceFile(opts Options) (string, error) { return LaunchAgentPlist(opts) }
@@ -87,7 +102,7 @@ func LogHint() string {
 	if dir, err := config.Home(); err == nil {
 		return filepath.Join(dir, "bridge.err.log")
 	}
-	return "~/.claude-code-openai-bridge/bridge.err.log"
+	return "~/.flow-one/bridge.err.log"
 }
 
 // RestartHint 是手动重启服务的命令。

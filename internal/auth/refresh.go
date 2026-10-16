@@ -11,7 +11,7 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/9Ashwin/claude-code-openai-bridge/errs"
+	"github.com/9Ashwin/flow-one/errs"
 )
 
 // expiredMessage 是「凭据本身失效」在文案上的判据（与状态码 401/403 一起用）。
@@ -120,7 +120,7 @@ func (c *Client) Status(p Product) Status {
 
 // notLoggedIn 是「本地根本没有可用凭据」这一句。
 func notLoggedIn(p Product) *errs.Error {
-	return errs.Auth(errs.SubtypeNotLoggedIn, p.Label+"：尚未登录，请先执行：claude-code-bridge login "+p.ID).
+	return errs.Auth(errs.SubtypeNotLoggedIn, p.Label+"：尚未登录，请先执行：flow-one login "+p.ID).
 		WithHint(ProductHint(p.ID))
 }
 

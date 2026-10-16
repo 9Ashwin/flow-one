@@ -10,7 +10,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/9Ashwin/claude-code-openai-bridge/errs"
+	"github.com/9Ashwin/flow-one/errs"
 )
 
 // capability 是一个模型的能力元数据。

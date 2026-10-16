@@ -9,8 +9,8 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/9Ashwin/claude-code-openai-bridge/errs"
-	"github.com/9Ashwin/claude-code-openai-bridge/internal/source"
+	"github.com/9Ashwin/flow-one/errs"
+	"github.com/9Ashwin/flow-one/internal/source"
 )
 
 // Options 是请求翻译的可调项。

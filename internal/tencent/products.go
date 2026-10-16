@@ -12,7 +12,7 @@ package tencent
 import (
 	"strings"
 
-	"github.com/9Ashwin/claude-code-openai-bridge/internal/auth"
+	"github.com/9Ashwin/flow-one/internal/auth"
 )
 
 // User-Agent 不是装饰：国际版后台按模型族分列「使用端」，glm-* / hy* / kimi-* /

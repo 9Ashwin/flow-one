@@ -4,14 +4,14 @@
 package cmd
 
 import (
-	"github.com/9Ashwin/claude-code-openai-bridge/internal/config"
+	"github.com/9Ashwin/flow-one/internal/config"
 	"github.com/spf13/cobra"
 )
 
 // flags 是与 config.Config 对应的命令行开关。
 //
 // 优先级固定为 **flag > 环境变量 > 默认值**：先 Load 环境再让 flag 覆盖，
-// 于是 `BRIDGE_PORT=9000 ccb serve --port 9100` 的语义是明确的。
+// 于是 `BRIDGE_PORT=9000 fo serve --port 9100` 的语义是明确的。
 type flags struct {
 	mode         string
 	host         string

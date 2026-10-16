@@ -76,4 +76,4 @@ jobs:
         run: make build
       - name: 产物自检（--version 能跑起来）
         if: matrix.goos == 'linux' && matrix.goarch == 'amd64'
-        run: ./claude-code-bridge --version
+        run: ./flow-one --version

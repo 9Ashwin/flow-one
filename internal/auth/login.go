@@ -13,7 +13,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/9Ashwin/claude-code-openai-bridge/errs"
+	"github.com/9Ashwin/flow-one/errs"
 )
 
 // AuthState 是 `/v2/plugin/auth/state` 的结果：state 是服务端签发的兑换凭据，
@@ -269,5 +269,5 @@ func openInBrowser(link string, log func(string)) {
 
 // ProductHint 是「还没登录」时给用户的那一条补救命令。
 func ProductHint(id string) string {
-	return "claude-code-bridge login " + strings.TrimSpace(id)
+	return "flow-one login " + strings.TrimSpace(id)
 }

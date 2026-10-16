@@ -12,8 +12,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/9Ashwin/claude-code-openai-bridge/errs"
-	"github.com/9Ashwin/claude-code-openai-bridge/internal/config"
+	"github.com/9Ashwin/flow-one/errs"
+	"github.com/9Ashwin/flow-one/internal/config"
 )
 
 // goEntry 是凭据文件里的条目名（与腾讯两条线共用同一份 credentials.json）。

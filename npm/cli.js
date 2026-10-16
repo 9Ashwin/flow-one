@@ -15,15 +15,15 @@ const { existsSync } = require('node:fs')
 const path = require('node:path')
 
 const PLATFORMS = {
-  'darwin-arm64': '@9ashwin/ccb-darwin-arm64',
-  'darwin-x64': '@9ashwin/ccb-darwin-x64',
-  'linux-arm64': '@9ashwin/ccb-linux-arm64',
-  'linux-x64': '@9ashwin/ccb-linux-x64',
+  'darwin-arm64': '@9ashwin/flow-one-darwin-arm64',
+  'darwin-x64': '@9ashwin/flow-one-darwin-x64',
+  'linux-arm64': '@9ashwin/flow-one-linux-arm64',
+  'linux-x64': '@9ashwin/flow-one-linux-x64',
 }
 
 function localBinary() {
   // 开发场景：仓库里直接 make build 出来的二进制优先
-  const local = path.join(__dirname, '..', 'claude-code-bridge')
+  const local = path.join(__dirname, '..', 'flow-one')
   return existsSync(local) ? local : undefined
 }
 
@@ -35,7 +35,7 @@ function platformBinary() {
   }
   try {
     const manifest = require.resolve(`${pkg}/package.json`)
-    const binary = path.join(path.dirname(manifest), 'bin', process.platform === 'win32' ? 'claude-code-bridge.exe' : 'claude-code-bridge')
+    const binary = path.join(path.dirname(manifest), 'bin', process.platform === 'win32' ? 'flow-one.exe' : 'flow-one')
     if (!existsSync(binary)) return { error: `${pkg} 装上了，但里面没有二进制：${binary}` }
     return { binary }
   } catch {
@@ -47,9 +47,9 @@ const resolved = localBinary() ?? platformBinary().binary
 if (resolved === undefined) {
   const reason = localBinary() === undefined ? platformBinary().error : '未知原因'
   process.stderr.write(
-    `claude-code-bridge：找不到可执行的二进制（${reason}）\n` +
-      '  → 重新安装：npm install -g claude-code-openai-bridge\n' +
-      '  → 或者用 Go 自己编：go install github.com/9Ashwin/claude-code-openai-bridge@latest\n' +
+    `flow-one：找不到可执行的二进制（${reason}）\n` +
+      '  → 重新安装：npm install -g flow-one\n' +
+      '  → 或者用 Go 自己编：go install github.com/9Ashwin/flow-one@latest\n' +
       '  → 或者从 Releases 下载对应平台的压缩包\n',
   )
   process.exit(1)
@@ -65,6 +65,6 @@ child.on('exit', (code, signal) => {
   process.exit(code ?? 1)
 })
 child.on('error', error => {
-  process.stderr.write(`claude-code-bridge：启动失败 ${error.message}\n`)
+  process.stderr.write(`flow-one：启动失败 ${error.message}\n`)
   process.exit(1)
 })

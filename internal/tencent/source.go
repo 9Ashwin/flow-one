@@ -14,9 +14,9 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/9Ashwin/claude-code-openai-bridge/errs"
-	"github.com/9Ashwin/claude-code-openai-bridge/internal/auth"
-	"github.com/9Ashwin/claude-code-openai-bridge/internal/source"
+	"github.com/9Ashwin/flow-one/errs"
+	"github.com/9Ashwin/flow-one/internal/auth"
+	"github.com/9Ashwin/flow-one/internal/source"
 )
 
 const (

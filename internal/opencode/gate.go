@@ -7,7 +7,7 @@ import (
 	"encoding/json"
 	"strings"
 
-	"github.com/9Ashwin/claude-code-openai-bridge/internal/source"
+	"github.com/9Ashwin/flow-one/internal/source"
 )
 
 // GateTools 是门禁要求的四个小写工具名。顺序固定：补桩按这个顺序追加，文本才可断言。

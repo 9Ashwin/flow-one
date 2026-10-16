@@ -11,9 +11,9 @@ import (
 	"net/http"
 	"sync"
 
-	"github.com/9Ashwin/claude-code-openai-bridge/errs"
-	"github.com/9Ashwin/claude-code-openai-bridge/internal/source"
-	"github.com/9Ashwin/claude-code-openai-bridge/internal/sse"
+	"github.com/9Ashwin/flow-one/errs"
+	"github.com/9Ashwin/flow-one/internal/source"
+	"github.com/9Ashwin/flow-one/internal/sse"
 )
 
 // GoTier 是 OpenCode Go 套餐（来源 id `ocg`）。

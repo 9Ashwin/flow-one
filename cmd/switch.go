@@ -6,9 +6,9 @@ package cmd
 import (
 	"fmt"
 
-	"github.com/9Ashwin/claude-code-openai-bridge/internal/claude"
-	"github.com/9Ashwin/claude-code-openai-bridge/internal/service"
-	"github.com/9Ashwin/claude-code-openai-bridge/internal/ui"
+	"github.com/9Ashwin/flow-one/internal/claude"
+	"github.com/9Ashwin/flow-one/internal/service"
+	"github.com/9Ashwin/flow-one/internal/ui"
 	"github.com/spf13/cobra"
 )
 

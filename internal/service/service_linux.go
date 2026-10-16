@@ -10,7 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/9Ashwin/claude-code-openai-bridge/errs"
+	"github.com/9Ashwin/flow-one/errs"
 )
 
 // systemctl 是包级变量：平台测试里换成假的，免得真去动本机的 systemd
@@ -35,6 +35,25 @@ func platformServicePath() (string, error) {
 		base = filepath.Join(home, ".config")
 	}
 	return filepath.Join(base, "systemd", "user", ServiceLabel+".service"), nil
+}
+
+// legacyServicePath 是改名前的 unit 文件位置（存在就说明是改名之前装的）。
+func legacyServicePath() (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", nil
+	}
+	base := strings.TrimSpace(os.Getenv("XDG_CONFIG_HOME"))
+	if base == "" {
+		base = filepath.Join(home, ".config")
+	}
+	return filepath.Join(base, "systemd", "user", LegacyServiceLabel+".service"), nil
+}
+
+// unloadLegacyService 让旧服务从 systemd 退出（没装过就算了）。
+func unloadLegacyService(string) error {
+	_ = systemctl("--user", "disable", "--now", LegacyServiceLabel+".service")
+	return nil
 }
 
 func renderServiceFile(opts Options) (string, error) { return SystemdUnit(opts) }
@@ -195,7 +214,7 @@ func systemctlFailure(args []string, output string, cause error) *errs.Error {
 	if isSessionUnavailable(message) {
 		return errs.Config(errs.SubtypeSessionUnavailable, detail).
 			WithCause(cause).
-			WithHint("当前这个壳里没有用户会话（SSH / 非登录壳常见）。两条路：loginctl enable-linger $USER 之后重进登录壳再装，或者直接前台跑 claude-code-bridge")
+			WithHint("当前这个壳里没有用户会话（SSH / 非登录壳常见）。两条路：loginctl enable-linger $USER 之后重进登录壳再装，或者直接前台跑 flow-one")
 	}
 	return errs.Internal(errs.SubtypeUnexpected, detail).WithCause(cause)
 }

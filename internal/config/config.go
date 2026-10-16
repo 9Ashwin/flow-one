@@ -14,7 +14,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/9Ashwin/claude-code-openai-bridge/errs"
+	"github.com/9Ashwin/flow-one/errs"
 )
 
 // Mode 是上游接法。
@@ -58,7 +58,18 @@ func Defaults() Config {
 	}
 }
 
-// Home 返回数据目录：`BRIDGE_HOME` 优先，否则 `~/.claude-code-openai-bridge`。
+const (
+	// HomeDirName 是数据目录名。
+	HomeDirName = ".flow-one"
+	// legacyHomeDirName 是改名前的目录名（claude-code-openai-bridge → flow-one）。
+	legacyHomeDirName = ".claude-code-openai-bridge"
+)
+
+// Home 返回数据目录：`BRIDGE_HOME` 优先，否则 `~/.flow-one`。
+//
+// 改名不能把已有登录态弄丢 —— 凭据（腾讯两条线 + OpenCode Go）就躺在旧目录里。
+// 所以**新目录不存在而旧目录存在时继续用旧的**：改名对老用户是无感的，想搬就自己
+// `mv` 过去（status / doctor 会提示一次）。
 func Home() (string, error) {
 	if override := strings.TrimSpace(os.Getenv("BRIDGE_HOME")); override != "" {
 		return filepath.Abs(override)
@@ -67,7 +78,28 @@ func Home() (string, error) {
 	if err != nil {
 		return "", errs.InternalFrom(err).WithHint("设置 BRIDGE_HOME 指定数据目录")
 	}
-	return filepath.Join(base, ".claude-code-openai-bridge"), nil
+	current := filepath.Join(base, HomeDirName)
+	if dirExists(current) || !dirExists(filepath.Join(base, legacyHomeDirName)) {
+		return current, nil
+	}
+	return filepath.Join(base, legacyHomeDirName), nil
+}
+
+// LegacyHomeInUse 报告当前用的还是改名前的旧目录（cmd 层据此提示怎么搬）。
+func LegacyHomeInUse() bool {
+	if strings.TrimSpace(os.Getenv("BRIDGE_HOME")) != "" {
+		return false
+	}
+	base, err := os.UserHomeDir()
+	if err != nil {
+		return false
+	}
+	return !dirExists(filepath.Join(base, HomeDirName)) && dirExists(filepath.Join(base, legacyHomeDirName))
+}
+
+func dirExists(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && info.IsDir()
 }
 
 // CredentialPath 是凭据文件位置（腾讯两条线与 OpenCode Go 共用一份）。

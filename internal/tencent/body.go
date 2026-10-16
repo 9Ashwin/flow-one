@@ -12,7 +12,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/9Ashwin/claude-code-openai-bridge/errs"
+	"github.com/9Ashwin/flow-one/errs"
 )
 
 // defaultSystem 是补 system 时的兜底文案。

@@ -9,7 +9,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/9Ashwin/claude-code-openai-bridge/internal/source"
+	"github.com/9Ashwin/flow-one/internal/source"
 	"github.com/spf13/cobra"
 )
 

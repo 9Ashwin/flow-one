@@ -32,7 +32,7 @@ func TestStorePathUsesUserHomeDir(t *testing.T) {
 
 	path, err := StorePath()
 	require.NoError(t, err)
-	assert.Equal(t, filepath.Join(home, ".claude-code-openai-bridge", "credentials.json"), path)
+	assert.Equal(t, filepath.Join(home, ".flow-one", "credentials.json"), path)
 }
 
 // 条目按来源 id 分：写一条不该把别的来源挤掉（cn / intl / ocg 共用一份文件）。

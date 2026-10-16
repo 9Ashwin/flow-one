@@ -26,8 +26,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/9Ashwin/claude-code-openai-bridge/errs"
-	"github.com/9Ashwin/claude-code-openai-bridge/internal/config"
+	"github.com/9Ashwin/flow-one/errs"
+	"github.com/9Ashwin/flow-one/internal/config"
 )
 
 // suffix1M 是 Claude Code 的「按 1M 上下文登记」标记。

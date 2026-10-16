@@ -12,7 +12,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/9Ashwin/claude-code-openai-bridge/errs"
+	"github.com/9Ashwin/flow-one/errs"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -279,5 +279,37 @@ func TestIsSessionUnavailable(t *testing.T) {
 	}
 	for _, text := range []string{"Unit not found.", "Access denied", ""} {
 		assert.False(t, isSessionUnavailable(text), text)
+	}
+}
+
+func TestInstallOnLinuxCleansUpLegacyUnitFromBeforeRename(t *testing.T) {
+	// 改名后旧 unit 如果还在，会和新的抢同一个端口 —— 装新的之前先清旧的。
+	fake, _, _ := setup(t)
+	configHome := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", configHome)
+
+	legacyFile := filepath.Join(configHome, "systemd", "user", LegacyServiceLabel+".service")
+	require.NoError(t, os.MkdirAll(filepath.Dir(legacyFile), 0o700))
+	require.NoError(t, os.WriteFile(legacyFile, []byte("[Unit]\n"), 0o600))
+
+	result, err := Install(Options{Port: 8788, Command: []string{"/opt/flow-one"}})
+	require.NoError(t, err)
+
+	assert.NoFileExists(t, legacyFile, "改名前的旧 unit 要被清掉")
+	assert.Contains(t, strings.Join(result.Notes, " "), "改名前的旧服务")
+	// 旧 unit 必须先 disable --now，后面才轮到 daemon-reload
+	require.NotEmpty(t, fake.calls)
+	assert.Contains(t, strings.Join(fake.calls[0], " "), LegacyServiceLabel)
+	assert.Contains(t, strings.Join(fake.calls[0], " "), "disable")
+}
+
+func TestInstallOnLinuxWithoutLegacyUnitStaysQuiet(t *testing.T) {
+	fake, _, _ := setup(t)
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	result, err := Install(Options{Port: 8788, Command: []string{"/opt/flow-one"}})
+	require.NoError(t, err)
+	assert.NotContains(t, strings.Join(result.Notes, " "), "旧服务")
+	for _, call := range fake.calls {
+		assert.NotContains(t, strings.Join(call, " "), LegacyServiceLabel)
 	}
 }

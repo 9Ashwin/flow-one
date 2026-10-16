@@ -1,8 +1,8 @@
 # Copyright (c) 2026 9Ashwin
 # SPDX-License-Identifier: MIT
 
-BINARY  := claude-code-bridge
-MODULE  := github.com/9Ashwin/claude-code-openai-bridge
+BINARY  := flow-one
+MODULE  := github.com/9Ashwin/flow-one
 VERSION := $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 DATE    := $(shell date +%Y-%m-%d)
 LDFLAGS := -s -w -X $(MODULE)/internal/build.Version=$(VERSION) -X $(MODULE)/internal/build.Date=$(DATE)
@@ -12,7 +12,7 @@ PREFIX  ?= /usr/local
 
 all: test
 
-# build 是本地标准构建：写 ./claude-code-bridge 并注入版本信息。
+# build 是本地标准构建：写 ./flow-one 并注入版本信息。
 build:
 	go build -trimpath -ldflags "$(LDFLAGS)" -o $(BINARY) .
 

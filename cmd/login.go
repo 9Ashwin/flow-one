@@ -6,11 +6,11 @@ package cmd
 import (
 	"fmt"
 
-	"github.com/9Ashwin/claude-code-openai-bridge/errs"
-	"github.com/9Ashwin/claude-code-openai-bridge/internal/auth"
-	"github.com/9Ashwin/claude-code-openai-bridge/internal/opencode"
-	"github.com/9Ashwin/claude-code-openai-bridge/internal/tencent"
-	"github.com/9Ashwin/claude-code-openai-bridge/internal/ui"
+	"github.com/9Ashwin/flow-one/errs"
+	"github.com/9Ashwin/flow-one/internal/auth"
+	"github.com/9Ashwin/flow-one/internal/opencode"
+	"github.com/9Ashwin/flow-one/internal/tencent"
+	"github.com/9Ashwin/flow-one/internal/ui"
 	"github.com/spf13/cobra"
 )
 

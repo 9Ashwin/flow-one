@@ -20,9 +20,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/9Ashwin/claude-code-openai-bridge/errs"
-	"github.com/9Ashwin/claude-code-openai-bridge/internal/config"
-	"github.com/9Ashwin/claude-code-openai-bridge/internal/source"
+	"github.com/9Ashwin/flow-one/errs"
+	"github.com/9Ashwin/flow-one/internal/config"
+	"github.com/9Ashwin/flow-one/internal/source"
 )
 
 // TranslateOptions 是交给翻译层的上下文。
@@ -163,7 +163,7 @@ func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"ok":       true,
-		"service":  "claude-code-bridge",
+		"service":  "flow-one",
 		"upstream": strings.Join(labels, " + "),
 		"models":   len(models),
 		"model":    s.opts.Model,

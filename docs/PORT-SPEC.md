@@ -90,7 +90,7 @@ Node 版在移植期间**留在仓库里当规格**（它就是行为定义）�
   写前备份 `settings.json.bak-<时间戳>`；顶层 `model` 与 `ANTHROPIC_MODEL` 必须写成**同一个值**。
 - `[1m]` 后缀按**真实窗口**决定：>200k 才加，未知不加。
 - 还原时**只删自己写过的、且值没被用户改过**的键，并把顶层 `model` 恢复成安装前的值。
-- 服务：launchd plist（macOS）与 systemd unit（Linux），label `dev.claude-code-openai-bridge`；
+- 服务：launchd plist（macOS）与 systemd unit（Linux），label `dev.flow-one`；
   bootout 是异步的，重装要**轮询到 label 卸载再 bootstrap**（否则 Bootstrap failed: 5）。
 - 必须能报告「服务文件里跑的 CLI 路径」与「当前命令的路径」，不一致就警告
   （全局安装是一份快照，`git pull` 不会更新它 —— 这是真踩过的坑）。
@@ -102,7 +102,7 @@ Node 版在移植期间**留在仓库里当规格**（它就是行为定义）�
   - 已经装过（服务文件存在）→ **不再问**，直接按当前配置更新，并打一行
     `✔ 后台服务已更新（launchd / systemd）`；
   - 没装过且用户从没表态 → 问一次，把选择记进 install.json（`autoStart`）；
-  - 没装过但用户此前明确拒绝过 → 不再问，只提示怎么开启（`ccb setup --service`）。
+  - 没装过但用户此前明确拒绝过 → 不再问，只提示怎么开启（`fo setup --service`）。
   显式 flag（`--service` / `--no-service`）永远覆盖记忆值，脚本化场景要能用。
 
 - 路由：`POST /v1/messages`、`POST /v1/messages/count_tokens`、`GET /v1/models`、`GET /health`；
@@ -138,8 +138,8 @@ Linux 是一等目标，不是「顺便」。移植时容易漏的几处：
 
 | 路径 | 做法 | 代价 |
 | --- | --- | --- |
-| npm（保住现状） | 主包 `claude-code-bridge` 只放一个 `bin/cli.js` 转发脚本；**每个平台一个可选依赖包**（`@9ashwin/ccb-darwin-arm64` 等），主包用 `optionalDependencies` 列出它们，npm 只装匹配当前平台的那一个；转发脚本按 `process.platform` + `process.arch` 找到二进制并 `spawn(..., {stdio: 'inherit'})` | 要发布 1 + N 个包，CI 要交叉编译并上传 |
-| `go install` | `go install github.com/9Ashwin/claude-code-openai-bridge@latest` | 只对装了 Go 的人可用 |
+| npm（保住现状） | 主包 `flow-one` 只放一个 `bin/cli.js` 转发脚本；**每个平台一个可选依赖包**（`@9ashwin/flow-one-darwin-arm64` 等），主包用 `optionalDependencies` 列出它们，npm 只装匹配当前平台的那一个；转发脚本按 `process.platform` + `process.arch` 找到二进制并 `spawn(..., {stdio: 'inherit'})` | 要发布 1 + N 个包，CI 要交叉编译并上传 |
+| `go install` | `go install github.com/9Ashwin/flow-one@latest` | 只对装了 Go 的人可用 |
 | 一键脚本 / Releases | GitHub Releases 放 darwin/linux × arm64/amd64 四个二进制，配一个 `install.sh` | 要维护脚本与校验和 |
 
 为什么用 `optionalDependencies` 而不是 `postinstall` 下载：pnpm 与 bun **默认拦掉依赖的

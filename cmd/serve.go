@@ -13,11 +13,11 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/9Ashwin/claude-code-openai-bridge/errs"
-	"github.com/9Ashwin/claude-code-openai-bridge/internal/anthropic"
-	"github.com/9Ashwin/claude-code-openai-bridge/internal/config"
-	"github.com/9Ashwin/claude-code-openai-bridge/internal/server"
-	"github.com/9Ashwin/claude-code-openai-bridge/internal/source"
+	"github.com/9Ashwin/flow-one/errs"
+	"github.com/9Ashwin/flow-one/internal/anthropic"
+	"github.com/9Ashwin/flow-one/internal/config"
+	"github.com/9Ashwin/flow-one/internal/server"
+	"github.com/9Ashwin/flow-one/internal/source"
 	"github.com/spf13/cobra"
 )
 

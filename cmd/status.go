@@ -9,12 +9,12 @@ import (
 	"os"
 	"time"
 
-	"github.com/9Ashwin/claude-code-openai-bridge/internal/auth"
-	"github.com/9Ashwin/claude-code-openai-bridge/internal/claude"
-	"github.com/9Ashwin/claude-code-openai-bridge/internal/config"
-	"github.com/9Ashwin/claude-code-openai-bridge/internal/opencode"
-	"github.com/9Ashwin/claude-code-openai-bridge/internal/service"
-	"github.com/9Ashwin/claude-code-openai-bridge/internal/tencent"
+	"github.com/9Ashwin/flow-one/internal/auth"
+	"github.com/9Ashwin/flow-one/internal/claude"
+	"github.com/9Ashwin/flow-one/internal/config"
+	"github.com/9Ashwin/flow-one/internal/opencode"
+	"github.com/9Ashwin/flow-one/internal/service"
+	"github.com/9Ashwin/flow-one/internal/tencent"
 	"github.com/spf13/cobra"
 )
 
@@ -41,9 +41,11 @@ type serviceReport struct {
 	Kind      string `json:"kind"`
 	Path      string `json:"path"`
 	Installed bool   `json:"installed"`
-	CLIPath   string `json:"cliPath,omitempty"`
-	Stale     bool   `json:"stale,omitempty"`
-	LogHint   string `json:"logHint,omitempty"`
+	// LegacyInstalled：改名前的旧服务还在（新文件不存在但旧的在跑）
+	LegacyInstalled bool   `json:"legacyInstalled,omitempty"`
+	CLIPath         string `json:"cliPath,omitempty"`
+	Stale           bool   `json:"stale,omitempty"`
+	LogHint         string `json:"logHint,omitempty"`
 }
 
 var statusJSON bool
@@ -66,6 +68,11 @@ var statusCmd = &cobra.Command{
 			return nil
 		}
 		fmt.Fprintf(cmd.OutOrStdout(), "数据目录  %s\n", report.Home)
+		if config.LegacyHomeInUse() {
+			// 改名前后目录都还能用，只是名字没跟上；登录态在旧目录里，别让用户以为丢了
+			fmt.Fprintln(os.Stderr, "! 数据目录还是改名前的 ~/.claude-code-openai-bridge（登录态就在里面，照常用）")
+			fmt.Fprintln(os.Stderr, "  → 想搬到新名字：mv ~/.claude-code-openai-bridge ~/.flow-one")
+		}
 		fmt.Fprintf(cmd.OutOrStdout(), "配置文件  %s\n", report.Settings)
 		if report.Model != "" {
 			fmt.Fprintf(cmd.OutOrStdout(), "模型      %s\n", report.Model)
@@ -86,6 +93,10 @@ var statusCmd = &cobra.Command{
 				fmt.Fprintf(os.Stderr, "! 服务跑的不是当前这份代码：%s\n", report.Service.CLIPath)
 				fmt.Fprintln(os.Stderr, "  → 用当前这份代码重跑一次「一键配置」即可对齐（全局安装是一份快照）")
 			}
+		} else if report.Service.LegacyInstalled {
+			fmt.Fprintln(cmd.OutOrStdout(), "服务      未安装（但改名前的旧服务还在）")
+			fmt.Fprintln(os.Stderr, "! 改名前的旧服务 "+service.LegacyServiceLabel+" 仍然装着，占着端口")
+			fmt.Fprintln(os.Stderr, "  → 跑一次「一键配置」会装成新名字并顺手清掉旧服务；只想清旧的：fo uninstall")
 		} else {
 			fmt.Fprintln(cmd.OutOrStdout(), "服务      未安装")
 		}
@@ -151,7 +162,10 @@ func collectStatus(cfg config.Config) statusReport {
 
 	state, err := service.Inspect()
 	if err == nil {
-		report.Service = serviceReport{Kind: string(state.Kind), Path: state.Path, Installed: state.Installed, LogHint: service.LogHint()}
+		report.Service = serviceReport{
+			Kind: string(state.Kind), Path: state.Path, Installed: state.Installed,
+			LegacyInstalled: state.LegacyInstalled, LogHint: service.LogHint(),
+		}
 		if state.Installed {
 			// 「服务跑的是哪份代码」是真踩过的坑：全局安装是一份快照，
 			// git pull 与改仓库都不会更新它，而界面上完全看不出来。

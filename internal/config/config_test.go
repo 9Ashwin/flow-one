@@ -5,10 +5,11 @@ package config
 
 import (
 	"errors"
+	"os"
 	"path/filepath"
 	"testing"
 
-	"github.com/9Ashwin/claude-code-openai-bridge/errs"
+	"github.com/9Ashwin/flow-one/errs"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -74,4 +75,42 @@ func TestStripModelSuffix(t *testing.T) {
 	} {
 		assert.Equal(t, want, StripModelSuffix(input), input)
 	}
+}
+
+func TestHomeFallsBackToLegacyDirAfterRename(t *testing.T) {
+	// 改名（claude-code-openai-bridge → flow-one）不能把已有登录态弄丢：
+	// 凭据就在旧目录里，新目录不存在时继续用旧的。
+	base := t.TempDir()
+	t.Setenv("HOME", base)
+	t.Setenv("BRIDGE_HOME", "")
+
+	// 只有旧目录 → 用旧的
+	legacy := filepath.Join(base, ".claude-code-openai-bridge")
+	require.NoError(t, os.MkdirAll(legacy, 0o700))
+	home, err := Home()
+	require.NoError(t, err)
+	assert.Equal(t, legacy, home)
+	assert.True(t, LegacyHomeInUse(), "要能报告用的是旧目录，cmd 层才好提示怎么搬")
+
+	// 新目录出现 → 立刻改用新的（用户 mv 过去之后就自然切换）
+	fresh := filepath.Join(base, ".flow-one")
+	require.NoError(t, os.MkdirAll(fresh, 0o700))
+	home, err = Home()
+	require.NoError(t, err)
+	assert.Equal(t, fresh, home)
+	assert.False(t, LegacyHomeInUse())
+
+	// 两个都没有 → 用新名字（全新安装）
+	require.NoError(t, os.RemoveAll(fresh))
+	require.NoError(t, os.RemoveAll(legacy))
+	home, err = Home()
+	require.NoError(t, err)
+	assert.Equal(t, fresh, home)
+
+	// BRIDGE_HOME 永远优先
+	t.Setenv("BRIDGE_HOME", filepath.Join(base, "custom"))
+	home, err = Home()
+	require.NoError(t, err)
+	assert.Equal(t, filepath.Join(base, "custom"), home)
+	assert.False(t, LegacyHomeInUse(), "显式指定了目录就谈不上「旧目录」")
 }

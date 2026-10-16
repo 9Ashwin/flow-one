@@ -8,11 +8,11 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/9Ashwin/claude-code-openai-bridge/errs"
+	"github.com/9Ashwin/flow-one/errs"
 )
 
 // Home 返回数据目录：`BRIDGE_HOME` 优先（相对路径按当前目录展开），否则
-// `~/.claude-code-openai-bridge`。
+// `~/.flow-one`。
 //
 // 与 internal/config.Home 语义一致，这里自带一份是为了**不让底层包 import 上层包**：
 // internal/tencent 会 import 本包，而 config 迟早要 import 来源实现（解析产品名）。
@@ -25,7 +25,7 @@ func Home() (string, error) {
 	if err != nil {
 		return "", errs.InternalFrom(err).WithHint("设置 BRIDGE_HOME 指定数据目录")
 	}
-	return filepath.Join(base, ".claude-code-openai-bridge"), nil
+	return filepath.Join(base, ".flow-one"), nil
 }
 
 // StorePath 是凭据文件位置：`<Home>/credentials.json`。

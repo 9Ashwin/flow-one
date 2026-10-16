@@ -10,10 +10,10 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/9Ashwin/claude-code-openai-bridge/errs"
-	"github.com/9Ashwin/claude-code-openai-bridge/internal/build"
-	"github.com/9Ashwin/claude-code-openai-bridge/internal/config"
-	"github.com/9Ashwin/claude-code-openai-bridge/internal/ui"
+	"github.com/9Ashwin/flow-one/errs"
+	"github.com/9Ashwin/flow-one/internal/build"
+	"github.com/9Ashwin/flow-one/internal/config"
+	"github.com/9Ashwin/flow-one/internal/ui"
 	"github.com/spf13/cobra"
 )
 
@@ -21,7 +21,7 @@ import (
 var jsonOut bool
 
 var rootCmd = &cobra.Command{
-	Use:   "claude-code-bridge",
+	Use:   "flow-one",
 	Short: "让 Claude Code CLI 用上 WorkBuddy 与 OpenCode",
 	Long: `把 WorkBuddy（国内版 CodeBuddy / 国际版）与 OpenCode（免费档 / Go 套餐）
 接进 Claude Code CLI 的本地反代。

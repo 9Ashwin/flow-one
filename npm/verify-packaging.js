@@ -16,7 +16,7 @@ const expected = ['darwin-arm64', 'darwin-x64', 'linux-arm64', 'linux-x64']
 const problems = []
 
 for (const platform of expected) {
-  const name = `@9ashwin/ccb-${platform}`
+  const name = `@9ashwin/flow-one-${platform}`
   const declared = main.optionalDependencies?.[name]
   if (declared === undefined) {
     problems.push(`optionalDependencies 缺少 ${name}`)
@@ -34,7 +34,7 @@ for (const platform of expected) {
   if (manifest.version !== main.version) {
     problems.push(`${name} 的 package.json 版本 ${manifest.version} 与主包不一致`)
   }
-  if (!existsSync(path.join(dir, 'bin', 'claude-code-bridge'))) {
+  if (!existsSync(path.join(dir, 'bin', 'flow-one'))) {
     problems.push(`${name} 里没有二进制（发布前跑 scripts/build-npm-packages.sh）`)
   }
 }

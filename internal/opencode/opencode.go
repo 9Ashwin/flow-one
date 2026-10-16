@@ -28,10 +28,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/9Ashwin/claude-code-openai-bridge/errs"
-	"github.com/9Ashwin/claude-code-openai-bridge/internal/config"
-	"github.com/9Ashwin/claude-code-openai-bridge/internal/source"
-	"github.com/9Ashwin/claude-code-openai-bridge/internal/sse"
+	"github.com/9Ashwin/flow-one/errs"
+	"github.com/9Ashwin/flow-one/internal/config"
+	"github.com/9Ashwin/flow-one/internal/source"
+	"github.com/9Ashwin/flow-one/internal/sse"
 )
 
 // 两条路的**事实**（端点、匿名凭据、UA）。导出是因为 doctor 要自己构造原始请求去

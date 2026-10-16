@@ -127,7 +127,7 @@ func Box(lines []string, color func(string) string) {
 // Banner 是开机块：名字 + 版本 + 一句话。
 func Banner(subtitle, version string) {
 	Blank()
-	title := "claude-code-bridge"
+	title := "flow-one"
 	if version != "" {
 		title += "  " + version
 	}

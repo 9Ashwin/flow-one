@@ -24,14 +24,14 @@ import (
 	"strings"
 	"time"
 
-	"github.com/9Ashwin/claude-code-openai-bridge/errs"
-	"github.com/9Ashwin/claude-code-openai-bridge/internal/auth"
-	"github.com/9Ashwin/claude-code-openai-bridge/internal/claude"
-	"github.com/9Ashwin/claude-code-openai-bridge/internal/config"
-	"github.com/9Ashwin/claude-code-openai-bridge/internal/opencode"
-	"github.com/9Ashwin/claude-code-openai-bridge/internal/service"
-	"github.com/9Ashwin/claude-code-openai-bridge/internal/source"
-	"github.com/9Ashwin/claude-code-openai-bridge/internal/tencent"
+	"github.com/9Ashwin/flow-one/errs"
+	"github.com/9Ashwin/flow-one/internal/auth"
+	"github.com/9Ashwin/flow-one/internal/claude"
+	"github.com/9Ashwin/flow-one/internal/config"
+	"github.com/9Ashwin/flow-one/internal/opencode"
+	"github.com/9Ashwin/flow-one/internal/service"
+	"github.com/9Ashwin/flow-one/internal/source"
+	"github.com/9Ashwin/flow-one/internal/tencent"
 )
 
 // Verdict 是探针每一行的判定。
@@ -78,7 +78,7 @@ func Local(cfg config.Config) []LocalCheck {
 	if readErr != nil {
 		checks = append(checks, LocalCheck{
 			Level: VerdictFail, Text: "还没写过 Claude Code 配置：" + settingsPath,
-			Fix: "跑一次「一键配置」（claude-code-bridge setup）",
+			Fix: "跑一次「一键配置」（flow-one setup）",
 		})
 		return checks
 	}
@@ -113,12 +113,19 @@ func Local(cfg config.Config) []LocalCheck {
 	}
 
 	if state, err := service.Inspect(); err == nil {
+		if state.LegacyInstalled && !state.Installed {
+			checks = append(checks, LocalCheck{
+				Level: VerdictRelaxed,
+				Text:  "改名前的旧服务 " + service.LegacyServiceLabel + " 还装着（占着端口，新服务没装）",
+				Fix:   "跑一次「一键配置」装成新名字并顺手清掉旧服务；只想清旧的：fo uninstall",
+			})
+		}
 		if !state.Supported {
-			checks = append(checks, LocalCheck{Level: VerdictRelaxed, Text: "本平台没有实现后台常驻", Fix: "前台跑：claude-code-bridge serve"})
+			checks = append(checks, LocalCheck{Level: VerdictRelaxed, Text: "本平台没有实现后台常驻", Fix: "前台跑：flow-one serve"})
 		} else if !state.Installed {
 			checks = append(checks, LocalCheck{
 				Level: VerdictRelaxed, Text: "没有装后台服务（Claude Code 只能在你手动开着终端时用）",
-				Fix: "claude-code-bridge setup --service",
+				Fix: "flow-one setup --service",
 			})
 		} else {
 			checks = append(checks, LocalCheck{Level: VerdictPass, Text: fmt.Sprintf("服务文件 %s（%s）", state.Path, state.Kind)})
@@ -134,6 +141,14 @@ func Local(cfg config.Config) []LocalCheck {
 		}
 	}
 
+	if config.LegacyHomeInUse() {
+		checks = append(checks, LocalCheck{
+			Level: VerdictRelaxed,
+			Text:  "数据目录还是改名前的 ~/.claude-code-openai-bridge（照常用，登录态在里面）",
+			Fix:   "想搬到新名字：mv ~/.claude-code-openai-bridge ~/.flow-one",
+		})
+	}
+
 	client := auth.NewClient()
 	client.File = cfg.CredentialFile
 	for _, item := range []struct{ id, label string }{{"cn", "WorkBuddy 国内版"}, {"intl", "WorkBuddy 国际版"}} {
@@ -145,7 +160,7 @@ func Local(cfg config.Config) []LocalCheck {
 		if !status.LoggedIn {
 			checks = append(checks, LocalCheck{
 				Level: VerdictFail, Text: item.label + " 未登录",
-				Fix: "claude-code-bridge login " + item.id,
+				Fix: "flow-one login " + item.id,
 			})
 			continue
 		}

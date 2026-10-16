@@ -2,7 +2,7 @@
 
 ## Purpose
 
-`claude-code-openai-bridge` 让 Claude Code CLI 用上 WorkBuddy（国内版 / 国际版）与
+`flow-one` 让 Claude Code CLI 用上 WorkBuddy（国内版 / 国际版）与
 OpenCode（免费档 / Go 套餐）。它同时服务两类使用者：**人**（交互式菜单、能看懂的
 报错）与 **agent / 脚本**（稳定的 JSON 输出、可分支的错误分类、确定的退出码）。
 两者冲突时，优先保住机器可读的那一侧，但不要为此牺牲人的体验。
@@ -43,10 +43,10 @@ OpenCode（免费档 / Go 套餐）。它同时服务两类使用者：**人**�
 
 | 事项 | macOS | Linux |
 | --- | --- | --- |
-| 常驻 | launchd plist `~/Library/LaunchAgents/dev.claude-code-openai-bridge.plist`，`launchctl bootstrap/bootout/kickstart` | systemd user unit `~/.config/systemd/user/dev.claude-code-openai-bridge.service`，`systemctl --user enable --now` |
+| 常驻 | launchd plist `~/Library/LaunchAgents/dev.flow-one.plist`，`launchctl bootstrap/bootout/kickstart` | systemd user unit `~/.config/systemd/user/dev.flow-one.service`，`systemctl --user enable --now` |
 | 打开浏览器授权页 | `open <url>` | `xdg-open <url>`（没有就回落到「打印链接让用户自己点」） |
 | TTY 判断 | `golang.org/x/term` 的 `IsTerminal`（两边一致） | 同左 |
-| 服务日志 | `~/.claude-code-openai-bridge/bridge.err.log` | `journalctl --user -u dev.claude-code-openai-bridge` |
+| 服务日志 | `~/.flow-one/bridge.err.log` | `journalctl --user -u dev.flow-one` |
 
 规矩：
 
@@ -88,7 +88,7 @@ OpenCode（免费档 / Go 套餐）。它同时服务两类使用者：**人**�
 - 已登录的来源只报「已登录」，不重新走授权；
 - 端口、数据目录这类已有取值，复用它而不是重新挑。
 
-状态一律落到 `~/.claude-code-openai-bridge/install.json`，不要靠内存里的变量 ——
+状态一律落到 `~/.flow-one/install.json`，不要靠内存里的变量 ——
 每次运行都是新进程。用户想改主意时给显式开关（flag 或菜单项），而不是靠反复追问。
 
 ## 测试
@@ -104,7 +104,7 @@ OpenCode（免费档 / Go 套餐）。它同时服务两类使用者：**人**�
 | --- | --- |
 | 单个包 | `go test ./internal/<包>/...` |
 | 跨包 / 收尾 | `make test`（vet + gofmt 检查 + 全部单测） |
-| 提交前 | `make build` 并真跑一次 `./claude-code-bridge doctor` |
+| 提交前 | `make build` 并真跑一次 `./flow-one doctor` |
 
 ## 提交
 

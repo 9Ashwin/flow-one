@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/9Ashwin/claude-code-openai-bridge/errs"
+	"github.com/9Ashwin/flow-one/errs"
 	"github.com/stretchr/testify/require"
 )
 

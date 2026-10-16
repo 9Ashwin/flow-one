@@ -12,9 +12,9 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/9Ashwin/claude-code-openai-bridge/errs"
-	"github.com/9Ashwin/claude-code-openai-bridge/internal/source"
-	"github.com/9Ashwin/claude-code-openai-bridge/internal/sse"
+	"github.com/9Ashwin/flow-one/errs"
+	"github.com/9Ashwin/flow-one/internal/source"
+	"github.com/9Ashwin/flow-one/internal/sse"
 )
 
 // FreeTier 是 OpenCode 免费档（来源 id `oc`）。
@@ -137,7 +137,7 @@ func (f *FreeTier) currentSession() string {
 
 // ShapeHeaders 是发往免费档的头集，照官方客户端的形状。
 //
-// `x-opencode-session-id` 这个别名头实测当前已非必填（2026-10-16 `ccb doctor` 逐项重推
+// `x-opencode-session-id` 这个别名头实测当前已非必填（2026-10-16 `fo doctor` 逐项重推
 // 判成 relaxed：去掉它照样 200），但仍照发 —— 与官方客户端同形，上游哪天重新收紧时
 // 不必再改代码。规则与证据见 docs/gates.md。
 func ShapeHeaders(project string, session string, request string) http.Header {

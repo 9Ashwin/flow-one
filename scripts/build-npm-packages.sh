@@ -8,7 +8,7 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 VERSION="${1:-$(node -p "require('$ROOT/package.json').version")}"
-MODULE="github.com/9Ashwin/claude-code-openai-bridge"
+MODULE="github.com/9Ashwin/flow-one"
 
 echo "装配 npm 平台包，版本 $VERSION"
 
@@ -25,21 +25,21 @@ for target in darwin/arm64 darwin/amd64 linux/arm64 linux/amd64; do
   CGO_ENABLED=0 GOOS="$GOOS" GOARCH="$GOARCH" \
     go build -trimpath \
     -ldflags "-s -w -X $MODULE/internal/build.Version=$VERSION" \
-    -o "$DIR/bin/claude-code-bridge" \
+    -o "$DIR/bin/flow-one" \
     "$ROOT"
 
   cat > "$DIR/package.json" <<JSON
 {
-  "name": "@9ashwin/ccb-$GOOS-$NPM_ARCH",
+  "name": "@9ashwin/flow-one-$GOOS-$NPM_ARCH",
   "version": "$VERSION",
-  "description": "claude-code-bridge 的 $GOOS-$NPM_ARCH 预编译二进制（由主包自动选中）",
+  "description": "flow-one 的 $GOOS-$NPM_ARCH 预编译二进制（由主包自动选中）",
   "license": "MIT",
   "os": ["$GOOS"],
   "cpu": ["$NPM_ARCH"],
-  "files": ["bin/claude-code-bridge"],
+  "files": ["bin/flow-one"],
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/9Ashwin/claude-code-openai-bridge.git"
+    "url": "git+https://github.com/9Ashwin/flow-one.git"
   }
 }
 JSON

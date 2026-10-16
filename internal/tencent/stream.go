@@ -8,8 +8,8 @@ import (
 	"io"
 	"sync"
 
-	"github.com/9Ashwin/claude-code-openai-bridge/errs"
-	"github.com/9Ashwin/claude-code-openai-bridge/internal/sse"
+	"github.com/9Ashwin/flow-one/errs"
+	"github.com/9Ashwin/flow-one/internal/sse"
 )
 
 // codeContentBlocked 是腾讯内容风控的业务码：既可能出现在 400 响应里，

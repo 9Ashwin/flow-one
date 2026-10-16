@@ -1,13 +1,13 @@
 {
-  "name": "@9ashwin/ccb-darwin-x64",
+  "name": "@9ashwin/flow-one-darwin-x64",
   "version": "0.2.0",
-  "description": "claude-code-bridge 的 darwin-x64 预编译二进制（由主包自动选中）",
+  "description": "flow-one 的 darwin-x64 预编译二进制（由主包自动选中）",
   "license": "MIT",
   "os": ["darwin"],
   "cpu": ["x64"],
-  "files": ["bin/claude-code-bridge"],
+  "files": ["bin/flow-one"],
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/9Ashwin/claude-code-openai-bridge.git"
+    "url": "git+https://github.com/9Ashwin/flow-one.git"
   }
 }

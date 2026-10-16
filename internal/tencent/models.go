@@ -6,7 +6,7 @@ package tencent
 import (
 	"strings"
 
-	"github.com/9Ashwin/claude-code-openai-bridge/internal/source"
+	"github.com/9Ashwin/flow-one/internal/source"
 )
 
 // catalogModel 是一条目录条目：对外的部分是 source.Model，defaultEffort 只在组装

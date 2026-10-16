@@ -1,4 +1,4 @@
-# claude-code-openai-bridge（Go）
+# flow-one（Go）
 
 让 **Claude Code CLI** 用上 **WorkBuddy（国内版 CodeBuddy / 国际版）** 与
 **OpenCode（免费档 / Go 套餐）** 的本地反代。
@@ -22,10 +22,10 @@ Claude Code CLI ──► 本桥 127.0.0.1:8788 ──► WorkBuddy 国内版   
 
 ## 安装
 
-**1. 从 npm 装**（装完就有 `claude-code-bridge` 与 `ccb` 两个命令）
+**1. 从 npm 装**（装完就有 `flow-one` 与 `fo` 两个命令）
 
 ```bash
-npm install -g claude-code-openai-bridge
+npm install -g flow-one
 ```
 
 Go 版是编译产物，所以 npm 包只放一个转发脚本 + 四个平台的预编译二进制包
@@ -35,15 +35,15 @@ Go 版是编译产物，所以 npm 包只放一个转发脚本 + 四个平台的
 **2. 用 Go 装**
 
 ```bash
-go install github.com/9Ashwin/claude-code-openai-bridge@latest
+go install github.com/9Ashwin/flow-one@latest
 ```
 
 **3. 自己编**（要改代码就用这个）
 
 ```bash
-git clone https://github.com/9Ashwin/claude-code-openai-bridge.git
-cd claude-code-openai-bridge && git checkout go-rewrite
-make build          # 产出 ./claude-code-bridge
+git clone https://github.com/9Ashwin/flow-one.git
+cd flow-one && git checkout go-rewrite
+make build          # 产出 ./flow-one
 ```
 
 支持 **macOS 与 Linux**（arm64 / amd64）。常驻在 macOS 上走 launchd、Linux 上走 systemd
@@ -52,7 +52,7 @@ make build          # 产出 ./claude-code-bridge
 ## 快速开始
 
 ```bash
-claude-code-bridge            # 有终端 → 交互式菜单；无终端 → 直接起服务
+flow-one            # 有终端 → 交互式菜单；无终端 → 直接起服务
 ```
 
 菜单是**打印编号 + 输入编号**，不是方向键列表：
@@ -85,7 +85,7 @@ claude-code-bridge            # 有终端 → 交互式菜单；无终端 → �
 
 | 命令 | 说明 |
 | --- | --- |
-| `claude-code-bridge` | 有终端进菜单；无 TTY（launchd / systemd / 管道）直接起服务 |
+| `flow-one` | 有终端进菜单；无 TTY（launchd / systemd / 管道）直接起服务 |
 | `serve` | 起本地反代 |
 | `setup` | 交互式一键配置（`--service` / `--no-service` 表态后台常驻） |
 | `switch` | 换模型（改配置并按需重启服务） |
@@ -121,7 +121,7 @@ claude-code-bridge            # 有终端 → 交互式菜单；无终端 → �
 ## 自检
 
 ```bash
-claude-code-bridge doctor
+flow-one doctor
 ```
 
 它不是「打个 `/health` 看活着没」，而是**主动重推一遍门禁**：
@@ -139,7 +139,7 @@ claude-code-bridge doctor
 
 ```bash
 make test      # vet + gofmt 检查 + 全部单测
-make build     # 写 ./claude-code-bridge（注入版本号）
+make build     # 写 ./flow-one（注入版本号）
 make fmt       # gofmt -w .
 ```
 

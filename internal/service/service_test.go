@@ -62,12 +62,12 @@ func TestLaunchAgentPlistShape(t *testing.T) {
 	plist, err := LaunchAgentPlist(Options{
 		Port:    8788,
 		APIKey:  "k-3",
-		Command: []string{"/usr/local/bin/claude-code-bridge"},
+		Command: []string{"/usr/local/bin/flow-one"},
 		LogDir:  home,
 	})
 	require.NoError(t, err)
 	assert.Contains(t, plist, "<key>Label</key>\n  <string>"+ServiceLabel+"</string>")
-	assert.Contains(t, plist, "<string>/usr/local/bin/claude-code-bridge</string>")
+	assert.Contains(t, plist, "<string>/usr/local/bin/flow-one</string>")
 	assert.Contains(t, plist, "<key>BRIDGE_PORT</key>\n    <string>8788</string>")
 	assert.Contains(t, plist, "<key>BRIDGE_API_KEY</key>\n    <string>k-3</string>")
 	assert.Contains(t, plist, "<key>RunAtLoad</key>")
@@ -115,13 +115,13 @@ func TestCLIPathFromServiceFile(t *testing.T) {
 <plist version="1.0"><dict>
   <key>ProgramArguments</key>
   <array>
-    <string>/Users/me/.local/bin/claude-code-bridge</string>
+    <string>/Users/me/.local/bin/flow-one</string>
   </array>
 </dict></plist>`
-	assert.Equal(t, "/Users/me/.local/bin/claude-code-bridge", CLIPathFromServiceFile(snapshot, KindLaunchd))
+	assert.Equal(t, "/Users/me/.local/bin/flow-one", CLIPathFromServiceFile(snapshot, KindLaunchd))
 
-	systemdUnit := "[Service]\nExecStart=/usr/local/bin/claude-code-bridge serve\n"
-	assert.Equal(t, "/usr/local/bin/claude-code-bridge", CLIPathFromServiceFile(systemdUnit, KindSystemd))
+	systemdUnit := "[Service]\nExecStart=/usr/local/bin/flow-one serve\n"
+	assert.Equal(t, "/usr/local/bin/flow-one", CLIPathFromServiceFile(systemdUnit, KindSystemd))
 	// systemd 允许在前缀写 `-`（忽略失败）之类的标记
 	assert.Equal(t, "/opt/ccb", CLIPathFromServiceFile("[Service]\nExecStart=-/opt/ccb\n", KindSystemd))
 	assert.Equal(t, "/a b/ccb", CLIPathFromServiceFile("[Service]\nExecStart=\"/a b/ccb\" --serve\n", KindSystemd))
@@ -221,11 +221,11 @@ func TestCLIPathRecognizesInterpreterPlusScript(t *testing.T) {
   <key>ProgramArguments</key>
   <array>
     <string>/Users/me/.local/share/mise/installs/node/24.18.1/bin/node</string>
-    <string>/Users/me/.local/share/mise/installs/node/24.18.1/lib/node_modules/claude-code-openai-bridge/cli.mjs</string>
+    <string>/Users/me/.local/share/mise/installs/node/24.18.1/lib/node_modules/flow-one/cli.mjs</string>
   </array>
 </dict></plist>`
 	assert.Equal(t,
-		"/Users/me/.local/share/mise/installs/node/24.18.1/lib/node_modules/claude-code-openai-bridge/cli.mjs",
+		"/Users/me/.local/share/mise/installs/node/24.18.1/lib/node_modules/flow-one/cli.mjs",
 		CLIPathFromServiceFile(legacy, KindLaunchd))
 
 	// Go 版自己的形态：二进制 + 子命令（子命令不是绝对路径，应落在第一条）

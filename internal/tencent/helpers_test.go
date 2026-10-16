@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/9Ashwin/claude-code-openai-bridge/internal/auth"
+	"github.com/9Ashwin/flow-one/internal/auth"
 	"github.com/stretchr/testify/require"
 )
 

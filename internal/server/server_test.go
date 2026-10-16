@@ -12,7 +12,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/9Ashwin/claude-code-openai-bridge/internal/source"
+	"github.com/9Ashwin/flow-one/internal/source"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

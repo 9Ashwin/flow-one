@@ -15,7 +15,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/9Ashwin/claude-code-openai-bridge/internal/config"
+	"github.com/9Ashwin/flow-one/internal/config"
 )
 
 // base62 是官方 id 模块的字母表（0-9A-Za-z，顺序就是这一串）。

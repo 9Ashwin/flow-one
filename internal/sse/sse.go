@@ -15,7 +15,7 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/9Ashwin/claude-code-openai-bridge/errs"
+	"github.com/9Ashwin/flow-one/errs"
 )
 
 // readChunk 是每次从 body 里读的字节数。SSE 帧都很小，攒到一个缓冲区里再切行，

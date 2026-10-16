@@ -19,7 +19,7 @@ func SystemdUnit(opts Options) (string, error) {
 	}
 	var out strings.Builder
 	out.WriteString("[Unit]\n")
-	out.WriteString("Description=claude-code-openai-bridge（Claude Code 的 WorkBuddy 反代）\n")
+	out.WriteString("Description=flow-one（Claude Code 的 WorkBuddy 反代）\n")
 	out.WriteString("After=network-online.target\n\n")
 	out.WriteString("[Service]\n")
 	out.WriteString("ExecStart=" + systemdCommand(command) + "\n")

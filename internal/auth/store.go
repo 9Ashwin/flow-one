@@ -12,7 +12,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/9Ashwin/claude-code-openai-bridge/errs"
+	"github.com/9Ashwin/flow-one/errs"
 )
 
 const (
