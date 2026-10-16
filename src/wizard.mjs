@@ -179,21 +179,24 @@ export async function ensureLoggedIn(products, { force = false } = {}) {
 
 // ── 选模型 ──────────────────────────────────────────────────────────────────
 
-/** 从清单里挑模型；给出「前 N 个 + 关键词筛选 + 手动输入」三条路。 */
-export async function pickModel(rows, { limit = 10 } = {}) {
-  const ranked = [...rows].sort((a, b) => rank(a.id) - rank(b.id))
-  const shown = ranked.slice(0, limit)
-  const options = shown.map((row, index) => ({
-    label: row.id,
-    hint: modelHint(row, index === 0 && rank(row.id) === 0),
-    value: row.id,
-  }))
-  if (ranked.length > shown.length) {
-    options.push({ label: '输入关键词筛选…', hint: `还有 ${ranked.length - shown.length} 个`, value: '__filter__' })
-  }
-  options.push({ label: '手动输入模型 ID', hint: '清单里没有的模型', value: '__manual__' })
-
-  const picked = await select({ message: '用哪个模型？', options })
+/**
+ * 从清单里挑模型。
+ *
+ * **全部列出、不截断**（三条来源合起来一百多个）：列表自己支持边打边筛，
+ * 敲 `glm`、`oc/deep`、`1m` 都会立刻缩小范围 —— 早先只画前 10 个、再单开一个
+ * 「输入关键词筛选…」入口，等于把 OpenCode 那八十多个模型藏起来了。
+ * 另留一条手动输入：清单里没有的 ID（自建网关、新模型）也能用。
+ */
+export async function pickModel(rows) {
+  const ranked = rankRows(rows)
+  const picked = await select({
+    message: '用哪个模型？',
+    filterable: true,
+    options: [
+      ...ranked.map((row, index) => ({ label: row.id, hint: modelHint(row, index === 0), value: row.id })),
+      { label: '手动输入模型 ID', hint: '清单里没有的模型', value: '__manual__' },
+    ],
+  })
   if (picked === '__manual__') {
     const id = await input({
       message: '模型 ID（形如 cn/xxx、intl/xxx、oc/xxx）',
@@ -202,24 +205,15 @@ export async function pickModel(rows, { limit = 10 } = {}) {
     })
     return rows.find(row => row.id === id) ?? { id }
   }
-  if (picked === '__filter__') {
-    const keyword = await input({ message: '关键词', initial: 'deepseek' })
-    const matched = ranked.filter(row => row.id.toLowerCase().includes(keyword.toLowerCase()))
-    if (matched.length === 0) {
-      warn(`没有匹配 ${keyword} 的模型`)
-      return await pickModel(rows, { limit })
-    }
-    const id = await select({
-      message: '用哪个模型？',
-      options: matched.map((row, index) => ({ label: row.id, hint: modelHint(row, index === 0), value: row.id })),
-    })
-    return matched.find(row => row.id === id) ?? { id }
-  }
   // 返回整行：窗口大小决定要不要给 Claude Code 登记 `[1m]`，不能只传 id
   return ranked.find(row => row.id === picked) ?? { id: picked }
 }
 
 /** 推荐模型排前面，其余保持远端顺序。 */
+function rankRows(rows) {
+  return [...rows].sort((a, b) => rank(a.id) - rank(b.id))
+}
+
 function rank(id) {
   const bare = id.includes('/') ? id.slice(id.indexOf('/') + 1) : id
   const at = PREFERRED_MODELS.findIndex(preferred => bare === preferred)

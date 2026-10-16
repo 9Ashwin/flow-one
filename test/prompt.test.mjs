@@ -83,3 +83,62 @@ test('主菜单闭环：选 3 看状态 → 回车返回 → Q 退出', async ()
     setStdinForTest(null)
   }
 })
+
+test('列表筛选：边打边筛、退格删字、Esc 清空', async () => {
+  const { PassThrough } = await import('node:stream')
+  const { select, setStdinForTest } = await import('../src/prompt.mjs')
+  const fake = new PassThrough()
+  fake.isTTY = true
+  fake.setRawMode = () => {}
+  setStdinForTest(fake)
+  const key = (str, name) => fake.emit('keypress', str, { name })
+  const options = [
+    { label: 'cn/deepseek-v4.1-flash', value: 'cn' },
+    { label: 'oc/deepseek-v4.1-flash-free', value: 'oc' },
+    { label: 'intl/glm-5.3', value: 'glm' },
+    { label: 'oc/big-pickle', value: 'pickle' },
+  ]
+  try {
+    // 敲 `glm` 立刻只剩一条匹配，回车就选中它（不用先选「筛选」再输入）
+    const filtered = select({ message: 'q', options, filterable: true })
+    for (const ch of 'glm') key(ch, ch)
+    key('', 'return')
+    assert.equal(await filtered, 'glm')
+
+    // 敲错 → 退格删掉 → 回到全量，回车取第一条
+    const erased = select({ message: 'q', options, filterable: true })
+    for (const ch of 'zzz') key(ch, ch)
+    for (let i = 0; i < 3; i++) key('', 'backspace')
+    key('', 'return')
+    assert.equal(await erased, 'cn')
+
+    // Esc 清空查询串
+    const escaped = select({ message: 'q', options, filterable: true })
+    key('p', 'p')
+    key('', 'escape')
+    key('', 'down')
+    key('', 'return')
+    assert.equal(await escaped, 'oc')
+  } finally {
+    setStdinForTest(null)
+  }
+})
+
+test('列表筛选：上百条里照样能筛到窗口外的那一条', async () => {
+  const { PassThrough } = await import('node:stream')
+  const { select, setStdinForTest } = await import('../src/prompt.mjs')
+  const fake = new PassThrough()
+  fake.isTTY = true
+  fake.setRawMode = () => {}
+  setStdinForTest(fake)
+  try {
+    // 143 个模型那种规模：目标在很后面，靠打字筛到它
+    const options = Array.from({ length: 143 }, (_, i) => ({ label: `oc/model-${i + 1}`, value: i + 1 }))
+    const pending = select({ message: 'q', options, filterable: true })
+    for (const ch of 'model-137') fake.emit('keypress', ch, { name: ch })
+    fake.emit('keypress', '', { name: 'return' })
+    assert.equal(await pending, 137)
+  } finally {
+    setStdinForTest(null)
+  }
+})

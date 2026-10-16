@@ -187,41 +187,96 @@ export async function menu({ title, groups }) {
  * 否则立即选中 —— 5 个选项按 `1` 直接选中，13 个选项按 `1` 先移动光标、
  * 再按 `3` 得到第 13 个，或按 `1` 后回车选第 1 个。
  */
-export async function select({ message, options, initial = 0 }) {
+/** 选项的可搜索文本：标签、值与提示都算，省得用户猜该搜哪个字段。 */
+const searchTextOf = option => `${option.label ?? ''} ${option.value ?? ''} ${option.hint ?? ''}`.toLowerCase()
+
+/**
+ * 列表选择。
+ *
+ * `filterable: true` 时**直接敲字就筛**、边打边出结果（不用先选「筛选」再输入）：
+ * 可打印字符进查询串，退格删一个字，Esc 清空，↑↓ 在结果里移动，回车确认。
+ * 上百条的模型清单离了它没法用 —— 所以这一档里 `j`/`k` 是普通字符，不当方向键。
+ *
+ * 结果超过 `windowSize` 时只画光标附近那一段，并标出总条数：清单再长也不会把
+ * 屏幕刷掉。默认（`filterable: false`）保持原来的形态：全量列出 + 数字直选。
+ */
+export async function select({ message, options, initial = 0, filterable = false, windowSize = 12 }) {
   if (options.length === 0) throw new Error('select 需要至少一个选项')
-  let cursor = Math.min(Math.max(initial, 0), options.length - 1)
   // 光标不落在禁用项上：禁用项通常是「还没登录」这类，选下去只会再报一次错
-  while (options[cursor]?.disabled === true) cursor = (cursor + 1) % options.length
+  const firstEnabled = (list, from = 0) => {
+    if (list.length === 0) return 0
+    let index = Math.min(Math.max(from, 0), list.length - 1)
+    for (let step = 0; step < list.length && list[index]?.disabled === true; step++) index = (index + 1) % list.length
+    return index
+  }
+  let query = ''
+  let visible = options
+  let cursor = firstEnabled(options, initial)
   let typed = ''
-  const width = String(options.length).length
+  const numberWidth = String(options.length).length
   const done = (option, finish) => {
     finish(option.value)
     note(`${green('✔')} ${message} ${bold(option.label)}`)
     return true
   }
-  note(`${cyan('?')} ${message}  ${dim('↑↓ 选择，或直接按编号，回车确认')}`)
+  const applyQuery = () => {
+    const needle = query.trim().toLowerCase()
+    visible = needle === '' ? options : options.filter(option => searchTextOf(option).includes(needle))
+    cursor = firstEnabled(visible)
+  }
+  const hint = filterable ? '直接敲字筛选，↑↓ 选择，回车确认' : '↑↓ 选择，或直接按编号，回车确认'
+  note(`${cyan('?')} ${message}  ${dim(hint)}`)
   return await keyLoop({
     cleanupLines: clearLines,
-    render: () => options.map((option, index) => {
-      const active = index === cursor
-      const number = String(index + 1).padStart(width)
-      const text = `${number}. ${option.label}`
-      const pointer = active ? cyan('❯') : ' '
-      const hint = option.hint === undefined || option.hint === '' ? '' : `  ${dim(option.hint)}`
-      return `${pointer} ${option.disabled === true || !active ? dim(text) : text}${hint}`
-    }),
+    render: () => {
+      const lines = []
+      if (filterable) {
+        lines.push(query === ''
+          ? `  ${dim(`直接敲字筛选 · 共 ${options.length} 项`)}`
+          : `  ${cyan('筛选')} ${bold(query)}  ${dim(`${visible.length}/${options.length} 项`)}`)
+      }
+      if (visible.length === 0) {
+        lines.push(`  ${yellow('没有匹配项')}  ${dim('退格删字，Esc 清空')}`)
+        return lines
+      }
+      const size = filterable ? Math.min(windowSize, visible.length) : visible.length
+      const start = Math.min(Math.max(cursor - Math.floor(size / 2), 0), Math.max(0, visible.length - size))
+      for (let index = start; index < start + size; index++) {
+        const option = visible[index]
+        const active = index === cursor
+        const number = String(index + 1).padStart(String(visible.length).length)
+        const text = `${number}. ${option.label}`
+        const pointer = active ? cyan('❯') : ' '
+        const suffix = option.hint === undefined || option.hint === '' ? '' : `  ${dim(option.hint)}`
+        lines.push(`${pointer} ${option.disabled === true || !active ? dim(text) : text}${suffix}`)
+      }
+      if (start > 0 || start + size < visible.length) {
+        lines.push(dim(`  … 第 ${start + 1}-${start + size} 项，共 ${visible.length} 项（继续敲字缩小范围）`))
+      }
+      return lines
+    },
     onKey: (str, key, finish) => {
       const name = key.name
-      if (name === 'up' || str === 'k') { typed = ''; cursor = (cursor - 1 + options.length) % options.length }
-      else if (name === 'down' || str === 'j') { typed = ''; cursor = (cursor + 1) % options.length }
-      else if (name === 'backspace') typed = typed.slice(0, -1)
+      if (name === 'up') { typed = ''; cursor = (cursor - 1 + visible.length) % visible.length }
+      else if (name === 'down') { typed = ''; cursor = (cursor + 1) % visible.length }
+      else if (filterable && (name === 'backspace' || name === 'delete')) { query = query.slice(0, -1); applyQuery() }
+      else if (filterable && name === 'escape') { query = ''; applyQuery() }
       else if (name === 'return' || name === 'enter') {
-        const option = options[cursor]
-        if (option.disabled !== true) return done(option, finish)
-      } else if (/^\d$/.test(str)) {
+        const option = visible[cursor]
+        if (option !== undefined && option.disabled !== true) return done(option, finish)
+      } else if (filterable) {
+        // 可打印字符一律进查询串：模型 ID 里的字母、数字、点、横线都能搜
+        if (typeof str === 'string' && str.length > 0 && key.ctrl !== true && key.meta !== true && str >= ' ') {
+          query += str
+          applyQuery()
+        }
+      } else if (name === 'left' || str === 'k') { typed = ''; cursor = (cursor - 1 + visible.length) % visible.length }
+      else if (name === 'right' || str === 'j') { typed = ''; cursor = (cursor + 1) % visible.length }
+      else if (name === 'backspace') typed = typed.slice(0, -1)
+      else if (/^\d$/.test(str)) {
         const next = typed + str
         const index = Number(next) - 1
-        if (index < options.length && next.length <= width) {
+        if (index < options.length && next.length <= numberWidth) {
           typed = next
           cursor = index
           if (Number(next) * 10 > options.length) {
