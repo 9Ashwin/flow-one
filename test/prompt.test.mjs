@@ -142,3 +142,12 @@ test('列表筛选：上百条里照样能筛到窗口外的那一条', async ()
     setStdinForTest(null)
   }
 })
+
+test('显示宽度：颜色码不算宽度，中日韩字符算两列', async () => {
+  const { displayWidth, gray, cyan } = await import('../src/prompt.mjs')
+  assert.equal(displayWidth('abc'), 3)
+  assert.equal(displayWidth('中文'), 4)
+  // 颜色码是零宽：算错会把 box 的边框撑歪（真实踩过，摘要框右边多出一截）
+  assert.equal(displayWidth(gray('中文')), 4)
+  assert.equal(displayWidth(`${cyan('a')}${gray('中')}b`), 4)
+})

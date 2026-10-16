@@ -56,9 +56,12 @@ function clearLines(count) {
 // ── 宽度计算 ────────────────────────────────────────────────────────────────
 
 /** 中日韩字符与全角标点占两列；画框与对齐都靠它，否则中文标题会把框撑歪。 */
+/** 终端颜色码：算宽度前必须先剥掉，否则它会按可见字符计数，把边框撑歪。 */
+const ANSI_PATTERN = /\x1b\[[0-9;]*[A-Za-z]/g
+
 export function displayWidth(text) {
   let width = 0
-  for (const char of String(text)) {
+  for (const char of String(text).replace(ANSI_PATTERN, '')) {
     width += /[\u1100-\u115F\u2E80-\uA4CF\uAC00-\uD7A3\uF900-\uFAFF\uFE30-\uFE6F\uFF00-\uFF60\uFFE0-\uFFE6]/.test(char) ? 2 : 1
   }
   return width

@@ -131,7 +131,11 @@ FreeTierError: OpenCode's free tier can only be used from within OpenCode.
 
 工具名冲突由本桥抹平：Claude Code 自带的 `Bash` / `Read` 出站时改小写、响应里改回
 原名；它没声明的（通常是 `glob` / `grep`）补一个桩，并把模型对桩的调用**整条丢弃** ——
-那是 Claude Code 执行不了的工具名。`big-pickle` 等 `-free` 结尾的模型同样可用；
+那是 Claude Code 执行不了的工具名。
+
+**这两条门禁的完整事实、证据与复验方式在 [docs/gates.md](docs/gates.md)**；
+`ccb doctor` 会把它们**逐项重推一遍**（先验完整形状，再逐项去掉一个要件确认它确实
+还是必填），上游放松或收紧都会当场显形 —— 不用等用户来提「用不了」。`big-pickle` 等 `-free` 结尾的模型同样可用；
 不带 `-free` 的（`deepseek-v4.1-flash`、`deepseek-v4-pro` 等）属于 $10/月的
 OpenCode Go 订阅，走了会报 `AuthError`。
 
@@ -143,6 +147,7 @@ OpenCode Go 订阅，走了会报 `AuthError`。
 | --- | --- |
 | `ccb` | 终端里跑进菜单；无 TTY（systemd / 管道）直接起服务 |
 | `switch` | 只换模型（菜单里的「切换模型」） |
+| `doctor` | 自检：配置 / 登录 / 两条门禁（会真发几个请求） |
 | `setup` / `--setup` | 交互式一键配置 |
 | `uninstall` / `--uninstall` | 还原 Claude Code 配置并卸载后台服务 |
 | `login [cn\|intl]` | 登录；不带参数两条产品线都登 |
@@ -159,7 +164,7 @@ node cli.mjs --mode gateway --upstream http://127.0.0.1:8326 \
 | 选项 | 环境变量 | 默认值 | 说明 |
 | --- | --- | --- | --- |
 | `--mode` | `BRIDGE_MODE` | `direct` | `direct` 直连腾讯产品 / `gateway` 转发给上游 |
-| `--product` | `BRIDGE_PRODUCTS` | `cn,intl` | 挂载哪几条产品线，可重复 |
+| `--product` | `BRIDGE_PRODUCTS` | `cn,intl,oc` | 挂载哪几个来源；一键配置是**叠加**写它的，可重复 |
 | `--host` | `BRIDGE_HOST` | `127.0.0.1` | 监听地址 |
 | `--port` | `BRIDGE_PORT` | `8788` | 监听端口 |
 | `--model` | `BRIDGE_MODEL` | 直连为空 / 网关为 `workbuddy/deepseek-v4.1-flash` | 兜底模型 ID |
@@ -282,7 +287,8 @@ message_delta → message_stop` 成帧，工具参数走 `input_json_delta`，
 ## 测试
 
 ```bash
-node --test
+node --test        # 全部离线，不需要网络与账号
+ccb doctor         # 唯一会真发请求的检查（两条门禁 + 本地配置）
 ```
 
 33 条用例，全部离线：翻译层纯函数、网关模式端到端（假上游 SSE）、直连模式登录轮询

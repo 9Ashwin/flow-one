@@ -14,7 +14,7 @@ import { productByName } from './src/products.mjs'
 import { createDirectUpstream, createGatewayUpstream } from './src/upstreams.mjs'
 import { createBridgeServer } from './src/server.mjs'
 import { isInteractive, note, style } from './src/prompt.mjs'
-import { mainMenu, setupWizard, statusFlow, switchModel, uninstallFlow } from './src/wizard.mjs'
+import { doctorFlow, mainMenu, setupWizard, statusFlow, switchModel, uninstallFlow } from './src/wizard.mjs'
 
 function makeLogger(quiet) {
   return message => { if (!quiet) process.stdout.write(`${message}\n`) }
@@ -140,6 +140,7 @@ async function main() {
   if (command === 'setup') return await setupWizard()
   if (command === 'uninstall') return await uninstallFlow()
   if (command === 'switch') return await switchModel()
+  if (command === 'doctor') return await doctorFlow()
   if (command === 'login') return await commandLogin(config, commandArgs, log)
   if (command === 'status') return await commandStatus(config, log)
   if (command === 'models') return await commandModels(config, log)

@@ -20,6 +20,7 @@ import process from 'node:process'
 import { CN, INTL } from './products.mjs'
 import { OPENCODE } from './opencode.mjs'
 import { SOURCES, needsLogin, sourceByName } from './sources.mjs'
+import { credentialChecks, localIssues, localSnapshot, probeOpencodeGate, probeTencentFingerprint } from './doctor.mjs'
 import { login, credentialStatus } from './auth.mjs'
 import { createDirectUpstream, createGatewayUpstream } from './upstreams.mjs'
 import { credentialFile } from './config.mjs'
@@ -504,6 +505,93 @@ export async function loginFlow() {
   return 0
 }
 
+/**
+ * 自检。
+ *
+ * 功能内核压在两条别人家的规则上（腾讯的内容风控字面量、OpenCode 的免费档形状门禁），
+ * 它们都可能变。这里不只查「活没活着」，而是**主动重推一遍门禁**并把每一项的判定
+ * 打出来 —— 上游一收紧，用户自己就能看到是哪一条失效。
+ */
+export async function doctorFlow() {
+  heading('自检')
+
+  section('配置与服务')
+  const snapshot = localSnapshot()
+  note(`  ${gray(snapshot.settingsFile)}`)
+  const url = snapshot.settings?.env?.ANTHROPIC_BASE_URL
+  const port = typeof url === 'string' ? Number(/:([0-9]+)\s*$/.exec(url)?.[1]) : undefined
+  const healthOk = snapshot.service.installed && Number.isFinite(port) ? (await probeBridge(port)) !== undefined : false
+  const { issues, ok } = localIssues({ ...snapshot, healthOk })
+  for (const text of ok) success(text)
+  for (const issue of issues) {
+    if (issue.level === 'fail') fail(issue.text)
+    else warn(issue.text)
+    if (issue.fix !== undefined) note(`  ${dim(`→ ${issue.fix}`)}`)
+  }
+  if (ok.length === 0 && issues.length === 0) warn('没读到任何配置，可能还没配过')
+
+  blank()
+  section('登录')
+  for (const row of credentialChecks()) {
+    if (row.ok) success(`${row.label} ${row.text}`)
+    else fail(`${row.label} ${row.text}`)
+    if (row.fix !== undefined) note(`  ${dim(`→ ${row.fix}`)}`)
+  }
+
+  blank()
+  section('腾讯内容风控（真发一次最小请求）')
+  note(dim('  被拦的表现是 400 + code 11128；额度受限不算门禁问题'))
+  let blocked = false
+  for (const source of SOURCES) {
+    if (!needsLogin(source)) continue
+    const status = credentialStatus(source)
+    if (!status.loggedIn) {
+      note(`  ${gray(`${source.label} 未登录，跳过`)}`)
+      continue
+    }
+    const spin = spinner(`探测 ${source.label}…`)
+    const result = await probeTencentFingerprint(source, { log: () => {} })
+    spin.stop()
+    if (result.ok) success(`${source.label} 通过（改写器生效）`)
+    else if (result.limited) warn(`${source.label} 额度/频率受限，本次无法验证（不是门禁问题）`)
+    else if (result.blocked) {
+      blocked = true
+      fail(`${source.label} 被内容风控拦下：${result.message}`)
+    } else fail(`${source.label} 探测失败：${result.message}`)
+  }
+
+  blank()
+  section('OpenCode 免费档门禁（重推一遍）')
+  note(dim('  完整形状应 200；逐项去掉一个要件，应被 403 拒掉'))
+  const gateSpin = spinner('探测中…')
+  const gate = await probeOpencodeGate()
+  gateSpin.stop()
+  for (const row of gate.rows) {
+    if (row.verdict === 'pass') success(`${row.label} → ${row.status}${row.errorType === undefined ? '' : ` ${row.errorType}`}`)
+    else if (row.verdict === 'relaxed') note(`  ${yellow('○')} ${row.label} → ${row.status} ${gray('（这一条已不再是必填项，上游放松了）')}`)
+    else if (row.verdict === 'fail' && gate.inconclusive === true) warn(`${row.label} → ${row.status || '连不上'} ${row.message ?? ''}`)
+    else fail(`${row.label} → ${row.status} ${row.errorType ?? ''} ${row.message ?? ''}`)
+  }
+  if (gate.tightened === true) {
+    fail('完整形状已被拒 —— 上游收紧了免费档门禁')
+    note(`  ${dim('规则与实测记录见 docs/gates.md，改完用 `ccb doctor` 复验')}`)
+  } else if (gate.inconclusive === true) {
+    warn('没能判定门禁状态（网络或限流），稍后再试')
+  } else {
+    success('免费档门禁仍然成立')
+  }
+
+  blank()
+  const verdict = issues.some(issue => issue.level === 'fail') || blocked || gate.tightened === true
+  box([
+    verdict ? '自检发现问题（见上）' : '自检通过',
+    `${gray('门禁')}  ${gate.tightened === true ? '免费档形状已失效' : gate.inconclusive === true ? '无法判定' : '仍然成立'}${blocked ? ' / 腾讯风控拦下了请求' : ''}`,
+    `${gray('配置')}  ${issues.filter(issue => issue.level === 'fail').length} 项失败 / ${issues.length} 项提示`,
+  ], { color: verdict ? yellow : green })
+  blank()
+  return verdict ? 1 : 0
+}
+
 // ── 主菜单 ──────────────────────────────────────────────────────────────────
 
 /** 不给参数又是在终端里跑时进这里。返回 'serve' 表示要继续起服务。 */
@@ -525,6 +613,7 @@ export async function mainMenu() {
           title: '维护',
           items: [
             { key: '4', label: '重新登录（换账号）', hint: '浏览器授权' },
+            { key: '5', label: '自检', hint: '配置 / 登录 / 两条门禁，会真发请求' },
             { key: '0', label: '还原配置', hint: '移除本工具写入的键并卸载后台服务' },
             { key: 'Q', label: '退出', hint: '', danger: true },
           ],

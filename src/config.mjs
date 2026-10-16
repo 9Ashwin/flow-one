@@ -41,7 +41,7 @@ export const DEFAULTS = {
 /** 网关模式下的默认模型：DSH 渠道网关里 WorkBuddy 国际版的常用模型。 */
 const GATEWAY_DEFAULT_MODEL = 'workbuddy/deepseek-v4.1-flash'
 
-const SUBCOMMANDS = new Set(['login', 'status', 'models', 'setup', 'uninstall', 'switch'])
+const SUBCOMMANDS = new Set(['login', 'status', 'models', 'setup', 'uninstall', 'switch', 'doctor'])
 
 /** 数据目录的位置住在 `home.mjs`（那里不 import 任何本项目模块，避免循环依赖）。 */
 export { bridgeHome, credentialFile }
@@ -70,6 +70,7 @@ export const USAGE = `claude-code-openai-bridge —— 让 Claude Code CLI 用�
   claude-code-bridge status             查看登录状态
   claude-code-bridge models             列出可用模型 ID
   claude-code-bridge switch             交互式换模型（改配置并重启服务）
+  claude-code-bridge doctor             自检：配置 / 登录 / 两条门禁（会真发请求）
   claude-code-bridge setup              交互式一键配置（登录 → 选模型 → 写配置 → 后台常驻）
   claude-code-bridge uninstall          还原本工具写过的配置并卸载后台服务
 
