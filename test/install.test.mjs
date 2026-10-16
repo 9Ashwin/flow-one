@@ -138,3 +138,20 @@ test('[1m] 后缀按真实窗口决定：200k 的模型不能登记成 1M', asyn
   const big = installClaudeSettings({ file, baseUrl: 'http://127.0.0.1:8788', apiKey: 'k', model: 'intl/deepseek-v4.1-flash', contextWindow: 1_000_000 })
   assert.equal(big.env.ANTHROPIC_MODEL, 'intl/deepseek-v4.1-flash[1m]')
 })
+
+test('服务代码路径解析：能看出服务跑的是哪份代码（全局快照 vs 当前仓库）', async () => {
+  const { cliPathFromServiceFile } = await import('../src/install.mjs')
+  // 真实形态：服务被全局安装的那份快照装上，于是「命令行有、服务里没有」
+  const snapshot = `<?xml version="1.0"?>
+<plist version="1.0"><dict>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/usr/local/bin/node</string>
+    <string>/Users/me/.nvm/lib/node_modules/claude-code-openai-bridge/cli.mjs</string>
+  </array>
+</dict></plist>`
+  assert.equal(cliPathFromServiceFile(snapshot, 'launchd'), '/Users/me/.nvm/lib/node_modules/claude-code-openai-bridge/cli.mjs')
+  assert.equal(cliPathFromServiceFile('[Service]\nExecStart=/usr/bin/node /opt/ccb/cli.mjs\n', 'systemd'), '/opt/ccb/cli.mjs')
+  assert.equal(cliPathFromServiceFile('', 'launchd'), undefined)
+  assert.equal(cliPathFromServiceFile('<plist></plist>', 'launchd'), undefined)
+})

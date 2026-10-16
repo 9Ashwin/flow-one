@@ -254,6 +254,45 @@ export function serviceState() {
 }
 
 /**
+ * 服务文件里真正被执行的**那份代码在哪**。
+ *
+ * 真实踩过：全局安装（`npm i -g` / 早期那份 npm link 拷贝）会把服务指向
+ * `…/lib/node_modules/claude-code-openai-bridge/cli.mjs`，那是一条**快照** ——
+ * 之后无论 `git pull` 还是改仓库，服务跑的都还是旧代码，而界面上完全看不出来
+ * （表现是「新功能在命令行有、服务里没有」，或「修好的指纹在服务里还报 400」）。
+ *
+ * 所以这里直接把服务文件解析出来，供 `status` 与调用方对比当前 CLI 的路径。
+ */
+/** 从服务文件内容里取出被执行的 CLI 路径（纯函数，便于离线断言）。 */
+export function cliPathFromServiceFile(text, kind) {
+  if (typeof text !== 'string' || text === '') return undefined
+  if (kind === 'launchd') {
+    const block = /<key>ProgramArguments<\/key>\s*<array>([\s\S]*?)<\/array>/.exec(text)?.[1]
+    if (block === undefined) return undefined
+    const args = [...block.matchAll(/<string>([\s\S]*?)<\/string>/g)].map(match => match[1])
+    return args.at(-1)
+  }
+  const exec = /^ExecStart=(.+)$/m.exec(text)?.[1]?.trim()
+  if (exec === undefined) return undefined
+  return exec.split(/\s+/).at(-1)
+}
+
+export function serviceCliPath() {
+  const { kind, path: file } = servicePaths()
+  if (file === '' || !fs.existsSync(file)) return undefined
+  try {
+    return cliPathFromServiceFile(fs.readFileSync(file, 'utf8'), kind)
+  } catch {
+    return undefined
+  }
+}
+
+/** 本进程正在跑的那份代码。与服务文件里的路径一致才说明「服务跑的就是你改的这份」。 */
+export function currentCliPath() {
+  return CLI_PATH
+}
+
+/**
  * 装成开机自启的后台服务；返回它实际做了什么，供界面如实展示。
  *
  * ⚠️ **重启路径必须等 bootout 落地**。`launchctl bootout` 是异步的，紧接着
@@ -273,7 +312,7 @@ export async function installService({ port, apiKey, env = {} }) {
     ? launchAgentPlist({ port, apiKey, env, logDir })
     : systemdUnit({ port, apiKey, env }), { mode: 0o600 })
   const state = readInstallState()
-  state.service = { kind, path: file, port, env }
+  state.service = { kind, path: file, port, env, cliPath: CLI_PATH }
   writeInstallState(state)
 
   const notes = []

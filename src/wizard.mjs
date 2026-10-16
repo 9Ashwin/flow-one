@@ -25,11 +25,11 @@ import { createDirectUpstream, createGatewayUpstream } from './upstreams.mjs'
 import { credentialFile } from './config.mjs'
 import {
   installClaudeSettings, installService, uninstallClaudeSettings, uninstallService,
-  serviceState, claudeSettingsPath, readInstallState,
+  serviceState, claudeSettingsPath, readInstallState, serviceCliPath, currentCliPath,
 } from './install.mjs'
 import {
   banner, blank, box, confirm, gray, green, heading, info, input, menu, note,
-  section, select, spinner, style, success, warn, fail, dim,
+  section, select, spinner, style, success, warn, fail, dim, yellow,
 } from './prompt.mjs'
 
 const DEFAULT_PORT = 8788
@@ -425,6 +425,14 @@ export async function statusFlow() {
   blank()
   note(`  服务      ${service.installed ? `已安装（${service.kind}）` : '未安装'} ${running === undefined ? gray('未在运行') : green(`运行中 ${port}`)}`)
   note(`  服务文件  ${gray(service.path === '' ? '-' : service.path)}`)
+  const runningCode = service.installed ? serviceCliPath() : undefined
+  if (runningCode !== undefined && runningCode !== currentCliPath()) {
+    // 这一条是真实踩过的坑：服务指向全局安装的快照，于是「命令行有、服务里没有」
+    note(`  服务代码  ${yellow(runningCode)}`)
+    warn('服务跑的不是当前这份代码（全局安装是一份快照）；`ccb setup` 重装一次即可对齐')
+  } else if (runningCode !== undefined) {
+    note(`  服务代码  ${gray(runningCode)}`)
+  }
   note(`  配置文件  ${gray(readInstallState().claudeSettings?.file ?? '本工具未写入过')}`)
   note(`  凭据文件  ${gray(credentialFile())}`)
   blank()

@@ -56,13 +56,42 @@ ccb               # 在终端里直接跑，进交互式菜单
 
 | | 直连模式（默认） | 网关模式 |
 | --- | --- | --- |
-| 谁负责登录 | **本工具自己**（国内版 / 国际版各登一次） | 上游负责，比如 [dsh-our-free-model](https://github.com/Ebony-Vinyl/dsh-our-free-model) |
+| 谁负责登录 | **本工具自己**；OpenCode 免费档连登录都不需要 | 上游负责，比如 [dsh-our-free-model](https://github.com/Ebony-Vinyl/dsh-our-free-model) |
 | 依赖 | 无 | 那个网关得在跑 |
-| 模型 ID | `cn/deepseek-v4.1-flash`、`intl/hy4-preview-f` | 上游的 ID，如 `workbuddy/deepseek-v4.1-flash` |
+| 模型 ID | `cn/deepseek-v4.1-flash`、`intl/hy4-preview-f`、`oc/deepseek-v4.1-flash-free` | 上游的 ID，如 `workbuddy/deepseek-v4.1-flash` |
 | 适合 | 只想装这一个工具 | 已经有一套网关 / 多上游混合 |
 
-一条产品线一个前缀，所以**一个进程可以同时服务国内版与国际版**，换个
-`ANTHROPIC_MODEL` 就换了产品线。
+一个来源一个前缀，所以**一个进程能同时挂三条线**，换个 `ANTHROPIC_MODEL` 就换了来源：
+
+| 前缀 | 来源 | 登录 |
+| --- | --- | --- |
+| `cn/` | WorkBuddy 国内版（CodeBuddy，`copilot.tencent.com`） | 要 |
+| `intl/` | WorkBuddy 国际版（`www.workbuddy.ai`） | 要 |
+| `oc/` | **OpenCode 免费档**（`opencode.ai/inference`） | **不要**，装完即用 |
+
+### OpenCode 免费档（`oc/`）
+
+`oc/deepseek-v4.1-flash-free` 就是官方免费档里的 DeepSeek V4.1 Flash，无需账号。
+但它**不是「换个 base URL」**：直接发标准 OpenAI 请求会被
+
+```
+FreeTierError: OpenCode's free tier can only be used from within OpenCode.
+```
+
+拒掉 —— 它按**报文形状**判断调用方。实测（2026-10-16）凑齐这三样才 200：
+
+- 5 个 `x-opencode-*` 头：`project`（40 hex）、`session` **与** `session-id`（同一值）、
+  `request`、`client: cli`，外加 `User-Agent: opencode/<版本>`；
+- 会话 id 形状 `ses_` + 12 位小写 hex + **14** 位 base62（尾段总长 26；误当成
+  「随机 26 位」会变 38 字符而一律 403）；
+- 请求体 `stream: true`，且 `tools` 里必须有 `bash` / `glob` / `grep` / `read`
+  四个小写 function 工具。
+
+工具名冲突由本桥抹平：Claude Code 自带的 `Bash` / `Read` 出站时改小写、响应里改回
+原名；它没声明的（通常是 `glob` / `grep`）补一个桩，并把模型对桩的调用**整条丢弃** ——
+那是 Claude Code 执行不了的工具名。`big-pickle` 等 `-free` 结尾的模型同样可用；
+不带 `-free` 的（`deepseek-v4.1-flash`、`deepseek-v4-pro` 等）属于 $10/月的
+OpenCode Go 订阅，走了会报 `AuthError`。
 
 ## 命令行
 
@@ -121,10 +150,14 @@ node cli.mjs --mode gateway --upstream http://127.0.0.1:8326 \
 
 ### 模型 ID 后面的 `[1m]`
 
-`[1m]` 是 Claude Code 自己的标记，表示「这个模型按 1M 上下文登记」。不带它，
-未识别的网关模型会按 200k 压缩上下文，启动时还会警告一句。向导写的是
-`workbuddy/deepseek-v4.1-flash[1m]` —— Claude Code 发请求前会把后缀剥掉，
-所以上游收到的是干净的 ID。
+`[1m]` 是 Claude Code 自己的标记，表示「这个模型按 1M 上下文登记」。
+**本工具按模型真实窗口决定加不加**：超过 200k 才加，未知就不加
+（Claude Code 对未识别 ID 的默认假设正是 200k）。
+
+这不是洁癖：OpenCode 免费档的 `deepseek-v4.1-flash-free` 实测窗口是 **200k**
+（能力数据取自 models.dev，官方 `/v1/models` 不含任何能力字段），给它登记 1M
+会让 Claude Code 到 1M 才压缩上下文，然后撞上模型真实上限。腾讯那两条线的窗口
+确实是 1M，所以照样带后缀。Claude Code 发请求前会把后缀剥掉，上游收到的是干净的 ID。
 
 ## 接口
 
@@ -195,6 +228,13 @@ message_delta → message_stop` 成帧，工具参数走 `input_json_delta`，
   官方给的消除办法是把 `modelOverrides` 的键写成 Claude 的模型 ID —— 那等于让
   Claude Code 以为自己在跑 Opus，会连带套用那个模型的窗口与行为，不值得为一行
   stderr 噪声付这个代价。交互式会话里这行不打印，只进调试日志。
+- **OpenCode 免费档靠报文形状过门禁**，官方收紧形状就可能失效（那时会明确报
+  `FreeTierError`，不会静默降级）。它也只覆盖免费档，`-free` 结尾以外的模型要
+  OpenCode Go 订阅。
+- **服务跑的是「哪份代码」要看安装来源**：用全局安装（`npm i -g`）装的，服务指向
+  `…/lib/node_modules/…/cli.mjs` 这份**快照**，之后 `git pull` 与改仓库都不会生效
+  （表现是「命令行有新功能、服务里没有」）。`ccb status` 会把服务代码路径打出来，
+  与当前命令不一致时会直接警告并提示重装。
 - 只覆盖对话与模型目录。**每日签到领积分不在范围内**。
 
 ## 测试
@@ -203,10 +243,11 @@ message_delta → message_stop` 成帧，工具参数走 `input_json_delta`，
 node --test
 ```
 
-26 条用例，全部离线：翻译层纯函数、网关模式端到端（假上游 SSE）、直连模式登录轮询
+33 条用例，全部离线：翻译层纯函数、网关模式端到端（假上游 SSE）、直连模式登录轮询
 （含 `11217` 尚未就绪）、模型目录合并与过滤、流内策略拦截如实上报、指纹改写、
 安装器的「合并而非覆盖 / 写前备份 / 只还原自己写的键 / 服务文件内容」，
-以及终端界面的按键与编号选择。
+终端界面的按键与编号选择，以及 OpenCode 免费档的门禁形状（会话/请求 id 位数、
+门禁工具补齐与改名、桩调用丢弃、端到端不落到客户端）。
 
 ⚠️ 界面用例单独放在 `test/prompt.test.mjs`，并且**不碰全局 `process.stdin`**：
 `src/prompt.mjs` 留了一个 `setStdinForTest()` 接缝给它们换输入流。早先是直接改
@@ -223,8 +264,9 @@ done
 ```
 
 真机验证过（2026-10，本机）：真 `claude` CLI（2.1.301）经本桥拿到回答；
-网关模式对真实上游的非流式 / 流式 / 工具往返；两条产品线的 `/v2/plugin/auth/state` 取址；
-launchd 自启与 `/health`。
+网关模式对真实上游的非流式 / 流式 / 工具往返；两条腾讯产品线的
+`/v2/plugin/auth/state` 取址；OpenCode 免费档的非流式 / 流式 / 工具往返
+（模型发 `bash`、本桥交回 `Bash`）；launchd 自启与 `/health`。
 
 ## 免责声明
 
