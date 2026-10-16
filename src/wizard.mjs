@@ -19,7 +19,7 @@ import crypto from 'node:crypto'
 import process from 'node:process'
 import { CN, INTL } from './products.mjs'
 import { OPENCODE } from './opencode.mjs'
-import { SOURCES, needsLogin } from './sources.mjs'
+import { SOURCES, needsLogin, sourceByName } from './sources.mjs'
 import { login, credentialStatus } from './auth.mjs'
 import { createDirectUpstream, createGatewayUpstream } from './upstreams.mjs'
 import { credentialFile } from './config.mjs'
@@ -29,7 +29,7 @@ import {
 } from './install.mjs'
 import {
   banner, blank, box, confirm, gray, green, heading, info, input, menu, note,
-  section, select, multiSelect, spinner, style, success, warn, fail, dim, yellow,
+  section, select, spinner, style, success, warn, fail, dim, yellow,
 } from './prompt.mjs'
 
 const DEFAULT_PORT = 8788
@@ -233,41 +233,46 @@ function rank(id) {
 
 // ── 一键配置 ────────────────────────────────────────────────────────────────
 
-/** 网关模式的哨兵值：它不是一条「来源」，但和三家直连在同一个列表里互斥。 */
+/** 网关模式的哨兵值：它不是一条「来源」，但和三家直连并列在同一个问题里。 */
 const GATEWAY = 'gateway'
+
+/**
+ * 这一次选的来源 + 已经在挂的来源 = 新的挂载清单。
+ *
+ * 一次只配一家，所以重复运行是**叠加**而不是覆盖：先配了国内版，再从菜单进来配
+ * OpenCode，结果是两家都挂着，而不是把国内版顶掉。
+ */
+function mountedSources(chosen) {
+  const recorded = readInstallState()?.service?.env?.BRIDGE_PRODUCTS
+  const current = typeof recorded === 'string' && recorded.trim() !== ''
+    ? recorded.split(',').map(name => sourceByName(name)).filter(source => source !== undefined)
+    : [...SOURCES]
+  if (chosen === undefined) return current.length > 0 ? current : [...SOURCES]
+  return current.includes(chosen) ? current : [...current, chosen]
+}
 
 export async function setupWizard() {
   heading('一键配置')
-  note(dim('  四步：接哪几家 → 登录 → 选模型 → 写配置并常驻'))
+  note(dim('  一次配一家：接哪一家 → 登录 → 选模型 → 写配置并常驻'))
+  note(dim('  想再挂一家，配完回菜单再选一次「一键配置」即可（不会顶掉先前的）'))
 
   blank()
-  section('第 1 步 · 接哪几家')
-  // 一步问完：一行一条来源，国内版与国际版各占一行（原来捆成「WorkBuddy 两条线」，
-  // 想只挑其中一条做不到），要哪些勾哪些。
-  const chosen = await multiSelect({
-    message: '接哪几家？',
-    initial: [CN, INTL, OPENCODE],
+  section('第 1 步 · 接哪一家')
+  const chosen = await select({
+    message: '接哪一家？',
     options: [
       { label: 'WorkBuddy 国内版（CodeBuddy）', hint: loggedInLabel(CN), value: CN },
       { label: 'WorkBuddy 国际版', hint: loggedInLabel(INTL), value: INTL },
       { label: 'OpenCode 免费档', hint: `${loggedInLabel(OPENCODE)}，免费模型`, value: OPENCODE },
-      { label: '转发给已有的 OpenAI 兼容网关', hint: '自建网关 / LiteLLM / Ollama（勾它就只走它）', value: GATEWAY },
+      { label: '转发给已有的 OpenAI 兼容网关', hint: '自建网关 / LiteLLM / Ollama', value: GATEWAY },
     ],
-    // 网关与三家直连互斥：勾了一边就把另一边取消，省得用户勾出一个说不清的组合
-    onToggle: (value, checked) => {
-      if (value === GATEWAY) {
-        for (const source of [CN, INTL, OPENCODE]) checked.delete(source)
-      } else {
-        checked.delete(GATEWAY)
-      }
-    },
   })
 
   blank()
   section('第 2 步 · 登录')
   let upstream
   const serviceEnv = {}
-  if (chosen.includes(GATEWAY)) {
+  if (chosen === GATEWAY) {
     const base = await input({
       message: '上游地址',
       initial: 'http://127.0.0.1:8326',
@@ -284,8 +289,10 @@ export async function setupWizard() {
     serviceEnv.UPSTREAM_BASE_URL = base.replace(/\/+$/, '')
     if (key !== '') serviceEnv.UPSTREAM_API_KEY = key
   } else {
-    await ensureLoggedIn(chosen)
-    upstream = createDirectUpstream({ products: chosen, credentialFile: credentialFile() }, { log: line => note(`  ${dim(line)}`) })
+    await ensureLoggedIn([chosen])
+    upstream = createDirectUpstream({ products: [chosen], credentialFile: credentialFile() }, { log: line => note(`  ${dim(line)}`) })
+    serviceEnv.BRIDGE_MODE = 'direct'
+    serviceEnv.BRIDGE_PRODUCTS = mountedSources(chosen).map(source => source.id).join(',')
   }
 
   let rows = []
@@ -350,15 +357,20 @@ export async function setupWizard() {
   }
 
   blank()
+  const mounted = chosen === GATEWAY
+    ? ['上游网关']
+    : mountedSources(chosen).map(source => `${source.id}（${source.label}）`)
   box([
     '配置完成',
+    `${gray('本次')}  ${chosen === GATEWAY ? '转发给已有网关' : `${chosen.id}（${chosen.label}）`}`,
     `${gray('模型')}  ${model}${picked.contextWindow === undefined ? '' : `  ${gray(`窗口 ${shortNumber(picked.contextWindow)}`)}`}`,
+    `${gray('已挂')}  ${mounted.join('、')}`,
     `${gray('监听')}  http://127.0.0.1:${port}`,
     `${gray('服务')}  ${wantsService ? (health === undefined ? '已安装' : '运行中') : running === undefined ? '未常驻' : '复用已有实例'}`,
   ], { color: green })
   blank()
   info(`现在直接在任意目录运行 ${style.bold('claude')} 即可`)
-  note(dim('  改模型：菜单里选「切换模型」   还原：菜单里选「还原配置」'))
+  note(dim('  再挂一家：菜单里再选一次「一键配置」   改模型：「切换模型」   还原：「还原配置」'))
   blank()
   return 0
 }
@@ -379,7 +391,8 @@ export async function switchModel() {
   const env = installed.service?.env ?? {}
   const upstream = env.BRIDGE_MODE === 'gateway'
     ? createGatewayUpstream({ upstream: env.UPSTREAM_BASE_URL ?? 'http://127.0.0.1:8326', upstreamKey: env.UPSTREAM_API_KEY ?? '' })
-    : createDirectUpstream({ products: SOURCES, credentialFile: credentialFile() }, { log: () => {} })
+    // 只列真正挂着的来源，别给出一个切过去必然找不到的模型
+    : createDirectUpstream({ products: mountedSources(), credentialFile: credentialFile() }, { log: () => {} })
 
   let rows = []
   try {
@@ -503,7 +516,7 @@ export async function mainMenu() {
       groups: [
         {
           items: [
-            { key: '1', label: '一键配置', hint: '接哪几家 → 选模型 → 写 Claude Code 配置 → 后台常驻' },
+            { key: '1', label: '一键配置', hint: '接哪一家 → 选模型 → 写 Claude Code 配置 → 后台常驻' },
             { key: '2', label: '切换模型', hint: '改完自动重启服务' },
             { key: '3', label: '查看状态', hint: '登录有效期 / 服务 / 文件位置' },
           ],
@@ -519,7 +532,7 @@ export async function mainMenu() {
       ],
     })
     if (choice === 'Q') return 0
-    if (choice === '1') return await setupWizard()
+    if (choice === '1') await setupWizard()
     if (choice === '2') await switchModel()
     if (choice === '3') await statusFlow()
     if (choice === '4') await loginFlow()
