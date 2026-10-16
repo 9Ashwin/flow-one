@@ -206,9 +206,19 @@ node --test
 安装器的「合并而非覆盖 / 写前备份 / 只还原自己写的键 / 服务文件内容」，
 以及终端界面的按键与编号选择。
 
-⚠️ 界面用例单独放在 `test/prompt.test.mjs`：它们会临时接管 `process.stdin`
-假装自己是 TTY，和别的用例同文件会干扰 node:test 的结果记账（实测：加一条这样
-的用例，整个文件的计数反而变少，日志里看不出异常）。
+⚠️ 界面用例单独放在 `test/prompt.test.mjs`，并且**不碰全局 `process.stdin`**：
+`src/prompt.mjs` 留了一个 `setStdinForTest()` 接缝给它们换输入流。早先是直接改
+`process.stdin`，结果是 node:test 的结果记账被搅乱 —— 往同一个文件里加一条这样的
+用例，整个文件的计数反而变少，日志里看不出异常。
+
+每个文件的「声明用例数」与「实际注册数」可以这样核对：
+
+```bash
+for f in test/*.test.mjs; do
+  printf '%-28s 声明 %s / 注册 %s\n' "$f" "$(grep -c '^test(' $f)" \
+    "$(node --test --test-reporter=tap $f 2>/dev/null | grep -oE '^# tests [0-9]+' | grep -oE '[0-9]+')"
+done
+```
 
 真机验证过（2026-10，本机）：真 `claude` CLI（2.1.301）经本桥拿到回答；
 网关模式对真实上游的非流式 / 流式 / 工具往返；两条产品线的 `/v2/plugin/auth/state` 取址；

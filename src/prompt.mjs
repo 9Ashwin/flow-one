@@ -33,6 +33,19 @@ export function isInteractive() {
   return Boolean(process.stdin.isTTY && process.stdout.isTTY)
 }
 
+/**
+ * 输入流接缝（**仅测试用**）。
+ *
+ * 用例需要「假装自己是 TTY 并逐键投喂」。早先的做法是直接改 `process.stdin`，
+ * 结果是 node:test 的结果记账被搅乱 —— 往同一个文件里加一条这样的用例，整个文件
+ * 的用例计数反而变少，日志里看不出任何异常。改成在这里换一根管子：谁都不碰全局。
+ */
+let stdinOverride = null
+export function setStdinForTest(stream) {
+  stdinOverride = stream
+}
+const stdinOf = () => stdinOverride ?? process.stdin
+
 function clearLines(count) {
   if (count <= 0) return
   process.stdout.write(`${ESC}${count}A`)
@@ -92,10 +105,10 @@ export function banner(subtitle, version = '') {
 
 /** 跑一个按键循环，把渲染交给 `render()`。收尾一定要恢复光标与 raw mode。 */
 function keyLoop({ render, onKey, cleanupLines }) {
-  const stdin = process.stdin
+  const stdin = stdinOf()
   readline.emitKeypressEvents(stdin)
   const wasRaw = stdin.isRaw
-  stdin.setRawMode(true)
+  stdin.setRawMode?.(true)
   stdin.resume()
   process.stdout.write(`${ESC}?25l`)
   let drawn = 0
@@ -109,7 +122,7 @@ function keyLoop({ render, onKey, cleanupLines }) {
     const restore = () => {
       stdin.removeListener('keypress', listener)
       process.stdout.write(`${ESC}?25h`)
-      if (!wasRaw) stdin.setRawMode(false)
+      if (!wasRaw) stdin.setRawMode?.(false)
       stdin.pause()
     }
     const finish = value => {
@@ -227,14 +240,14 @@ export async function confirm({ message, initial = true }) {
   const hint = initial ? 'Y/n' : 'y/N'
   process.stdout.write(`${cyan('?')} ${message} ${dim(`(${hint})`)} `)
   return await new Promise(resolve => {
-    const stdin = process.stdin
+    const stdin = stdinOf()
     readline.emitKeypressEvents(stdin)
     const wasRaw = stdin.isRaw
-    stdin.setRawMode(true)
+    stdin.setRawMode?.(true)
     stdin.resume()
     const done = value => {
       stdin.removeListener('keypress', listener)
-      if (!wasRaw) stdin.setRawMode(false)
+      if (!wasRaw) stdin.setRawMode?.(false)
       stdin.pause()
       process.stdout.write(`${value ? 'y' : 'n'}\n`)
       resolve(value)
@@ -242,7 +255,7 @@ export async function confirm({ message, initial = true }) {
     const listener = (str, key) => {
       if (key?.ctrl && key.name === 'c') {
         stdin.removeListener('keypress', listener)
-        if (!wasRaw) stdin.setRawMode(false)
+        if (!wasRaw) stdin.setRawMode?.(false)
         process.stdout.write(`\n${yellow('已取消')}\n`)
         process.exit(130)
       }
@@ -257,7 +270,7 @@ export async function confirm({ message, initial = true }) {
 /** 文本输入；`validate` 返回字符串表示不合法（作为提示重新问）。 */
 export async function input({ message, initial = '', validate }) {
   note(`${cyan('?')} ${message}${initial === '' ? '' : dim(` (${initial})`)}`)
-  const rl = readline.createInterface({ input: process.stdin, output: process.stdout, terminal: true })
+  const rl = readline.createInterface({ input: stdinOf(), output: process.stdout, terminal: true })
   for (;;) {
     const raw = String(await new Promise(resolve => rl.question(`${cyan('›')} `, resolve))).trim()
     const value = raw === '' ? initial : raw

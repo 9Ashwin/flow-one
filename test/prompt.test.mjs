@@ -10,79 +10,76 @@ import assert from 'node:assert/strict'
  * 所以界面用例与安装器用例分文件。
  */
 
-test('交互组件：方向键选择、回车确认，非 TTY 时明确拒绝', async () => {
-  const { isInteractive, select } = await import('../src/prompt.mjs')
-  assert.equal(isInteractive(), false, '测试进程没有 TTY')
-
-  // 造一个假 TTY：只要让 setRawMode/resume/pause 存在，按键就能被手动投喂。
-  const stdin = process.stdin
-  const original = { isTTY: stdin.isTTY, setRawMode: stdin.setRawMode, resume: stdin.resume, pause: stdin.pause }
-  stdin.isTTY = true
-  stdin.setRawMode = () => {}
-  stdin.resume = () => {}
-  stdin.pause = () => {}
+test('列表挑选：方向键与编号都能选（短清单按数字立即选中，长清单两位数）', async () => {
+  const { PassThrough } = await import('node:stream')
+  const { select, setStdinForTest } = await import('../src/prompt.mjs')
+  const fake = new PassThrough()
+  fake.isTTY = true
+  fake.setRawMode = () => {}   // 真 TTY 才有；测试流补一个
+  setStdinForTest(fake)
+  const key = (str, name) => fake.emit('keypress', str, { name })
   try {
-    const pending = select({
-      message: '选哪个？',
-      options: [{ label: 'A', value: 'a' }, { label: 'B', value: 'b' }, { label: 'C', value: 'c' }],
-    })
-    stdin.emit('keypress', '', { name: 'down' })
-    stdin.emit('keypress', '', { name: 'down' })
-    stdin.emit('keypress', '', { name: 'up' })
-    stdin.emit('keypress', '', { name: 'return' })
-    assert.equal(await pending, 'b', '两次下、一次上应落在 B')
-  } finally {
-    Object.assign(stdin, original)
-  }
-})
+    // 方向键：两次下、一次上 → B
+    const arrows = select({ message: 'q', options: ['A', 'B', 'C'].map(v => ({ label: v, value: v })) })
+    key('', 'down'); key('', 'down'); key('', 'up'); key('', 'return')
+    assert.equal(await arrows, 'B')
 
-test('菜单支持数字直选：短清单立即选中，长清单两位数', async () => {
-  const { select } = await import('../src/prompt.mjs')
-  const stdin = process.stdin
-  const original = { isTTY: stdin.isTTY, setRawMode: stdin.setRawMode, resume: stdin.resume, pause: stdin.pause }
-  stdin.isTTY = true
-  stdin.setRawMode = () => {}
-  stdin.resume = () => {}
-  stdin.pause = () => {}
-  try {
-    // 5 个选项：按 3 立即选中第 3 个
+    // 5 个选项：按 5 立即选中第 5 个
     const short = select({ message: 'q', options: ['a', 'b', 'c', 'd', 'e'].map(v => ({ label: v, value: v })) })
-    stdin.emit('keypress', '3', { name: '3' })
-    assert.equal(await short, 'c')
+    key('5', '5')
+    assert.equal(await short, 'e')
 
-    // 12 个选项：按 1 只移动光标，再按 2 才是第 12 个
+    // 12 个选项：按 1 只移动光标，再按 2 得到第 12 个
     const long = select({ message: 'q', options: Array.from({ length: 12 }, (_, i) => ({ label: `m${i + 1}`, value: i + 1 })) })
-    stdin.emit('keypress', '1', { name: '1' })
-    stdin.emit('keypress', '2', { name: '2' })
+    key('1', '1'); key('2', '2')
     assert.equal(await long, 12)
 
-    // 长清单里按一个数字后回车，选的是那一位
+    // 12 个选项：按 1 后回车选第 1 个
     const long2 = select({ message: 'q', options: Array.from({ length: 12 }, (_, i) => ({ label: `m${i + 1}`, value: i + 1 })) })
-    stdin.emit('keypress', '1', { name: '1' })
-    stdin.emit('keypress', '', { name: 'return' })
+    key('1', '1'); key('', 'return')
     assert.equal(await long2, 1)
   } finally {
-    Object.assign(stdin, original)
+    setStdinForTest(null)
   }
 })
 
 test('编号菜单：大小写都认，非法编号会重问', async () => {
   const { PassThrough } = await import('node:stream')
-  const { menu } = await import('../src/prompt.mjs')
+  const { menu, setStdinForTest } = await import('../src/prompt.mjs')
   const fake = new PassThrough()
   fake.isTTY = true
-  const descriptor = Object.getOwnPropertyDescriptor(process, 'stdin')
-  Object.defineProperty(process, 'stdin', { value: fake, configurable: true })
+  fake.setRawMode = () => {}   // 真 TTY 才有；测试流补一个
+  setStdinForTest(fake)
   try {
     const pending = menu({
       title: '请选择：',
       groups: [{ items: [{ key: '1', label: '甲' }, { key: 'Q', label: '退出', danger: true }] }],
     })
-    fake.write('x\n')   // 非法编号 → 必须重问而不是当成 Q
-    await new Promise(resolve => setTimeout(resolve, 30))
-    fake.write('q\n')   // 小写也要认
+    const feed = async line => { fake.write(`${line}\n`); await new Promise(resolve => setTimeout(resolve, 40)) }
+    await feed('x')   // 非法编号 → 必须重问，而不是当成 Q
+    await feed('q')   // 小写也要认
     assert.equal(await pending, 'Q')
   } finally {
-    if (descriptor !== undefined) Object.defineProperty(process, 'stdin', descriptor)
+    setStdinForTest(null)
+  }
+})
+
+test('主菜单闭环：选 3 看状态 → 回车返回 → Q 退出', async () => {
+  const { PassThrough } = await import('node:stream')
+  const { mainMenu } = await import('../src/wizard.mjs')
+  const { setStdinForTest } = await import('../src/prompt.mjs')
+  const fake = new PassThrough()
+  fake.isTTY = true
+  fake.setRawMode = () => {}   // 真 TTY 才有；测试流补一个
+  setStdinForTest(fake)
+  try {
+    const pending = mainMenu()
+    const feed = async (line, wait = 80) => { fake.write(`${line}\n`); await new Promise(resolve => setTimeout(resolve, wait)) }
+    await feed('3')   // 查看状态（没有服务在跑也算正常）
+    await feed('')    // 回车返回菜单
+    await feed('q')   // 退出
+    assert.equal(await pending, 0)
+  } finally {
+    setStdinForTest(null)
   }
 })
