@@ -37,6 +37,28 @@ OpenCode（免费档 / Go 套餐）。它同时服务两类使用者：**人**�
 判据不是「模型名前缀长什么样」，而是**这条来源是谁**：`Rewriter()` 为 nil 就是不
 改写。任何「按前缀猜是不是腾讯系」的旁路都算 bug。
 
+## 跨平台（macOS + Linux，两边都是第一公民）
+
+**新代码默认要能在 Linux 上跑**，不许出现「只有 macOS 能用」的路径。已知的分平台点：
+
+| 事项 | macOS | Linux |
+| --- | --- | --- |
+| 常驻 | launchd plist `~/Library/LaunchAgents/dev.claude-code-openai-bridge.plist`，`launchctl bootstrap/bootout/kickstart` | systemd user unit `~/.config/systemd/user/dev.claude-code-openai-bridge.service`，`systemctl --user enable --now` |
+| 打开浏览器授权页 | `open <url>` | `xdg-open <url>`（没有就回落到「打印链接让用户自己点」） |
+| TTY 判断 | `golang.org/x/term` 的 `IsTerminal`（两边一致） | 同左 |
+| 服务日志 | `~/.claude-code-openai-bridge/bridge.err.log` | `journalctl --user -u dev.claude-code-openai-bridge` |
+
+规矩：
+
+- 平台差异靠 **build tag 分文件**（`service_darwin.go` / `service_linux.go`）承载，
+  公共流程留在一个不带头文件里；不要在一堆 `if runtime.GOOS ==` 里散着写。
+- 路径一律 `filepath.Join`，数据目录用 `os.UserHomeDir()`（Linux 下同样成立），
+  不要写死 `/Users/...` 或依赖 `$HOME` 的字符串拼接。
+- 权限：凭据 0600、目录 0700 —— 两边都生效，别用 macOS 专有的 API。
+- **测试要两边都绿**：平台专有的断言放对应 `_darwin_test.go` / `_linux_test.go`，
+  公共用例不得依赖某一侧才有的命令（`launchctl` / `systemctl`）。
+- 不引入需要 cgo 或平台 SDK 的依赖。
+
 ## 代码落点
 
 | 需要 | 写在哪 | 规矩 |

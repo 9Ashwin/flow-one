@@ -105,7 +105,25 @@ Node 版在移植期间**留在仓库里当规格**（它就是行为定义）�
 - 交互式菜单（无 TTY 时直接起服务）：选项是**打印编号 + 输入编号**，不是方向键列表。
 - `doctor` 要能重推门禁（逐项去掉一个要件确认它仍必填）并把「风控拦截」与「额度受限」分开报。
 
-## 四、验收
+## 四、跨平台要求（macOS 与 Linux 都要能用）
+
+Linux 是一等目标，不是「顺便」。移植时容易漏的几处：
+
+1. **常驻服务**：`internal/service` 必须同时给 launchd 与 systemd 两条实现，
+   用 build tag 分文件（`service_darwin.go` / `service_linux.go`），公共流程共用。
+   Linux 侧：`~/.config/systemd/user/<label>.service` + `systemctl --user daemon-reload /
+   enable --now / is-active`；网络与重启策略写进 unit（`Restart=always`、`RestartSec=3`）。
+2. **打开浏览器**：macOS `open`、Linux `xdg-open`；两者都没有时**不要静默失败** ——
+   把授权链接打印出来让用户自己点（SSH 场景本来就是这样）。
+3. **路径与权限**：`filepath.Join` + `os.UserHomeDir()`；凭据 0600、目录 0700 两边一致。
+   不要出现 `/Users/` 之类的字面量。
+4. **doctor / status 的分平台提示**：日志路径（`bridge.err.log` vs `journalctl --user -u …`）、
+   服务未启动时的补救命令，都要按平台给。
+5. **CI**：Go 的门禁要跑 ubuntu 与 macos 两套（`go vet`、`gofmt -l`、`go test ./...`、`make build`）。
+6. **测试**：平台专有断言放 `_darwin_test.go` / `_linux_test.go`；公共用例不许调用
+   `launchctl` / `systemctl`。
+
+## 五、验收
 
 | 层次 | 标准 |
 | --- | --- |
