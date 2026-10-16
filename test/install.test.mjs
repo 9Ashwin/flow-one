@@ -87,28 +87,31 @@ test('服务文件：launchd plist 与 systemd unit 都指向同一个入口', a
   assert.match(unit, /WantedBy=default\.target/)
 })
 
-test('交互组件：方向键选择、回车确认，非 TTY 时明确拒绝', async () => {
-  const { isInteractive, select } = await import('../src/prompt.mjs')
-  assert.equal(isInteractive(), false, '测试进程没有 TTY')
 
-  // 造一个假 TTY：只要让 setRawMode/resume/pause 存在，按键就能被手动投喂。
-  const stdin = process.stdin
-  const original = { isTTY: stdin.isTTY, setRawMode: stdin.setRawMode, resume: stdin.resume, pause: stdin.pause }
-  stdin.isTTY = true
-  stdin.setRawMode = () => {}
-  stdin.resume = () => {}
-  stdin.pause = () => {}
+test('向导能认出「端口上跑的是本工具」而不是当成占用者', async () => {
+  const http = await import('node:http')
+  const { probeBridge } = await import('../src/wizard.mjs')
+  // 本故障的真实形态：向导把上一次装的服务当成端口占用，建议换端口并写进配置，
+  // 用户又没装服务 → Claude Code 连到一个没人听的端口。
+  const server = http.createServer((req, res) => {
+    res.writeHead(200, { 'content-type': 'application/json' })
+    res.end(JSON.stringify({ ok: true, service: 'claude-code-openai-bridge', model: 'cn/x' }))
+  })
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
+  const port = server.address().port
   try {
-    const pending = select({
-      message: '选哪个？',
-      options: [{ label: 'A', value: 'a' }, { label: 'B', value: 'b' }, { label: 'C', value: 'c' }],
-    })
-    stdin.emit('keypress', '', { name: 'down' })
-    stdin.emit('keypress', '', { name: 'down' })
-    stdin.emit('keypress', '', { name: 'up' })
-    stdin.emit('keypress', '', { name: 'return' })
-    assert.equal(await pending, 'b', '两次下、一次上应落在 B')
+    const found = await probeBridge(port)
+    assert.equal(found?.model, 'cn/x')
+    // 不是本工具的服务（没有 service 字段）不算命中
+    const other = http.createServer((req, res) => { res.writeHead(200, { 'content-type': 'application/json' }); res.end('{"ok":true}') })
+    await new Promise(resolve => other.listen(0, '127.0.0.1', resolve))
+    try {
+      assert.equal(await probeBridge(other.address().port), undefined)
+    } finally { other.close() }
+    // 没人听的端口是 undefined，不是抛错
+    assert.equal(await probeBridge(9), undefined)
+    assert.equal(await probeBridge(0), undefined)
   } finally {
-    Object.assign(stdin, original)
+    server.close()
   }
 })

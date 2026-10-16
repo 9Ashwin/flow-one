@@ -1,16 +1,19 @@
 /**
- * 交互式向导：一条命令把「登录 → 选模型 → 写 Claude Code 配置 → 后台常驻」跑完。
+ * 交互式界面：主菜单、一键配置、切换模型、状态、还原。
  *
- * 设计上的两个取舍：
+ * 形态对齐 [zcf](https://github.com/UfoMiao/zcf)：开机 banner → 分区编号清单 →
+ * 输入编号；每一步有标题，长操作有转圈，结束给一张摘要框。
  *
- * - **菜单不是万能的**。所有步骤都能用命令行参数完成（`--port`、`--model`……），
- *   向导只是把默认值和顺序摆出来。所以 CI、脚本、systemd 直接跑 `cli.mjs` 不受影响。
- * - **每一步都如实报告**。写哪个文件、备份到哪、服务有没有真的加载起来，都在屏幕上说清楚；
- *   失败时给出可直接复制粘贴的补救命令，而不是一句「配置失败」。
+ * 两个取舍：
+ * - **菜单只放常见的五件事**。其余能力（网关模式、指纹开关……）都在命令行参数里，
+ *   不往菜单里堆 —— 选项越多越没人看。
+ * - **每一步都如实报告**。写哪个文件、备份到哪、服务有没有真的起来，都在屏幕上
+ *   说清楚；失败时给出可直接复制粘贴的补救命令。
  *
  * @module src/wizard.mjs
  */
 
+import fs from 'node:fs'
 import net from 'node:net'
 import crypto from 'node:crypto'
 import process from 'node:process'
@@ -18,13 +21,26 @@ import { CN, INTL } from './products.mjs'
 import { login, credentialStatus } from './auth.mjs'
 import { createDirectUpstream, createGatewayUpstream } from './upstreams.mjs'
 import { credentialFile } from './config.mjs'
-import { installClaudeSettings, installService, uninstallClaudeSettings, uninstallService, serviceState, claudeSettingsPath, readInstallState } from './install.mjs'
-import { confirm, fail, heading, input, note, rule, select, style, success, warn } from './prompt.mjs'
+import {
+  installClaudeSettings, installService, uninstallClaudeSettings, uninstallService,
+  serviceState, claudeSettingsPath, readInstallState,
+} from './install.mjs'
+import {
+  banner, blank, box, confirm, gray, green, heading, info, input, menu, note,
+  section, select, spinner, style, success, warn, fail, dim,
+} from './prompt.mjs'
 
-const { dim, bold, cyan } = style
 const DEFAULT_PORT = 8788
-/** 面向 Claude Code 的默认候选：这几个是这台机器上实测跑通的。 */
+/** 面向 Claude Code 的推荐模型：这几个在本机实测跑通过。 */
 const PREFERRED_MODELS = ['deepseek-v4.1-flash', 'hy4-preview-f', 'deepseek-v4-flash', 'glm-5.3']
+
+function version() {
+  try {
+    return JSON.parse(fs.readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version ?? ''
+  } catch {
+    return ''
+  }
+}
 
 function shortNumber(value) {
   if (typeof value !== 'number' || !Number.isFinite(value)) return ''
@@ -33,8 +49,9 @@ function shortNumber(value) {
   return String(value)
 }
 
-function modelHint(row) {
+function modelHint(row, recommended = false) {
   const bits = []
+  if (recommended) bits.push('推荐')
   if (row.contextWindow !== undefined) bits.push(`窗口 ${shortNumber(row.contextWindow)}`)
   if (row.maxOutputTokens !== undefined) bits.push(`输出 ${shortNumber(row.maxOutputTokens)}`)
   if (Array.isArray(row.efforts) && row.efforts.length > 0) bits.push(`档位 ${row.efforts.join('/')}`)
@@ -52,15 +69,37 @@ async function portAvailable(port) {
   })
 }
 
-async function suggestPort() {
-  for (const port of [DEFAULT_PORT, DEFAULT_PORT + 1, DEFAULT_PORT + 2, 18788, 0]) {
-    if (port === 0) return 0
+/**
+ * 这个端口上是不是**本工具的桥**（而不是别的程序），是的话把它自报的配置带回来。
+ *
+ * 真实故障换来的：向导原来只问「端口空不空」，于是把**上一次装的服务**当成占用者，
+ * 建议改用 8789 并写进 Claude Code 配置；用户那次又没装后台服务，8789 上空无一物
+ * —— Claude Code 直接 `ECONNREFUSED`。
+ */
+export async function probeBridge(port) {
+  if (!Number.isInteger(port) || port < 1 || port > 65535) return undefined
+  try {
+    const response = await fetch(`http://127.0.0.1:${port}/health`, { signal: AbortSignal.timeout(1200) })
+    if (!response.ok) return undefined
+    const body = await response.json()
+    return body?.service === 'claude-code-openai-bridge' ? body : undefined
+  } catch {
+    return undefined
+  }
+}
+
+/** 端口决策：先复用已经在跑的本工具实例，再找第一个空闲端口。 */
+async function choosePort() {
+  const installed = readInstallState().service?.port
+  if (await probeBridge(installed) !== undefined) return installed
+  for (const port of [DEFAULT_PORT, DEFAULT_PORT + 1, DEFAULT_PORT + 2, 18788]) {
+    if (await probeBridge(port) !== undefined) return port
     if (await portAvailable(port)) return port
   }
   return 0
 }
 
-/** 健康检查：确认后台服务真的把端口监听起来了，而不是只写了个文件。 */
+/** 健康检查：确认服务真的把端口监听起来了，而不是只写了个文件。 */
 async function waitHealthy(base, timeoutMs = 12_000) {
   const deadline = Date.now() + timeoutMs
   while (Date.now() < deadline) {
@@ -73,59 +112,82 @@ async function waitHealthy(base, timeoutMs = 12_000) {
   return undefined
 }
 
-// ── 登录 ────────────────────────────────────────────────────────────────────
-
-function loginHint(product) {
-  const status = credentialStatus(product)
-  if (!status.loggedIn) return '未登录'
-  return status.nickname === '' ? '已登录' : `已登录 · ${status.nickname}`
+async function loadModels(upstream) {
+  const spin = spinner('读取模型清单…')
+  try {
+    return await upstream.loadModels()
+  } finally {
+    spin.stop()
+  }
 }
 
-/** 逐条产品线登录；已登录且用户不想重登的直接跳过。 */
+function currentSettings() {
+  try {
+    return JSON.parse(fs.readFileSync(claudeSettingsPath(), 'utf8'))
+  } catch {
+    return {}
+  }
+}
+
+function loggedInLabel(product) {
+  const status = credentialStatus(product)
+  if (!status.loggedIn) return `${product.id} 未登录`
+  return `${product.id} ${status.nickname === '' ? '已登录' : status.nickname}`
+}
+
+/** 菜单顶上那两行现状：不进子菜单也知道现在是什么状态。 */
+async function statusLine() {
+  const settings = currentSettings()
+  const model = settings.env?.ANTHROPIC_MODEL ?? ''
+  const port = Number(new URL(settings.env?.ANTHROPIC_BASE_URL ?? 'http://127.0.0.1:0').port)
+  const running = await probeBridge(port)
+  const service = serviceState()
+  const state = running !== undefined ? green(`运行中（${port}）`) : service.installed ? '已安装但没在跑' : '未运行'
+  note(`  ${gray('模型')} ${model === '' ? gray('未配置') : style.bold(model.replace('[1m]', ''))}   ${gray('服务')} ${state}`)
+  note(`  ${gray('账号')} ${gray(`${loggedInLabel(CN)} · ${loggedInLabel(INTL)}`)}`)
+}
+
+// ── 登录 ────────────────────────────────────────────────────────────────────
+
+/** 逐条产品线登录；已登录的直接跳过，除非 `force`。 */
 export async function ensureLoggedIn(products, { force = false } = {}) {
   for (const product of products) {
     const status = credentialStatus(product)
     if (status.loggedIn && !force) {
-      success(`${product.label}：${status.nickname === '' ? '已登录' : status.nickname}`)
+      success(`${product.label} 已登录${status.nickname === '' ? '' : `（${status.nickname}）`}`)
       continue
     }
     heading(`登录 ${product.label}`)
-    note(dim('  浏览器会打开授权页面；终端里也会打印链接，SSH 环境下直接复制粘贴即可。'))
+    note(dim('  浏览器会打开授权页；终端里也会打印链接，SSH 环境下复制粘贴即可。'))
     try {
       await login(product, { log: line => note(`  ${line}`) })
     } catch (error) {
       fail(error?.message ?? String(error))
-      if (!await confirm({ message: '换一条产品线继续？', initial: true })) throw error
-      continue
+      if (!await confirm({ message: '跳过这条产品线，继续？', initial: true })) throw error
     }
   }
 }
 
 // ── 选模型 ──────────────────────────────────────────────────────────────────
 
-/**
- * 从清单里挑模型。
- *
- * 网关模式动辄几十个模型，一屏放不下也没有滚动，所以给出「前 N 个 + 关键词筛选 +
- * 手动输入」三条路，而不是把 47 行全铺出来。
- */
-export async function pickModel(rows, { limit = 12 } = {}) {
+/** 从清单里挑模型；给出「前 N 个 + 关键词筛选 + 手动输入」三条路。 */
+export async function pickModel(rows, { limit = 10 } = {}) {
   const ranked = [...rows].sort((a, b) => rank(a.id) - rank(b.id))
   const shown = ranked.slice(0, limit)
-  const options = shown.map(row => ({
+  const options = shown.map((row, index) => ({
     label: row.id,
-    hint: modelHint(row),
+    hint: modelHint(row, index === 0 && rank(row.id) === 0),
     value: row.id,
   }))
   if (ranked.length > shown.length) {
-    options.push({ label: '⌕  输入关键词筛选…', hint: `还有 ${ranked.length - shown.length} 个`, value: '__filter__' })
+    options.push({ label: '输入关键词筛选…', hint: `还有 ${ranked.length - shown.length} 个`, value: '__filter__' })
   }
-  options.push({ label: '✎  手动输入模型 ID', hint: '适用于清单里没有的模型', value: '__manual__' })
+  options.push({ label: '手动输入模型 ID', hint: '清单里没有的模型', value: '__manual__' })
 
   const picked = await select({ message: '用哪个模型？', options })
   if (picked === '__manual__') {
     return await input({
-      message: '模型 ID（Gateway 模式形如 workbuddy/xxx，直连模式形如 cn/xxx）',
+      message: '模型 ID（直连形如 cn/xxx，网关形如 workbuddy/xxx）',
       initial: ranked[0]?.id ?? '',
       validate: value => (value === '' ? '不能为空' : undefined),
     })
@@ -139,13 +201,13 @@ export async function pickModel(rows, { limit = 12 } = {}) {
     }
     return await select({
       message: '用哪个模型？',
-      options: matched.map(row => ({ label: row.id, hint: modelHint(row), value: row.id })),
+      options: matched.map((row, index) => ({ label: row.id, hint: modelHint(row, index === 0), value: row.id })),
     })
   }
   return picked
 }
 
-/** 偏好模型排前面，其余保持远端顺序。 */
+/** 推荐模型排前面，其余保持远端顺序。 */
 function rank(id) {
   const bare = id.includes('/') ? id.slice(id.indexOf('/') + 1) : id
   const at = PREFERRED_MODELS.findIndex(preferred => bare === preferred)
@@ -155,29 +217,33 @@ function rank(id) {
 // ── 一键配置 ────────────────────────────────────────────────────────────────
 
 export async function setupWizard() {
-  heading('claude-code-openai-bridge · 一键配置')
+  heading('一键配置')
+  note(dim('  四步：选上游 → 选产品线并登录 → 选模型 → 写配置并常驻'))
 
+  blank()
+  section('第 1 步 · 上游')
   const mode = await select({
     message: '上游用哪种？',
     options: [
-      { label: '直连 WorkBuddy（国内版 / 国际版）', hint: '推荐：用自己账号的额度，本工具自己登录', value: 'direct' },
+      { label: '直连 WorkBuddy', hint: '推荐：用自己账号的额度，本工具自己登录', value: 'direct' },
       { label: '转发给已有的 OpenAI 兼容网关', hint: '如 dsh-our-free-model 的 8326、LiteLLM、Ollama', value: 'gateway' },
     ],
   })
 
+  blank()
+  section('第 2 步 · 产品线与登录')
   let upstream
-  /** 写进后台服务的环境：服务不带参数启动，模式与模型必须由环境说清楚。 */
   const serviceEnv = {}
   if (mode === 'direct') {
     const which = await select({
       message: '装哪几条产品线？',
       options: [
-        { label: '国内版 + 国际版', hint: `${loginHint(CN)} / ${loginHint(INTL)}`, value: [CN, INTL] },
-        { label: '只要国内版（CodeBuddy）', hint: loginHint(CN), value: [CN] },
-        { label: '只要国际版（WorkBuddy）', hint: loginHint(INTL), value: [INTL] },
+        { label: '国内版 + 国际版', hint: `${loggedInLabel(CN)} / ${loggedInLabel(INTL)}`, value: [CN, INTL] },
+        { label: '只要国内版（CodeBuddy）', hint: loggedInLabel(CN), value: [CN] },
+        { label: '只要国际版（WorkBuddy）', hint: loggedInLabel(INTL), value: [INTL] },
       ],
     })
-    await ensureLoggedIn(which, { force: false })
+    await ensureLoggedIn(which)
     upstream = createDirectUpstream({ products: which, credentialFile: credentialFile() }, { log: line => note(`  ${dim(line)}`) })
   } else {
     const base = await input({
@@ -197,127 +263,224 @@ export async function setupWizard() {
     if (key !== '') serviceEnv.UPSTREAM_API_KEY = key
   }
 
-  note(`\n${dim('读取模型清单……')}`)
   let rows = []
   try {
-    rows = await upstream.loadModels()
+    rows = await loadModels(upstream)
   } catch (error) {
     fail(`拿不到模型清单：${error?.message ?? error}`)
   }
   if (rows.length === 0) {
-    fail('没有可用模型，先检查登录或上游地址，再重新运行 --setup')
+    fail('没有可用模型。先检查登录或上游地址，再重新运行一键配置。')
     return 1
   }
   success(`${rows.length} 个模型可用`)
+
+  blank()
+  section('第 3 步 · 模型')
   const model = await pickModel(rows)
-
-  const port = await input({
-    message: '本机监听端口',
-    initial: String(await suggestPort()),
-    validate: value => {
-      const number = Number(value)
-      return Number.isInteger(number) && number >= 1 && number <= 65535 ? undefined : '端口必须是 1-65535 的整数'
-    },
-  })
   serviceEnv.BRIDGE_MODEL = model
+
+  blank()
+  section('第 4 步 · 写入并常驻')
+  // 端口不给选项：优先复用已在跑的本工具实例，否则取第一个空闲端口。
+  const port = await choosePort()
   const apiKey = crypto.randomBytes(24).toString('base64url')
-
-  heading('写入 Claude Code 配置')
   const settingsFile = claudeSettingsPath()
-  note(`  文件：${cyan(settingsFile)}`)
   const applied = installClaudeSettings({ file: settingsFile, baseUrl: `http://127.0.0.1:${port}`, apiKey, model })
-  if (applied.backup !== undefined) success(`已备份原文件：${dim(applied.backup)}`)
-  success(`已写入 ${Object.keys(applied.env).join('、')}`)
+  success(`已写入 ${settingsFile}`)
+  if (applied.backup !== undefined) note(`  ${gray(`原文件已备份：${applied.backup}`)}`)
 
-  heading('后台常驻')
-  const wantsService = await confirm({ message: '装成开机自启的后台服务？（不装的话每次要自己起）', initial: true })
+  const running = await probeBridge(port)
+  const wantsService = await confirm({ message: '装成开机自启的后台服务？', initial: true })
   let service
+  let health
   if (wantsService) {
-    service = await installService({ port: Number(port), apiKey, env: serviceEnv })
-    if (service.ok) success(`已安装（${service.kind}）：${dim(service.path)}`)
-    else {
+    service = await installService({ port, apiKey, env: serviceEnv })
+    if (service.ok) {
+      success(`后台服务已装（${service.kind}）`)
+      const spin = spinner('等待服务就绪…')
+      health = await waitHealthy(`http://127.0.0.1:${port}`)
+      spin.stop()
+      if (health === undefined) {
+        warn('12 秒内没等到 /health 应答。看日志：')
+        note(`  ${gray(service.kind === 'launchd' ? '~/.claude-code-openai-bridge/bridge.err.log' : 'journalctl --user -u dev.claude-code-openai-bridge')}`)
+      }
+    } else {
       fail(service.reason)
-      warn('可以先用前台方式跑：node cli.mjs')
+      warn(`先手动跑起来：BRIDGE_PORT=${port} BRIDGE_API_KEY=${apiKey} node cli.mjs`)
     }
+  } else if (running === undefined) {
+    // 配置已经指向这个端口，这里却没人听 —— 必须当场说清楚，
+    // 否则用户回到 Claude Code 只会看到 ECONNREFUSED。
+    fail(`端口 ${port} 上没有服务在跑，Claude Code 会连不上`)
+    warn(`先把桥跑起来：BRIDGE_PORT=${port} BRIDGE_API_KEY=${apiKey} node cli.mjs`)
+  } else if (running.model !== model) {
+    warn(`端口 ${port} 上已有服务在跑，但它钉的模型是 ${running.model}；要换成 ${model} 需要重装服务`)
   } else {
-    warn(`没装后台服务。需要时手动跑：BRIDGE_PORT=${port} BRIDGE_API_KEY=${apiKey} node cli.mjs`)
+    success(`复用端口 ${port} 上已在运行的服务`)
   }
 
-  if (service?.ok === true) {
-    note(`\n${dim('等待服务就绪……')}`)
-    const health = await waitHealthy(`http://127.0.0.1:${port}`)
-    if (health === undefined) {
-      warn('12 秒内没等到 /health 应答，看看日志：')
-      note(`  ${dim(readInstallState().service?.kind === 'launchd' ? `~/.claude-code-openai-bridge/bridge.err.log` : 'journalctl --user -u dev.claude-code-openai-bridge')}`)
-    } else success(`反代已在 http://127.0.0.1:${port} 运行`)
-  }
-
-  heading('完成')
-  note(`  模型：${bold(model)} ${dim('（按 1M 上下文登记）')}`)
-  note(`  现在直接在任意目录运行 ${bold('claude')} 即可。`)
-  note(dim('  改配置：重新运行 --setup；还原：--uninstall'))
-  rule()
+  blank()
+  box([
+    '配置完成',
+    `${gray('模型')}  ${model}`,
+    `${gray('监听')}  http://127.0.0.1:${port}`,
+    `${gray('服务')}  ${wantsService ? (health === undefined ? '已安装' : '运行中') : running === undefined ? '未常驻' : '复用已有实例'}`,
+  ], { color: green })
+  blank()
+  info(`现在直接在任意目录运行 ${style.bold('claude')} 即可`)
+  note(dim('  改模型：菜单里选「切换模型」   还原：菜单里选「还原配置」'))
+  blank()
   return 0
 }
 
-// ── 其它流程 ────────────────────────────────────────────────────────────────
+// ── 切换模型 ────────────────────────────────────────────────────────────────
 
-export async function loginFlow(products) {
-  await ensureLoggedIn(products, { force: true })
+/**
+ * 只换模型：配置文件与服务一起改。
+ *
+ * 服务是**不带参数启动**的，模型经环境变量传进去，所以必须重装一次才能生效。
+ */
+export async function switchModel() {
+  heading('切换模型')
+  const installed = readInstallState()
+  const settings = currentSettings()
+  const port = Number(new URL(settings.env?.ANTHROPIC_BASE_URL ?? `http://127.0.0.1:${DEFAULT_PORT}`).port)
+  const apiKey = settings.env?.ANTHROPIC_AUTH_TOKEN ?? crypto.randomBytes(24).toString('base64url')
+  const env = installed.service?.env ?? {}
+  const upstream = env.BRIDGE_MODE === 'gateway'
+    ? createGatewayUpstream({ upstream: env.UPSTREAM_BASE_URL ?? 'http://127.0.0.1:8326', upstreamKey: env.UPSTREAM_API_KEY ?? '' })
+    : createDirectUpstream({ products: [CN, INTL], credentialFile: credentialFile() }, { log: () => {} })
+
+  let rows = []
+  try {
+    rows = await loadModels(upstream)
+  } catch (error) {
+    fail(`拿不到模型清单：${error?.message ?? error}`)
+    return 1
+  }
+  if (rows.length === 0) {
+    fail('没有可用模型；先跑一次一键配置把登录或上游修好。')
+    return 1
+  }
+  const current = (settings.env?.ANTHROPIC_MODEL ?? '').replace(/\[[^\]]*\]$/, '')
+  const ranked = [...rows].sort((a, b) => rank(a.id) - rank(b.id))
+  // 只展示前 12 个，所以「当前模型」的下标要在**截断之后**的列表里算。
+  const shown = ranked.slice(0, 12)
+  const model = await select({
+    message: '换成哪个模型？',
+    initial: Math.max(0, shown.findIndex(row => row.id === current)),
+    options: shown.map((row, index) => ({ label: row.id, hint: modelHint(row, index === 0), value: row.id })),
+  })
+
+  installClaudeSettings({ file: claudeSettingsPath(), baseUrl: `http://127.0.0.1:${port}`, apiKey, model })
+  success(`配置已更新：${model}[1m]`)
+
+  if (installed.service?.path !== undefined && fs.existsSync(installed.service.path)) {
+    const service = await installService({ port, apiKey, env: { ...env, BRIDGE_MODEL: model } })
+    if (service.ok) {
+      const spin = spinner('重启服务…')
+      const health = await waitHealthy(`http://127.0.0.1:${port}`)
+      spin.stop()
+      if (health === undefined) warn('服务重启后 12 秒内没有应答，看看日志')
+      else success(`服务已在 ${port} 上按新模型运行`)
+    } else fail(service.reason)
+  } else {
+    warn('没有装后台服务：下次启动会用新模型；已经在跑的实例要手动重启')
+  }
+  blank()
   return 0
 }
+
+// ── 其它 ────────────────────────────────────────────────────────────────────
 
 export async function statusFlow() {
   heading('状态')
   for (const product of [CN, INTL]) {
     const status = credentialStatus(product)
-    const line = status.loggedIn
-      ? `${status.nickname === '' ? '已登录' : status.nickname}${status.expiresAt === undefined ? '' : ` · ${new Date(status.expiresAt).toLocaleString('zh-CN', { hour12: false })}`}`
-      : dim('未登录')
-    note(`  ${product.id.padEnd(5)} ${product.label}：${line}`)
+    if (!status.loggedIn) {
+      note(`  ${product.id.padEnd(5)} ${product.label}  ${gray('未登录')}`)
+      continue
+    }
+    const when = status.expiresAt === undefined ? '' : new Date(status.expiresAt).toLocaleString('zh-CN', { hour12: false })
+    note(`  ${product.id.padEnd(5)} ${product.label}  ${status.nickname === '' ? '已登录' : status.nickname}`)
+    note(`        ${gray(`${when}${status.refreshable ? ' · 可静默续期' : ''}`)}`)
   }
   const service = serviceState()
-  note(`  服务  ${service.installed ? `已安装（${service.kind}）` : '未安装'}${service.installed ? ` ${dim(service.path)}` : ''}`)
-  const state = readInstallState().claudeSettings
-  note(`  Claude Code 配置  ${state === undefined ? dim('本工具未写入过') : state.file}`)
-  rule()
+  const settings = currentSettings()
+  const port = Number(new URL(settings.env?.ANTHROPIC_BASE_URL ?? 'http://127.0.0.1:0').port)
+  const running = await probeBridge(port)
+  blank()
+  note(`  服务      ${service.installed ? `已安装（${service.kind}）` : '未安装'} ${running === undefined ? gray('未在运行') : green(`运行中 ${port}`)}`)
+  note(`  服务文件  ${gray(service.path === '' ? '-' : service.path)}`)
+  note(`  配置文件  ${gray(readInstallState().claudeSettings?.file ?? '本工具未写入过')}`)
+  note(`  凭据文件  ${gray(credentialFile())}`)
+  blank()
   return 0
 }
 
 export async function uninstallFlow() {
-  heading('还原')
+  heading('还原配置')
   const settings = uninstallClaudeSettings()
   if (settings.skipped === true) note(`  Claude Code 配置：${settings.reason}`)
-  else success(`已从 ${settings.file} 移除 ${settings.removed.length} 个键（备份见 ${settings.backup}）`)
+  else success(`已从 ${settings.file} 移除 ${settings.removed.length} 个键`)
+  if (settings.backup !== undefined) note(`  ${gray(`还原前的备份：${settings.backup}`)}`)
   const service = uninstallService()
   if (service.skipped === true) note(`  后台服务：${service.reason}`)
   else success(`已卸载后台服务（${service.kind}）`)
-  rule()
+  blank()
   return 0
 }
 
-/** 主菜单：不给参数又是在终端里跑时进这里。 */
+/** 重新登录 / 换账号。 */
+export async function loginFlow() {
+  heading('重新登录')
+  const which = await select({
+    message: '登录哪一条？',
+    options: [
+      { label: '两条都重新登录', hint: `${loggedInLabel(CN)} / ${loggedInLabel(INTL)}`, value: [CN, INTL] },
+      { label: '国内版（CodeBuddy）', hint: loggedInLabel(CN), value: [CN] },
+      { label: '国际版（WorkBuddy）', hint: loggedInLabel(INTL), value: [INTL] },
+    ],
+  })
+  await ensureLoggedIn(which, { force: true })
+  blank()
+  return 0
+}
+
+// ── 主菜单 ──────────────────────────────────────────────────────────────────
+
+/** 不给参数又是在终端里跑时进这里。返回 'serve' 表示要继续起服务。 */
 export async function mainMenu() {
   for (;;) {
-    heading('claude-code-openai-bridge')
-    const service = serviceState()
-    note(dim(`  凭据目录 ${readInstallState().claudeSettings?.file ?? '（未写入 Claude Code 配置）'}${service.installed ? `\n  后台服务 ${service.path}` : ''}`))
-    const action = await select({
-      message: '要做什么？',
-      options: [
-        { label: '一键配置', hint: '登录 → 选模型 → 写 Claude Code 配置 → 后台常驻', value: 'setup' },
-        { label: '启动反代', hint: '前台运行，Ctrl+C 退出', value: 'serve' },
-        { label: '登录 / 换账号', hint: '', value: 'login' },
-        { label: '查看状态', hint: '', value: 'status' },
-        { label: '还原本工具写过的配置', hint: '', value: 'uninstall' },
-        { label: '退出', hint: '', value: 'quit' },
+    banner('Claude Code ← WorkBuddy 本地反代', version())
+    await statusLine()
+    const choice = await menu({
+      title: '请选择要做什么：',
+      groups: [
+        {
+          items: [
+            { key: '1', label: '一键配置', hint: '登录 → 选模型 → 写 Claude Code 配置 → 后台常驻' },
+            { key: '2', label: '切换模型', hint: '改完自动重启服务' },
+            { key: '3', label: '查看状态', hint: '登录有效期 / 服务 / 文件位置' },
+          ],
+        },
+        {
+          title: '维护',
+          items: [
+            { key: '4', label: '重新登录（换账号）', hint: '浏览器授权' },
+            { key: '0', label: '还原配置', hint: '移除本工具写入的键并卸载后台服务' },
+            { key: 'Q', label: '退出', hint: '', danger: true },
+          ],
+        },
       ],
     })
-    if (action === 'quit') return 0
-    if (action === 'setup') return await setupWizard()
-    if (action === 'serve') return 'serve'
-    if (action === 'login') await loginFlow([CN, INTL])
-    if (action === 'status') await statusFlow()
-    if (action === 'uninstall') await uninstallFlow()
+    if (choice === 'Q') return 0
+    if (choice === '1') return await setupWizard()
+    if (choice === '2') await switchModel()
+    if (choice === '3') await statusFlow()
+    if (choice === '4') await loginFlow()
+    if (choice === '0') await uninstallFlow()
+    await input({ message: '按回车返回菜单' })
   }
 }

@@ -1,12 +1,13 @@
 /**
- * 零依赖交互组件。
+ * 终端界面组件（零依赖）。
  *
- * 只用 `node:readline` 的按键事件 + ANSI 转义序列，不引第三方提示库：这个项目的
- * 卖点之一是 `git clone` 完直接 `node cli.mjs` 就能跑，不该为了一个箭头菜单
- * 让人先 `npm install`。
+ * 形态对齐 [zcf](https://github.com/UfoMiao/zcf)：**开机 banner → 分区编号清单 →
+ * 输入编号**，而不是把一屏选项塞进方向键列表。清单用打印出来（不是 TUI 重绘），
+ * 所以在任何终端、任何 `| tee` 管道里都能看清；只有列表型挑选（模型清单）才用
+ * 方向键 + 编号的交互选择。
  *
- * 非 TTY（管道、CI、`node cli.mjs < /dev/null`）下 `isInteractive()` 为假，
- * 调用方应改走命令行参数，而不是在这里假装有人按键。
+ * 只用 `node:readline` 与 ANSI 转义序列，不引第三方库：这个项目的卖点之一是
+ * `git clone` 完直接 `node cli.mjs` 就能跑。
  *
  * @module src/prompt.mjs
  */
@@ -15,12 +16,18 @@ import readline from 'node:readline'
 import process from 'node:process'
 
 const ESC = '\x1b['
-const dim = text => `${ESC}2m${text}${ESC}22m`
-const cyan = text => `${ESC}36m${text}${ESC}39m`
-const green = text => `${ESC}32m${text}${ESC}39m`
-const yellow = text => `${ESC}33m${text}${ESC}39m`
+export const style = {
+  bold: text => `${ESC}1m${text}${ESC}22m`,
+  dim: text => `${ESC}2m${text}${ESC}22m`,
+  cyan: text => `${ESC}36m${text}${ESC}39m`,
+  green: text => `${ESC}32m${text}${ESC}39m`,
+  yellow: text => `${ESC}33m${text}${ESC}39m`,
+  red: text => `${ESC}31m${text}${ESC}39m`,
+  gray: text => `${ESC}90m${text}${ESC}39m`,
+}
 
-export const style = { dim, cyan, green, yellow, bold: text => `${ESC}1m${text}${ESC}22m` }
+/** 颜色助手也单独导出：调用方直接 `import { green }` 比每次写 `style.green` 顺手。 */
+export const { bold, dim, cyan, green, yellow, red, gray } = style
 
 export function isInteractive() {
   return Boolean(process.stdin.isTTY && process.stdout.isTTY)
@@ -33,12 +40,57 @@ function clearLines(count) {
   process.stdout.write(`${ESC}${count}A`)
 }
 
-/**
- * 跑一个按键循环，把渲染交给 `render(state)`。
- *
- * 收尾一定要恢复光标与 raw mode：漏掉任何一处，用户回到 shell 后终端会一直
- * 不显示光标、或者每敲一个键都冒出 `^[[A`。
- */
+// ── 宽度计算 ────────────────────────────────────────────────────────────────
+
+/** 中日韩字符与全角标点占两列；画框与对齐都靠它，否则中文标题会把框撑歪。 */
+export function displayWidth(text) {
+  let width = 0
+  for (const char of String(text)) {
+    width += /[\u1100-\u115F\u2E80-\uA4CF\uAC00-\uD7A3\uF900-\uFAFF\uFE30-\uFE6F\uFF00-\uFF60\uFFE0-\uFFE6]/.test(char) ? 2 : 1
+  }
+  return width
+}
+
+const pad = (text, width) => text + ' '.repeat(Math.max(0, width - displayWidth(text)))
+
+// ── 输出块 ──────────────────────────────────────────────────────────────────
+
+export const note = text => { process.stdout.write(`${text}\n`) }
+export const blank = () => { process.stdout.write('\n') }
+export const rule = (width = 46) => note(dim('─'.repeat(width)))
+export const heading = text => note(`\n${bold(text)}`)
+export const success = text => note(`${green('✔')} ${text}`)
+export const warn = text => note(`${yellow('!')} ${text}`)
+export const fail = text => note(`${red('✘')} ${text}`)
+export const info = text => note(`${cyan('›')} ${text}`)
+
+/** zcf 那种分区小标题：`──────── 维护 ────────`。 */
+export function section(title) {
+  note(`  ${dim(`──────── ${title} ────────`)}`)
+}
+
+/** 画一个框，内容按显示宽度对齐（中文占两列的账已经算过）。 */
+export function box(lines, { color = cyan } = {}) {
+  // 内部宽度 = 最长一行 + 左右各一个空格；正文按 (width-1) 补齐，
+  // 因为前面那个空格也算在内部宽度里。
+  const width = Math.max(...lines.map(line => displayWidth(line)), 0) + 2
+  note(color(`  ╭${'─'.repeat(width)}╮`))
+  for (const line of lines) note(`${color('  │')} ${pad(line, width - 1)}${color('│')}`)
+  note(color(`  ╰${'─'.repeat(width)}╯`))
+}
+
+/** 项目 banner：名字 + 版本 + 一句话说明，和 zcf 的开机块同一个位置。 */
+export function banner(subtitle, version = '') {
+  blank()
+  box([
+    `claude-code-openai-bridge${version === '' ? '' : `  ${version}`}`,
+    subtitle,
+  ])
+}
+
+// ── 交互 ────────────────────────────────────────────────────────────────────
+
+/** 跑一个按键循环，把渲染交给 `render()`。收尾一定要恢复光标与 raw mode。 */
 function keyLoop({ render, onKey, cleanupLines }) {
   const stdin = process.stdin
   readline.emitKeypressEvents(stdin)
@@ -54,29 +106,29 @@ function keyLoop({ render, onKey, cleanupLines }) {
     drawn = lines.length
   }
   return new Promise((resolve, reject) => {
-    const finish = value => {
+    const restore = () => {
       stdin.removeListener('keypress', listener)
       process.stdout.write(`${ESC}?25h`)
       if (!wasRaw) stdin.setRawMode(false)
       stdin.pause()
+    }
+    const finish = value => {
+      restore()
       cleanupLines?.(drawn)
       resolve(value)
     }
     const listener = (str, key) => {
       if (key?.ctrl && key.name === 'c') {
-        stdin.removeListener('keypress', listener)
-        process.stdout.write(`${ESC}?25h\n`)
-        if (!wasRaw) stdin.setRawMode(false)
+        restore()
+        process.stdout.write(`\n${yellow('已取消')}\n`)
         process.exit(130)
       }
       try {
-        const done = onKey(str, key ?? {}, finish)
-        if (done === true) return
+        if (onKey(str, key ?? {}, finish) === true) return
         draw()
       } catch (error) {
-        stdin.removeListener('keypress', listener)
-        process.stdout.write(`${ESC}?25h\n`)
-        if (!wasRaw) stdin.setRawMode(false)
+        restore()
+        process.stdout.write('\n')
         reject(error)
       }
     }
@@ -86,121 +138,156 @@ function keyLoop({ render, onKey, cleanupLines }) {
 }
 
 /**
- * 单选菜单。
+ * 打印式编号菜单（zcf 的主菜单形态）。
  *
- * @param {{message: string, options: Array<{label: string, hint?: string, value: any, disabled?: boolean}>, initial?: number}} spec
+ * 选项**打印出来**再输入编号，而不是在 TUI 里上下移动：一屏看得全，
+ * 复制到对话或日志里也不丢上下文。
+ *
+ * @param {{title: string, groups: Array<{title?: string, items: Array<{key: string, label: string, hint?: string, danger?: boolean}>}>}} spec
+ */
+export async function menu({ title, groups }) {
+  note(`\n${bold(title)}`)
+  const keys = []
+  for (const group of groups) {
+    if (group.title !== undefined) section(group.title)
+    for (const item of group.items) {
+      keys.push(item.key, item.key.toUpperCase())
+      const key = item.danger === true ? red(`${item.key}.`) : cyan(`${item.key}.`)
+      const hint = item.hint === undefined || item.hint === '' ? '' : `  ${gray(item.hint)}`
+      note(`  ${key} ${item.label}${hint}`)
+    }
+    blank()
+  }
+  const normalized = value => value.toLowerCase()
+  const allowed = new Set(keys.map(normalized))
+  const answer = await input({
+    message: '请输入编号',
+    validate: value => (allowed.has(normalized(value)) ? undefined : `请输入 ${groups.flatMap(g => g.items.map(i => i.key)).join(' / ')}`),
+  })
+  return answer.trim().toUpperCase()
+}
+
+/**
+ * 列表挑选：方向键或编号。
+ *
+ * 编号规则（长清单也够用）：按下的数字若能再接一位仍构成合法编号就继续攒着，
+ * 否则立即选中 —— 5 个选项按 `1` 直接选中，13 个选项按 `1` 先移动光标、
+ * 再按 `3` 得到第 13 个，或按 `1` 后回车选第 1 个。
  */
 export async function select({ message, options, initial = 0 }) {
   if (options.length === 0) throw new Error('select 需要至少一个选项')
   let cursor = Math.min(Math.max(initial, 0), options.length - 1)
-  // 光标不落在禁用项上：菜单里禁用项通常是「还没登录」这类，选下去只会再报一次错
+  // 光标不落在禁用项上：禁用项通常是「还没登录」这类，选下去只会再报一次错
   while (options[cursor]?.disabled === true) cursor = (cursor + 1) % options.length
-  process.stdout.write(`${cyan('?')} ${message}\n`)
-  const answer = await keyLoop({
+  let typed = ''
+  const width = String(options.length).length
+  const done = (option, finish) => {
+    finish(option.value)
+    note(`${green('✔')} ${message} ${bold(option.label)}`)
+    return true
+  }
+  note(`${cyan('?')} ${message}  ${dim('↑↓ 选择，或直接按编号，回车确认')}`)
+  return await keyLoop({
     cleanupLines: clearLines,
     render: () => options.map((option, index) => {
       const active = index === cursor
+      const number = String(index + 1).padStart(width)
+      const text = `${number}. ${option.label}`
       const pointer = active ? cyan('❯') : ' '
-      const label = option.disabled === true ? dim(option.label) : active ? option.label : dim(option.label)
       const hint = option.hint === undefined || option.hint === '' ? '' : `  ${dim(option.hint)}`
-      return `${pointer} ${label}${hint}`
+      return `${pointer} ${option.disabled === true || !active ? dim(text) : text}${hint}`
     }),
     onKey: (str, key, finish) => {
       const name = key.name
-      if (name === 'up' || str === 'k') cursor = (cursor - 1 + options.length) % options.length
-      else if (name === 'down' || str === 'j') cursor = (cursor + 1) % options.length
+      if (name === 'up' || str === 'k') { typed = ''; cursor = (cursor - 1 + options.length) % options.length }
+      else if (name === 'down' || str === 'j') { typed = ''; cursor = (cursor + 1) % options.length }
+      else if (name === 'backspace') typed = typed.slice(0, -1)
       else if (name === 'return' || name === 'enter') {
         const option = options[cursor]
-        if (option.disabled !== true) {
-          finish(option.value)
-          process.stdout.write(`${green('✓')} ${message} ${style.bold(option.label)}\n`)
-          return true
-        }
-      } else if (/^[1-9]$/.test(str) && Number(str) <= options.length) {
-        const option = options[Number(str) - 1]
-        if (option.disabled !== true) {
-          finish(option.value)
-          process.stdout.write(`${green('✓')} ${message} ${style.bold(option.label)}\n`)
-          return true
+        if (option.disabled !== true) return done(option, finish)
+      } else if (/^\d$/.test(str)) {
+        const next = typed + str
+        const index = Number(next) - 1
+        if (index < options.length && next.length <= width) {
+          typed = next
+          cursor = index
+          if (Number(next) * 10 > options.length) {
+            const option = options[index]
+            if (option.disabled !== true) return done(option, finish)
+          }
         }
       }
       return false
     },
   })
-  return answer
 }
 
-/** 是/否确认；默认值用 `initial` 指定，直接回车即采用。 */
+/** 是/否确认；直接回车采用 `initial`。 */
 export async function confirm({ message, initial = true }) {
   const hint = initial ? 'Y/n' : 'y/N'
   process.stdout.write(`${cyan('?')} ${message} ${dim(`(${hint})`)} `)
-  const answer = await new Promise(resolve => {
+  return await new Promise(resolve => {
     const stdin = process.stdin
     readline.emitKeypressEvents(stdin)
     const wasRaw = stdin.isRaw
     stdin.setRawMode(true)
     stdin.resume()
-    const listener = (str, key) => {
-      if (key?.ctrl && key.name === 'c') {
-        stdin.removeListener('keypress', listener)
-        if (!wasRaw) stdin.setRawMode(false)
-        process.exit(130)
-      }
-      if (key?.name === 'return' || key?.name === 'enter') return done(String(initial))
-      if (/^[yYnN]$/.test(str)) return done(/^[yY]$/.test(str))
-      if (key?.name === 'escape') return done(String(initial))
-    }
     const done = value => {
       stdin.removeListener('keypress', listener)
       if (!wasRaw) stdin.setRawMode(false)
       stdin.pause()
-      process.stdout.write(`${value === 'true' ? 'y' : 'n'}\n`)
-      resolve(value === 'true')
+      process.stdout.write(`${value ? 'y' : 'n'}\n`)
+      resolve(value)
+    }
+    const listener = (str, key) => {
+      if (key?.ctrl && key.name === 'c') {
+        stdin.removeListener('keypress', listener)
+        if (!wasRaw) stdin.setRawMode(false)
+        process.stdout.write(`\n${yellow('已取消')}\n`)
+        process.exit(130)
+      }
+      if (key?.name === 'return' || key?.name === 'enter' || key?.name === 'escape') return done(initial)
+      if (/^[yY]$/.test(str)) return done(true)
+      if (/^[nN]$/.test(str)) return done(false)
     }
     stdin.on('keypress', listener)
   })
-  return answer
 }
 
-/** 文本输入；`validate` 返回字符串表示不合法（当作错误提示显示）。 */
+/** 文本输入；`validate` 返回字符串表示不合法（作为提示重新问）。 */
 export async function input({ message, initial = '', validate }) {
-  process.stdout.write(`${cyan('?')} ${message}${initial === '' ? '' : dim(` (${initial})`)}\n`)
+  note(`${cyan('?')} ${message}${initial === '' ? '' : dim(` (${initial})`)}`)
   const rl = readline.createInterface({ input: process.stdin, output: process.stdout, terminal: true })
-  const ask = () => new Promise(resolve => rl.question(`${cyan('›')} `, resolve))
   for (;;) {
-    const raw = String(await ask()).trim()
+    const raw = String(await new Promise(resolve => rl.question(`${cyan('›')} `, resolve))).trim()
     const value = raw === '' ? initial : raw
     const problem = validate?.(value)
     if (problem === undefined) {
       rl.close()
       return value
     }
-    process.stdout.write(`${yellow('!')} ${problem}\n`)
+    note(`${yellow('!')} ${problem}`)
   }
 }
 
-export function note(text) {
-  process.stdout.write(`${text}\n`)
-}
-
-export function heading(text) {
-  process.stdout.write(`\n${style.bold(text)}\n`)
-}
-
-export function success(text) {
-  process.stdout.write(`${green('✓')} ${text}\n`)
-}
-
-export function warn(text) {
-  process.stdout.write(`${yellow('!')} ${text}\n`)
-}
-
-export function fail(text) {
-  process.stdout.write(`${ESC}31m✗${ESC}39m ${text}\n`)
-}
-
-/** 一屏宽度的分割线，纯装饰。 */
-export function rule() {
-  const width = Math.min(process.stdout.columns ?? 60, 64)
-  process.stdout.write(`${dim('─'.repeat(width))}\n`)
+/**
+ * 等待指示器（ora 那个位置）。
+ *
+ * 只在静默期转：任何 `note` 之前都要先 `stop()`，否则两路输出会互相踩行。
+ */
+export function spinner(label) {
+  const frames = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏']
+  let current = label
+  let index = 0
+  const paint = () => process.stdout.write(`\r${ESC}2K${cyan(frames[index++ % frames.length])} ${current}`)
+  const timer = setInterval(paint, 80)
+  paint()
+  return {
+    update(text) { current = text; paint() },
+    stop(final) {
+      clearInterval(timer)
+      process.stdout.write(`\r${ESC}2K`)
+      if (final !== undefined) note(final)
+    },
+  }
 }
