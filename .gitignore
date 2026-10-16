@@ -3,3 +3,8 @@ node_modules/
 .DS_Store
 .idea/
 .vscode/
+# Go 版（go-rewrite 分支）
+/claude-code-bridge
+.tmp/
+*.test
+coverage.out
