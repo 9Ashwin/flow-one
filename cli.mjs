@@ -11,6 +11,8 @@ import process from 'node:process'
 import { USAGE, resolveConfig } from './src/config.mjs'
 import { credentialStatus, login } from './src/auth.mjs'
 import { productByName } from './src/products.mjs'
+import { needsLogin } from './src/sources.mjs'
+import { hasGoCredential } from './src/opencode.mjs'
 import { createDirectUpstream, createGatewayUpstream } from './src/upstreams.mjs'
 import { createBridgeServer } from './src/server.mjs'
 import { isInteractive, note, style } from './src/prompt.mjs'
@@ -57,6 +59,24 @@ async function commandLogin(config, commandArgs, log) {
 async function commandStatus(config, log) {
   let any = false
   for (const product of config.products) {
+    // 免费档本来就不需要登录，按「未登录」报会让人去跑一条根本不存在的
+    // `login oc`（`productByName` 只认 cn / intl，必然报「未知产品」）。
+    // 真实踩过（2026-10-16）：用户照着这行去排查，以为免费档没配好，
+    // 实际是后台服务压根没起来 —— 这条假线索把方向带偏了。
+    if (!needsLogin(product)) {
+      log(`${product.id.padEnd(5)} ${product.label}：${product.hint ?? '无需登录'}`)
+      any = true
+      continue
+    }
+    // Go 套餐要的是 key，不是登录态，而且凭据存在 `opencode-go` 条目下、不是
+    // `ocg` —— 拿 credentialStatus 按 id 去读必然读空，配好了也照样报「未登录」，
+    // 再补一句根本不存在的 `login ocg`。同一个坑的另一半，用向导里已有的判据。
+    if (product.auth === 'key') {
+      const configured = hasGoCredential()
+      log(`${product.id.padEnd(5)} ${product.label}：${configured ? '已配 key' : '未配 key（在 `ccb setup` 里填）'}`)
+      if (configured) any = true
+      continue
+    }
     const status = credentialStatus(product, { file: config.credentialFile })
     if (!status.loggedIn) {
       log(`${product.id.padEnd(5)} ${product.label}：未登录（claude-code-bridge login ${product.id}）`)

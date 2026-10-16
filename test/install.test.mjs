@@ -155,3 +155,53 @@ test('服务代码路径解析：能看出服务跑的是哪份代码（全局�
   assert.equal(cliPathFromServiceFile('', 'launchd'), undefined)
   assert.equal(cliPathFromServiceFile('<plist></plist>', 'launchd'), undefined)
 })
+
+test('systemd 用户会话：XDG_RUNTIME_DIR 为空时补上 /run/user/<uid>', async () => {
+  const { xdgRuntimeDir } = await import('../src/install.mjs')
+  // 真实形态（2026-10-16）：SSH / 非登录壳里这个变量是空的，于是 systemctl --user
+  // 一律 `Failed to connect to bus: No medium found`，单元文件从没落地。
+  assert.equal(xdgRuntimeDir({}, { uid: 1000, exists: () => true }), '/run/user/1000')
+  // 显式给了就照用，不覆盖用户意图
+  assert.equal(xdgRuntimeDir({ XDG_RUNTIME_DIR: '/run/user/1000' }, { uid: 1000, exists: () => false }), '/run/user/1000')
+  // 只有空白也算没给
+  assert.equal(xdgRuntimeDir({ XDG_RUNTIME_DIR: '  ' }, { uid: 7, exists: () => true }), '/run/user/7')
+  // 目录不存在 = 根本没有用户会话，别硬凑一个路径出来
+  assert.equal(xdgRuntimeDir({}, { uid: 1000, exists: () => false }), undefined)
+  // uid 拿不到时（Windows 上没有 process.getuid）不能拼出 `/run/user/undefined`。
+  // 这里传 null 而不是 undefined：后者会触发默认参数回填，测不到这条分支。
+  assert.equal(xdgRuntimeDir({}, { uid: null, exists: () => true }), undefined)
+})
+
+test('服务加载失败：dbus 连不上时给可执行的下一步，而不是甩原文', async () => {
+  const { serviceLoadReason } = await import('../src/install.mjs')
+  const busDown = serviceLoadReason(
+    'Command failed: systemctl --user enable --now dev.claude-code-openai-bridge.service\nFailed to connect to bus: No medium found',
+    '/home/me/.config/systemd/user/dev.claude-code-openai-bridge.service',
+  )
+  assert.match(busDown, /没有可用的 systemd 用户会话/)
+  assert.match(busDown, /loginctl enable-linger/)
+  // 其余错误原样带出，不掩盖真因
+  assert.match(serviceLoadReason('权限不足', '/x.service'), /权限不足/)
+})
+
+test('status：免费档报「无需登录」、Go 套餐报「配没配 key」，都不提不存在的 login', async () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'ccb-status-'))
+  const { spawn } = await import('node:child_process')
+  const { fileURLToPath } = await import('node:url')
+  const cli = fileURLToPath(new URL('../cli.mjs', import.meta.url))
+  // oc 不需要凭据，ocg 的凭据存在 `opencode-go` 条目下而不是 `ocg`：
+  // 两者都不能落到「未登录（login <id>）」那条分支上。
+  const child = spawn(process.execPath, [cli, 'status'], {
+    env: { ...process.env, BRIDGE_HOME: home, BRIDGE_PRODUCTS: 'oc,ocg' },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  })
+  let out = ''
+  child.stdout.on('data', chunk => { out += chunk })
+  const code = await new Promise(resolve => child.on('exit', resolve))
+  assert.equal(code, 0, `两个来源都不该算错误状态（输出：${out}）`)
+  assert.match(out, /无需登录/, '免费档要说清楚它不用登录')
+  assert.match(out, /未配 key/, 'Go 套餐缺的是 key，不是登录态')
+  // productByName 只认 cn / intl，login oc / login ocg 都是不存在的命令
+  assert.doesNotMatch(out, /login (oc|ocg)/)
+  assert.doesNotMatch(out, /未登录/, '这两条来源根本没有「未登录」这个状态')
+})

@@ -464,6 +464,12 @@ export async function statusFlow() {
       note(`  ${product.id.padEnd(5)} ${product.label}  ${gray('无需登录（免费档）')}`)
       continue
     }
+    // Go 套餐的凭据是 key（存在 `opencode-go` 条目下），不是登录态；
+    // credentialStatus 按 `ocg` 去读必然读空，配好了也会显示「未登录」。
+    if (product.auth === 'key') {
+      note(`  ${product.id.padEnd(5)} ${product.label}  ${gray(hasGoCredential() ? '已配 key' : '未配 key（在 `ccb setup` 里填）')}`)
+      continue
+    }
     const status = credentialStatus(product)
     if (!status.loggedIn) {
       note(`  ${product.id.padEnd(5)} ${product.label}  ${gray('未登录')}`)

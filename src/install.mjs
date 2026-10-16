@@ -35,6 +35,51 @@ function launchdLoaded(label) {
 }
 const SERVICE_LABEL = 'dev.claude-code-openai-bridge'
 
+/**
+ * `systemctl --user` 要用的 `XDG_RUNTIME_DIR`。
+ *
+ * 真实踩过（2026-10-16）：SSH 进来或非登录壳里这个变量常常是空的，于是
+ * `systemctl --user` 一律报 `Failed to connect to bus: No medium found`。表现是
+ * 向导说「配置已写入」、单元文件却从没落地、8788 上没人听 —— 用户回到 Claude Code
+ * 只看到 ECONNREFUSED，而真正的错在安装那一步就被吞掉了。
+ *
+ * dbus 其实一直在 `/run/user/<uid>/bus`，只是没人把路径指出来（`/run/user/<uid>`
+ * 存在就说明用户会话是有的）。这里直接补上；纯函数，便于离线断言。
+ */
+export function xdgRuntimeDir(env = process.env, { uid = process.getuid?.(), exists = fs.existsSync } = {}) {
+  const current = String(env.XDG_RUNTIME_DIR ?? '').trim()
+  if (current !== '') return current
+  // 拿不到 uid 就别拼 `/run/user/undefined`（Windows 上 `process.getuid` 根本不存在）
+  if (!Number.isInteger(uid)) return undefined
+  const fallback = `/run/user/${uid}`
+  return exists(fallback) ? fallback : undefined
+}
+
+/** 带上补好的 `XDG_RUNTIME_DIR` 再调 `systemctl --user`。 */
+function systemctl(args, env = process.env) {
+  const dir = xdgRuntimeDir(env)
+  return execFileSync('systemctl', ['--user', ...args], {
+    stdio: 'pipe',
+    env: dir === undefined ? env : { ...env, XDG_RUNTIME_DIR: dir },
+  })
+}
+
+/**
+ * 服务加载失败时的说法。
+ *
+ * dbus 连不上的报错原文（`Failed to connect to bus: No medium found`）对用户没有
+ * 任何指导性，容易被当成「本工具不支持这台机器」而放弃。单独识别这一类，直接给
+ * 可执行的两条路。其余错误原样带出，不掩盖真因。
+ */
+export function serviceLoadReason(message, file) {
+  const text = String(message ?? '')
+  if (/Failed to connect to bus|No medium found|System has not been booted with systemd/i.test(text)) {
+    return `服务文件已写入 ${file}，但这台机器上没有可用的 systemd 用户会话（${text}）。`
+      + '要么先 `loginctl enable-linger $USER` 然后重进登录壳，要么直接前台跑 `ccb`。'
+  }
+  return `服务文件已写入 ${file}，但加载失败：${text}`
+}
+
 export function installStatePath(env = process.env, home = os.homedir()) {
   return path.join(bridgeHome(env, home), 'install.json')
 }
@@ -337,12 +382,12 @@ export async function installService({ port, apiKey, env = {} }) {
       }
       notes.push('launchctl bootstrap 已加载')
     } else {
-      execFileSync('systemctl', ['--user', 'daemon-reload'], { stdio: 'pipe' })
-      execFileSync('systemctl', ['--user', 'enable', '--now', `${SERVICE_LABEL}.service`], { stdio: 'pipe' })
+      systemctl(['daemon-reload'])
+      systemctl(['enable', '--now', `${SERVICE_LABEL}.service`])
       notes.push('systemctl --user enable --now 已完成')
     }
   } catch (error) {
-    return { ok: false, kind, path: file, reason: `服务文件已写入 ${file}，但加载失败：${error?.message ?? error}` }
+    return { ok: false, kind, path: file, reason: serviceLoadReason(error?.message ?? error, file) }
   }
   return { ok: true, kind, path: file, notes }
 }
@@ -352,7 +397,7 @@ export function uninstallService() {
   if (file === '' || !fs.existsSync(file)) return { skipped: true, reason: '没有装过后台服务' }
   try {
     if (kind === 'launchd') execFileSync('launchctl', ['bootout', `gui/${process.getuid()}/${SERVICE_LABEL}`], { stdio: 'pipe' })
-    else execFileSync('systemctl', ['--user', 'disable', '--now', `${SERVICE_LABEL}.service`], { stdio: 'pipe' })
+    else systemctl(['disable', '--now', `${SERVICE_LABEL}.service`])
   } catch { /* 没在跑就算了，文件还是要删掉 */ }
   fs.rmSync(file, { force: true })
   const state = readInstallState()
