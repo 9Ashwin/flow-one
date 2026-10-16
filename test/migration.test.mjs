@@ -13,17 +13,24 @@ import path from 'node:path'
 
 function scratchHome() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'fo-migration-'))
-  const previousHome = process.env.HOME
-  const previousBridgeHome = process.env.BRIDGE_HOME
+  const previous = {
+    HOME: process.env.HOME,
+    BRIDGE_HOME: process.env.BRIDGE_HOME,
+    // XDG_CONFIG_HOME 也要一起隔离：Linux 上 systemd 的服务文件路径是
+    // `${XDG_CONFIG_HOME}/systemd/user/...`，只看 HOME 是拦不住它的
+    // （CI 的 ubuntu runner 就设了这个变量，于是守卫正确地拒绝了我的用例）。
+    XDG_CONFIG_HOME: process.env.XDG_CONFIG_HOME,
+  }
   process.env.HOME = dir
+  process.env.XDG_CONFIG_HOME = path.join(dir, 'config')
   delete process.env.BRIDGE_HOME
   return {
     dir,
     restore() {
-      if (previousHome === undefined) delete process.env.HOME
-      else process.env.HOME = previousHome
-      if (previousBridgeHome === undefined) delete process.env.BRIDGE_HOME
-      else process.env.BRIDGE_HOME = previousBridgeHome
+      for (const [key, value] of Object.entries(previous)) {
+        if (value === undefined) delete process.env[key]
+        else process.env[key] = value
+      }
     },
   }
 }
