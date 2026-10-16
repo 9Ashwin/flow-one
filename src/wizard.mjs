@@ -29,7 +29,7 @@ import {
 } from './install.mjs'
 import {
   banner, blank, box, confirm, gray, green, heading, info, input, menu, note,
-  section, select, spinner, style, success, warn, fail, dim, yellow,
+  section, select, multiSelect, spinner, style, success, warn, fail, dim, yellow,
 } from './prompt.mjs'
 
 const DEFAULT_PORT = 8788
@@ -222,36 +222,41 @@ function rank(id) {
 
 // ── 一键配置 ────────────────────────────────────────────────────────────────
 
+/** 网关模式的哨兵值：它不是一条「来源」，但和三家直连在同一个列表里互斥。 */
+const GATEWAY = 'gateway'
+
 export async function setupWizard() {
   heading('一键配置')
-  note(dim('  四步：选上游 → 选来源并登录 → 选模型 → 写配置并常驻'))
+  note(dim('  四步：接哪几家 → 登录 → 选模型 → 写配置并常驻'))
 
   blank()
-  section('第 1 步 · 上游')
-  const mode = await select({
-    message: '上游用哪种？',
+  section('第 1 步 · 接哪几家')
+  // 一步问完：一行一条来源，国内版与国际版各占一行（原来捆成「WorkBuddy 两条线」，
+  // 想只挑其中一条做不到），要哪些勾哪些。
+  const chosen = await multiSelect({
+    message: '接哪几家？',
+    initial: [CN, INTL, OPENCODE],
     options: [
-      { label: '直连各家官方接口', hint: '推荐：WorkBuddy 国内版 / 国际版 + OpenCode 免费档', value: 'direct' },
-      { label: '转发给已有的 OpenAI 兼容网关', hint: '如 dsh-our-free-model 的 8326、LiteLLM、Ollama', value: 'gateway' },
+      { label: 'WorkBuddy 国内版（CodeBuddy）', hint: loggedInLabel(CN), value: CN },
+      { label: 'WorkBuddy 国际版', hint: loggedInLabel(INTL), value: INTL },
+      { label: 'OpenCode 免费档', hint: `${loggedInLabel(OPENCODE)}，免费模型`, value: OPENCODE },
+      { label: '转发给已有的 OpenAI 兼容网关', hint: '自建网关 / LiteLLM / Ollama（勾它就只走它）', value: GATEWAY },
     ],
+    // 网关与三家直连互斥：勾了一边就把另一边取消，省得用户勾出一个说不清的组合
+    onToggle: (value, checked) => {
+      if (value === GATEWAY) {
+        for (const source of [CN, INTL, OPENCODE]) checked.delete(source)
+      } else {
+        checked.delete(GATEWAY)
+      }
+    },
   })
 
   blank()
-  section('第 2 步 · 来源与登录')
+  section('第 2 步 · 登录')
   let upstream
   const serviceEnv = {}
-  if (mode === 'direct') {
-    const which = await select({
-      message: '挂哪几条来源？',
-      options: [
-        { label: '三条都挂', hint: `推荐 · WorkBuddy 国内版 + 国际版 + OpenCode 免费档`, value: [CN, INTL, OPENCODE] },
-        { label: '只要 WorkBuddy 两条线', hint: `${loggedInLabel(CN)} / ${loggedInLabel(INTL)}`, value: [CN, INTL] },
-        { label: '只要 OpenCode 免费档', hint: '无需登录，装完即用', value: [OPENCODE] },
-      ],
-    })
-    await ensureLoggedIn(which)
-    upstream = createDirectUpstream({ products: which, credentialFile: credentialFile() }, { log: line => note(`  ${dim(line)}`) })
-  } else {
+  if (chosen.includes(GATEWAY)) {
     const base = await input({
       message: '上游地址',
       initial: 'http://127.0.0.1:8326',
@@ -267,6 +272,9 @@ export async function setupWizard() {
     serviceEnv.BRIDGE_MODE = 'gateway'
     serviceEnv.UPSTREAM_BASE_URL = base.replace(/\/+$/, '')
     if (key !== '') serviceEnv.UPSTREAM_API_KEY = key
+  } else {
+    await ensureLoggedIn(chosen)
+    upstream = createDirectUpstream({ products: chosen, credentialFile: credentialFile() }, { log: line => note(`  ${dim(line)}`) })
   }
 
   let rows = []
@@ -484,7 +492,7 @@ export async function mainMenu() {
       groups: [
         {
           items: [
-            { key: '1', label: '一键配置', hint: '配来源 → 选模型 → 写 Claude Code 配置 → 后台常驻' },
+            { key: '1', label: '一键配置', hint: '接哪几家 → 选模型 → 写 Claude Code 配置 → 后台常驻' },
             { key: '2', label: '切换模型', hint: '改完自动重启服务' },
             { key: '3', label: '查看状态', hint: '登录有效期 / 服务 / 文件位置' },
           ],

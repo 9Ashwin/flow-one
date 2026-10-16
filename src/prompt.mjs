@@ -290,6 +290,70 @@ export async function select({ message, options, initial = 0, filterable = false
   })
 }
 
+/**
+ * 多选列表：空格勾选，↑↓ 移动，回车确认。
+ *
+ * 「接哪几家上游」这种问题用它一步问完 —— 早先是「先选上游类型、再选来源」两步，
+ * 而且国内版/国际版还被捆成一条「WorkBuddy 两条线」，想挑其中一条就做不到。
+ *
+ * `onToggle(value, checked)` 用来实现互斥这类规则（勾了网关就取消三家直连），
+ * 直接把 `checked` 这个 Set 改掉即可。
+ */
+export async function multiSelect({ message, options, initial = [], requireOne = true, onToggle }) {
+  if (options.length === 0) throw new Error('multiSelect 需要至少一个选项')
+  const firstEnabled = from => {
+    let index = Math.min(Math.max(from, 0), options.length - 1)
+    for (let step = 0; step < options.length && options[index]?.disabled === true; step++) index = (index + 1) % options.length
+    return index
+  }
+  const checked = new Set(options.filter(option => initial.includes(option.value)).map(option => option.value))
+  let cursor = firstEnabled(0)
+  let notice = ''
+  const done = (finish, options_) => {
+    finish(options_.map(option => option.value))
+    note(`${green('✔')} ${message} ${bold(options_.map(option => option.label).join('、'))}`)
+    return true
+  }
+  const selected = () => options.filter(option => checked.has(option.value))
+  note(`${cyan('?')} ${message}  ${dim('空格勾选，↑↓ 移动，回车确认')}`)
+  return await keyLoop({
+    cleanupLines: clearLines,
+    render: () => {
+      const lines = options.map((option, index) => {
+        const active = index === cursor
+        const mark = checked.has(option.value) ? green('[x]') : dim('[ ]')
+        const suffix = option.hint === undefined || option.hint === '' ? '' : `  ${dim(option.hint)}`
+        const label = option.disabled === true || !active ? dim(option.label) : option.label
+        return `${active ? cyan('❯') : ' '} ${mark} ${label}${suffix}`
+      })
+      if (notice !== '') lines.push(`  ${yellow(notice)}`)
+      return lines
+    },
+    onKey: (str, key, finish) => {
+      const name = key.name
+      if (name === 'up' || str === 'k') cursor = (cursor - 1 + options.length) % options.length
+      else if (name === 'down' || str === 'j') cursor = (cursor + 1) % options.length
+      else if (str === ' ') {
+        const option = options[cursor]
+        if (option !== undefined && option.disabled !== true) {
+          if (checked.has(option.value)) checked.delete(option.value)
+          else checked.add(option.value)
+          onToggle?.(option.value, checked)
+          notice = ''
+        }
+      } else if (name === 'return' || name === 'enter') {
+        const picked = selected()
+        if (picked.length === 0 && requireOne) {
+          notice = '至少勾一条'
+          return false
+        }
+        return done(finish, picked)
+      }
+      return false
+    },
+  })
+}
+
 /** 是/否确认；直接回车采用 `initial`。 */
 export async function confirm({ message, initial = true }) {
   const hint = initial ? 'Y/n' : 'y/N'

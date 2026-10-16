@@ -142,3 +142,47 @@ test('列表筛选：上百条里照样能筛到窗口外的那一条', async ()
     setStdinForTest(null)
   }
 })
+
+test('多选：空格勾选、回车确认、至少勾一条、互斥规则生效', async () => {
+  const { PassThrough } = await import('node:stream')
+  const { multiSelect, setStdinForTest } = await import('../src/prompt.mjs')
+  const fake = new PassThrough()
+  fake.isTTY = true
+  fake.setRawMode = () => {}
+  setStdinForTest(fake)
+  const key = (str, name) => fake.emit('keypress', str, { name })
+  const options = [
+    { label: 'WorkBuddy 国内版', value: 'cn' },
+    { label: 'WorkBuddy 国际版', value: 'intl' },
+    { label: 'OpenCode 免费档', value: 'oc' },
+    { label: '转发给网关', value: 'gateway' },
+  ]
+  // 与向导里同一条互斥规则：勾了网关就取消三家直连，反之亦然
+  const onToggle = (value, checked) => {
+    if (value === 'gateway') for (const source of ['cn', 'intl', 'oc']) checked.delete(source)
+    else checked.delete('gateway')
+  }
+  try {
+    // 默认全勾三条直连；下移到网关并勾上 → 只剩网关
+    const exclusive = multiSelect({ message: '接哪几家？', options, initial: ['cn', 'intl', 'oc'], onToggle })
+    key('', 'down'); key('', 'down'); key('', 'down')
+    key(' ', 'space')
+    key('', 'return')
+    assert.deepEqual(await exclusive, ['gateway'])
+
+    // 取消了国内版 → 只交回剩下两条，顺序跟清单一致
+    const partial = multiSelect({ message: '接哪几家？', options, initial: ['cn', 'intl', 'oc'], onToggle })
+    key(' ', 'space')          // 光标在第 1 条上：取消 cn
+    key('', 'return')
+    assert.deepEqual(await partial, ['intl', 'oc'])
+
+    // 一条都没勾时回车不算数，勾上一条才放行
+    const required = multiSelect({ message: '接哪几家？', options, initial: [], onToggle })
+    key('', 'return')          // 空选择：应当被挡住
+    key(' ', 'space')          // 勾第 1 条
+    key('', 'return')
+    assert.deepEqual(await required, ['cn'])
+  } finally {
+    setStdinForTest(null)
+  }
+})
