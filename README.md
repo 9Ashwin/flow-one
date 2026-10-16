@@ -22,15 +22,14 @@ Claude Code CLI ──► 本桥 127.0.0.1:8788 ──► WorkBuddy 国内版   
 
 ## 安装
 
-**1. 从 npm 装**（装完就有 `flow-one` 与 `fo` 两个命令）
+**1. 一行安装（推荐：macOS / Linux，arm64 / x64，不需要 Go，也不需要 npm）**
 
 ```bash
-npm install -g flow-one
+curl -fsSL https://github.com/9Ashwin/flow-one/releases/latest/download/install.sh | sh
 ```
 
-Go 版是编译产物，所以 npm 包只放一个转发脚本 + 四个平台的预编译二进制包
-（走 `optionalDependencies`，npm 只装匹配当前平台那一个）。**不用 postinstall 下载**，
-因此 pnpm 与 bun 也不需要额外放行安装脚本。
+装到 `~/.local/bin`（不在 PATH 里它会告诉你怎么加）。想要别的目录：`INSTALL_DIR=/usr/local/bin sh -s`。
+装完有两个命令：`flow-one` 与短命令 `fo`。
 
 **2. 用 Go 装**
 
@@ -38,12 +37,25 @@ Go 版是编译产物，所以 npm 包只放一个转发脚本 + 四个平台的
 go install github.com/9Ashwin/flow-one@latest
 ```
 
-**3. 自己编**（要改代码就用这个）
+**3. 从 npm 装**（`flow-one` 与 `fo` 两个命令）
+
+```bash
+npm install -g flow-one
+```
+
+npm 包里只有个转发脚本，真正的二进制来自四个平台包（`flow-one-darwin-arm64`、
+`flow-one-linux-x64` …，走 `optionalDependencies`，npm 只装匹配当前平台那一个）。
+**不用 postinstall**，所以 pnpm 与 bun 也不需要额外放行安装脚本。
+
+> ⚠️ **npm 这条目前还没发布出去**：npm 现在不允许凭据直接发布新包，只能先 stage
+> 再由维护者带 2FA 批准（`E_STAGE_REQUIRED`）。5 个版本已经 stage 好，等维护者批准。
+> 在那之前请用上面第 1 或第 2 种方式。
+
+**4. 自己编**
 
 ```bash
 git clone https://github.com/9Ashwin/flow-one.git
-cd flow-one && git checkout go-rewrite
-make build          # 产出 ./flow-one
+cd flow-one && make build          # 产出 ./flow-one
 ```
 
 支持 **macOS 与 Linux**（arm64 / amd64）。常驻在 macOS 上走 launchd、Linux 上走 systemd
