@@ -17,8 +17,11 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import process from 'node:process'
+import { fileURLToPath } from 'node:url'
 
-const ROOT = path.resolve(import.meta.dirname, '..')
+// 别用 `import.meta.dirname`：那是 Node 20.11+ 才有的，CI 的 18.20 上会拿到 undefined，
+// 报成一句 `The "paths[0]" argument must be of type string`（真被 CI 逮过一次）。
+const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const STRICT = process.argv.includes('--strict')
 const SIZE_SOFT_LIMIT = 500
 
