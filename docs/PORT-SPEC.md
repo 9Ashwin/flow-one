@@ -131,7 +131,28 @@ Linux 是一等目标，不是「顺便」。移植时容易漏的几处：
 6. **测试**：平台专有断言放 `_darwin_test.go` / `_linux_test.go`；公共用例不许调用
    `launchctl` / `systemctl`。
 
-## 五、验收
+## 五、分发（npm 那条路要保住）
+
+用户明确问过：转 Go 之后还能不能像以前一样 `npm i -g`。**能**，但包的性质变了 ——
+从「跑 JS 代码」变成「挑一个预编译二进制并转发调用」。三条安装路径都要留：
+
+| 路径 | 做法 | 代价 |
+| --- | --- | --- |
+| npm（保住现状） | 主包 `claude-code-bridge` 只放一个 `bin/cli.js` 转发脚本；**每个平台一个可选依赖包**（`@9ashwin/ccb-darwin-arm64` 等），主包用 `optionalDependencies` 列出它们，npm 只装匹配当前平台的那一个；转发脚本按 `process.platform` + `process.arch` 找到二进制并 `spawn(..., {stdio: 'inherit'})` | 要发布 1 + N 个包，CI 要交叉编译并上传 |
+| `go install` | `go install github.com/9Ashwin/claude-code-openai-bridge@latest` | 只对装了 Go 的人可用 |
+| 一键脚本 / Releases | GitHub Releases 放 darwin/linux × arm64/amd64 四个二进制，配一个 `install.sh` | 要维护脚本与校验和 |
+
+为什么用 `optionalDependencies` 而不是 `postinstall` 下载：pnpm 与 bun **默认拦掉依赖的
+安装脚本**（opencode 自己的文档就写着「Bun 与 pnpm 的命令必须显式允许该脚本」），
+而 `optionalDependencies` + 平台包子包不需要跑任何脚本，三种包管理器都稳。
+
+**注意**：Go 版会丢掉 Node 版「零依赖、`npx` 直接跑」的性质 —— 变成「npx 挑一个平台
+二进制」。这是为了保住 npm 这条安装路径要付的代价，接受。
+
+Release 工作流（Lead 负责）：GitHub Actions 矩阵构建四个平台 → 上传 Release 资产 →
+`npm publish` 主包与平台包（主包的 `optionalDependencies` 版本号要与平台包一致）。
+
+## 六、验收
 
 | 层次 | 标准 |
 | --- | --- |
