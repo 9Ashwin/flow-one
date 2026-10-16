@@ -3,10 +3,3 @@ node_modules/
 .DS_Store
 .idea/
 .vscode/
-# Go 版（go-rewrite 分支）
-/flow-one
-.tmp/
-*.test
-coverage.out
-# npm 平台包里的二进制是构建产物，不入库
-npm/packages/*/bin/flow-one

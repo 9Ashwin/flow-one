@@ -1,43 +1,43 @@
 {
-  "name": "flow-one",
-  "version": "0.2.0",
-  "description": "让 Claude Code CLI 用上 WorkBuddy（国内版 / 国际版）与 OpenCode（免费档 / Go 套餐）的本地反代",
-  "license": "MIT",
+  "name": "claude-code-openai-bridge",
+  "version": "0.1.0",
+  "private": false,
+  "description": "把 WorkBuddy（国内版 CodeBuddy / 国际版）与 OpenCode 免费档接进 Claude Code CLI 的本地反代：Anthropic Messages ⇄ OpenAI Chat Completions，零依赖。",
+  "type": "module",
+  "main": "./src/server.mjs",
   "bin": {
-    "flow-one": "npm/cli.js",
-    "fo": "npm/cli.js"
+    "claude-code-bridge": "./cli.mjs",
+    "ccb": "./cli.mjs"
   },
   "files": [
-    "npm/cli.js",
-    "README.md",
-    "LICENSE"
+    "cli.mjs",
+    "src"
   ],
+  "scripts": {
+    "start": "node cli.mjs",
+    "test": "node --test",
+    "prepublishOnly": "node --test"
+  },
   "engines": {
     "node": ">=18.17"
-  },
-  "optionalDependencies": {
-    "flow-one-darwin-arm64": "0.2.0",
-    "flow-one-darwin-x64": "0.2.0",
-    "flow-one-linux-arm64": "0.2.0",
-    "flow-one-linux-x64": "0.2.0"
-  },
-  "scripts": {
-    "prepublishOnly": "node npm/verify-packaging.js"
-  },
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/9Ashwin/flow-one.git"
-  },
-  "homepage": "https://github.com/9Ashwin/flow-one#readme",
-  "bugs": {
-    "url": "https://github.com/9Ashwin/flow-one/issues"
   },
   "keywords": [
     "claude-code",
     "workbuddy",
     "codebuddy",
-    "opencode",
     "anthropic",
-    "reverse-proxy"
-  ]
+    "openai",
+    "proxy",
+    "bridge",
+    "llm"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/9Ashwin/claude-code-openai-bridge.git"
+  },
+  "homepage": "https://github.com/9Ashwin/claude-code-openai-bridge#readme",
+  "bugs": {
+    "url": "https://github.com/9Ashwin/claude-code-openai-bridge/issues"
+  }
 }

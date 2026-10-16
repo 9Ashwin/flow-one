@@ -7,7 +7,7 @@
 失效时是什么症状、以及怎么当场复验。
 
 ```bash
-fo doctor          # 逐项重推两条门禁，并体检本地配置
+ccb doctor          # 逐项重推两条门禁，并体检本地配置
 ```
 
 doctor 会先发一次完整形状确认能过，再**逐项去掉一个要件**确认「这一条确实还是必填」。
@@ -42,7 +42,7 @@ doctor 会先发一次完整形状确认能过，再**逐项去掉一个要件**
 - 非 git 目录不注入第 3 条，所以同一条命令在 `/tmp` 正常、在项目目录里 400 —— 这个
   差异本身就说明问题出在 Claude Code 注入的上下文里。
 
-**复验**：`fo doctor` 会把这三条字面量拼进一次最小请求真发出去。额度/频率受限会单独
+**复验**：`ccb doctor` 会把这三条字面量拼进一次最小请求真发出去。额度/频率受限会单独
 报出来（那不是门禁问题）。
 
 **加新规则的流程**：
@@ -71,7 +71,7 @@ FreeTierError: OpenCode's free tier can only be used from within OpenCode.
 | `tools` 含 `bash` / `glob` / `grep` / `read` 四个**小写** function，各自 `parameters` 至少声明一个 property | 必填 | 同上：去掉 → 403 |
 | 会话 id = `ses_` + 12 位小写 hex + **14** 位 base62（尾段总长 26） | 必填，且只验形状 | 同上：写成 38 位 → 403；12+14 通过 |
 | `x-opencode-project`（40 hex）、`x-opencode-session`、`x-opencode-request`（`msg_` 形状）、`x-opencode-client: cli`、`User-Agent: opencode/<版本>` | 按官方客户端形状发送 | 2026-10-16 |
-| `x-opencode-session-id`（与 `x-opencode-session` 同值） | **实测当前非必填**（去掉仍 200），但仍照发 | 2026-10-16 `fo doctor` 判成 `relaxed` |
+| `x-opencode-session-id`（与 `x-opencode-session` 同值） | **实测当前非必填**（去掉仍 200），但仍照发 | 2026-10-16 `ccb doctor` 判成 `relaxed` |
 
 ⚠️ **尾段长度是最容易搞错的一点**：官方 `id/index.ts` 里的 `LENGTH = 26` 是**尾段总长**
 （12 hex + 14 base62），把它当成随机段长度就会得到 38 字符，然后一律 403。
@@ -88,7 +88,7 @@ FreeTierError: OpenCode's free tier can only be used from within OpenCode.
 - 调用方没声明的 → 补一个「摆设」桩，并把模型对桩的调用**整条丢弃** —— 那是
   Claude Code 执行不了的工具名，转发过去只会变成一条无从处理的错误。
 
-**复验**：`fo doctor` 逐项重推（完整形状 + 四个变体）。
+**复验**：`ccb doctor` 逐项重推（完整形状 + 四个变体）。
 
 ---
 
@@ -115,7 +115,7 @@ OPENCODE_GO_API_KEY`、`baseURL: https://opencode.ai/zen/go/v1`、
 - 能力元数据（窗口 / 输出上限 / 视觉）同样取自 models.dev：`deepseek-v4.1-flash` =
   1M 窗口 / 384k 输出，与 DSH 配置里手写的值一致。
 
-**复验**：`fo doctor` 的「OpenCode Go 套餐（认证通道）」一节会重推这三条
+**复验**：`ccb doctor` 的「OpenCode Go 套餐（认证通道）」一节会重推这三条
 （带会话头的最小对话、不带会话头应被拒、模型清单要 key）。
 
 ---
@@ -126,9 +126,9 @@ OPENCODE_GO_API_KEY`、`baseURL: https://opencode.ai/zen/go/v1`、
 | --- | --- | --- |
 | 腾讯内容风控加了新规则 | `400` + `11128`，整轮失败 | 响亮，但客户端文案容易把人带偏 |
 | 免费档门禁收紧 | `403` + `FreeTierError` | 响亮 |
-| 免费档门禁放松 | 探针里某个变体不再被拒 | 只在 `fo doctor` 里显形 |
+| 免费档门禁放松 | 探针里某个变体不再被拒 | 只在 `ccb doctor` 里显形 |
 | 模型清单变了 | 个别模型 400/401（例如拿匿名 key 打付费档） | 响亮 |
-| 上游返回了没见过的新形状 | 翻译层可能**静默丢字段** | **不响亮** —— 需要看 `~/.flow-one/bridge.log` |
+| 上游返回了没见过的新形状 | 翻译层可能**静默丢字段** | **不响亮** —— 需要看 `~/.claude-code-openai-bridge/bridge.log` |
 
 最后一行是这个项目最需要盯的地方：前四条都会大声失败，只有「新形状」会安静地少点东西。
 发现回答缺字段时的第一动作是看 bridge.log 里那一轮的 `in= / out=` 与上游原始帧。
