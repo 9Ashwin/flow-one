@@ -190,3 +190,37 @@ test('腾讯内容指纹：Claude Code 的计费头整行被删掉，无关文�
   assert.equal(rewriteTencentFingerprints('You are a Claude agent.'), 'You are a Claude agent.')
   assert.equal(rewriteTencentFingerprints('line1\nline2\n'), 'line1\nline2\n')
 })
+
+test('腾讯内容指纹：gitStatus 的主分支整句被改写，仓库上下文其余部分逐字符不变', async () => {
+  const { rewriteTencentFingerprints } = await import('../src/fingerprint.mjs')
+  // Claude Code 在 git 仓库里注入的真实上下文（2026-10-16 本机实测抓包）
+  const real = [
+    'gitStatus: This is the git status at the start of the conversation.',
+    '',
+    'Current branch: main',
+    '',
+    'Main branch (you will usually use this for PRs): main',
+    '',
+    'Git user: mervyn',
+  ].join('\n')
+  const out = rewriteTencentFingerprints(real)
+  assert.match(out, /Main branch \(PRs usually go here\): main/)
+  assert.doesNotMatch(out, /you will usually use this for PRs/)
+  // 其余行必须逐字符不变
+  for (const line of ['gitStatus: This is the git status at the start of the conversation.', 'Current branch: main', 'Git user: mervyn']) {
+    assert.ok(out.includes(line), `应原样保留：${line}`)
+  }
+  // 判据是整句：少一个词、多一个空格、换个词都不改（实测那些本来就不被拦）
+  for (const untouched of [
+    'Main branch: main',
+    'Main branch (used for PRs): main',
+    'Main branch  (you will usually use this for PRs): main',
+    'Main branch (you will normally use this for PRs): main',
+    'you will usually use this for PRs',
+  ]) {
+    assert.equal(rewriteTencentFingerprints(untouched), untouched)
+  }
+  // 大小写不敏感：全大写/全小写同样被拦，所以同样要改写
+  assert.match(rewriteTencentFingerprints('MAIN BRANCH (YOU WILL USUALLY USE THIS FOR PRS): main'), /PRs usually go here/)
+  assert.match(rewriteTencentFingerprints('main branch (you will usually use this for prs): main'), /PRs usually go here/)
+})

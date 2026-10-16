@@ -61,6 +61,13 @@ const RULES = [
     replace: 'You are Claude Code, an official CLI for Claude',
     note: '2026-10-16 实测：原句 400 + 11128，改写后 200（workbuddy/deepseek-v4.1-flash）',
   },
+  {
+    // Claude Code 的 gitStatus 上下文：只要会话在一个 git 仓库里，它就把这一行
+    // 拼进 system。判据是**整句逐字符**，不是关键词——少一个词或多一个空格都不拦。
+    find: 'Main branch (you will usually use this for PRs)',
+    replace: 'Main branch (PRs usually go here)',
+    note: '2026-10-16 实测：整句 400 + 11128，改写后 200（intl/deepseek-v4.1-flash、cn/hy4-preview、cn/deepseek-v4.1-flash、intl/hy4-preview-f）',
+  },
 ]
 
 /**
