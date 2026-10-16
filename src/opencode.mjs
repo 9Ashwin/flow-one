@@ -36,7 +36,8 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import crypto from 'node:crypto'
-import { bridgeHome } from './home.mjs'
+import { bridgeHome, credentialFile } from './home.mjs'
+import { readStore, saveCredential } from './auth.mjs'
 
 const BASE62 = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz'
 /** 门禁工具名：服务端按这四个名字识别官方客户端形状。 */
@@ -45,6 +46,8 @@ export const GATE_TOOLS = ['bash', 'glob', 'grep', 'read']
 export const OPENCODE = {
   id: 'oc',
   kind: 'openai',
+  /** 匿名免费档：不需要任何凭据。 */
+  auth: 'none',
   label: 'OpenCode 免费模型',
   hint: '无需登录，走 opencode.ai 官方免费档',
   baseUrl: 'https://opencode.ai/inference',
@@ -92,6 +95,69 @@ async function opencodeCapabilities({ signal } = {}) {
   } catch { /* 拿不到就退回「无元数据」，上层据此不加后缀 */ }
   return capabilityCache.byId
 }
+
+/**
+ * Go 套餐（付费/订阅）：与免费档**不是同一条路**。
+ *
+ * 事实来自 2026-10-16 实测（key + 端点都真打过；DSH 桌面端的 `cordis.yml` 里
+ * `opencode-go` 也是同一套：`apiKeyEnv: OPENCODE_GO_API_KEY`、
+ * `baseURL: https://opencode.ai/zen/go/v1`、`headers: { x-opencode-session: <uuid> }`）：
+ *
+ * | 事实 | 证据 |
+ * | --- | --- |
+ * | 端点 `/zen/go/v1`（免费档是 `/inference/v1`） | 两条路模型清单不同：Go 37 个 |
+ * | `Authorization: Bearer oc_sk_…` **必需** | 无头 / 乱写 key → 401 |
+ * | `x-opencode-session` **必需** | 缺 → `400 MissingSessionID`；UUID 或 `ses_` 形状都收 |
+ * | **不需要**免费档那套形状门禁 | 裸 OpenAI 报文（无 tools、无那 5 个头）直接 200 |
+ */
+export const OPENCODE_GO = {
+  id: 'ocg',
+  kind: 'openai',
+  auth: 'key',
+  label: 'OpenCode Go 套餐',
+  hint: '要 API key，走 /zen/go/v1',
+  baseUrl: 'https://opencode.ai/zen/go/v1',
+  chatPath: '/chat/completions',
+  modelsPath: '/models',
+  /** 这条路对会话 id 的要求是**必填**，值本身无所谓（用于服务端路由亲和）。 */
+  sessionHeader: 'x-opencode-session',
+  defaultModel: 'deepseek-v4.1-flash',
+}
+
+/** 凭据存储里的条目名（与腾讯两条线共用同一个 credentials.json）。 */
+const GO_ENTRY = 'opencode-go'
+
+/** 读 Go 套餐凭据；没配就是 undefined。 */
+export function goCredential() {
+  const entry = readStore(credentialFile())[GO_ENTRY]
+  if (typeof entry?.apiKey !== 'string' || entry.apiKey === '') return undefined
+  return { apiKey: entry.apiKey, session: typeof entry.session === 'string' && entry.session !== '' ? entry.session : crypto.randomUUID() }
+}
+
+export const hasGoCredential = () => goCredential() !== undefined
+
+/**
+ * 存 Go 套餐 key。
+ *
+ * 会话 id 在这里生成一次并落盘复用：它只影响服务端路由亲和，但每次换一个会让同一台
+ * 机器被看成很多独立客户端（DSH 那边就是固定写死一个 UUID 的）。
+ */
+export function saveGoKey(apiKey, { file = credentialFile(), session } = {}) {
+  const trimmed = String(apiKey ?? '').trim()
+  if (trimmed === '') throw new Error('key 不能为空')
+  const existing = readStore(file)[GO_ENTRY]
+  saveCredential({ id: GO_ENTRY }, {
+    apiKey: trimmed,
+    session: session ?? (typeof existing?.session === 'string' && existing.session !== '' ? existing.session : crypto.randomUUID()),
+    /** 展示用：不落全量明文，只留末四位便于核对。 */
+    tail: trimmed.slice(-4),
+    savedAt: new Date().toISOString(),
+  }, file)
+  return goCredential()
+}
+
+/** 供展示：已配 key 的末四位。 */
+export const goKeyTail = () => readStore(credentialFile())[GO_ENTRY]?.tail
 
 function randomBase62(length) {
   const bytes = crypto.randomBytes(length)
@@ -265,10 +331,23 @@ import { failureOf, readSse } from './sse.mjs'
  */
 let session = ''
 
-/** 模型清单：`/v1/models` 只回 id/object/created/owned_by，能力信息不在这里。 */
+/**
+ * 模型清单。
+ *
+ * 两条路的区别只在认证头：免费档用匿名 `Bearer public`，Go 套餐用真 key +
+ * 必填的会话头。清单本身都只回 `id/object/created/owned_by`，能力要另外取
+ * models.dev（见 `opencodeCapabilities`）。
+ */
 export async function listModels(source = OPENCODE, { signal } = {}) {
+  const credential = source.auth === 'key' ? goCredential() : undefined
+  if (source.auth === 'key' && credential === undefined) {
+    throw new Error(`${source.label}：还没配置 API key（在菜单里配一次，或让 Claude Code 那边先用免费档）`)
+  }
+  const headers = credential === undefined
+    ? { authorization: `Bearer ${source.anonymousKey}`, 'user-agent': source.defaultUserAgent }
+    : { authorization: `Bearer ${credential.apiKey}`, [source.sessionHeader]: credential.session }
   const response = await fetch(`${source.baseUrl}${source.modelsPath}`, {
-    headers: { authorization: `Bearer ${source.anonymousKey}`, 'user-agent': source.defaultUserAgent },
+    headers,
     signal: signal === undefined ? AbortSignal.timeout(20_000) : signal,
   })
   if (!response.ok) {
@@ -295,6 +374,33 @@ export async function listModels(source = OPENCODE, { signal } = {}) {
  * 于是上层的 Anthropic 翻译层不必知道上游是谁。
  */
 export async function chat(source, model, body, { signal, log = () => {} } = {}) {
+  // Go 套餐（认证通道）：只要 key + 会话头，**没有**免费档那套形状门禁
+  // （实测裸 OpenAI 报文直接 200），所以这里不做工具名改写与打桩。
+  if (source.auth === 'key') {
+    const credential = goCredential()
+    if (credential === undefined) return { ok: false, status: 0, message: `${source.label}：还没配置 API key` }
+    const response = await fetch(`${source.baseUrl}${source.chatPath}`, {
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${credential.apiKey}`,
+        'content-type': 'application/json',
+        accept: 'text/event-stream',
+        [source.sessionHeader]: credential.session,
+      },
+      body: JSON.stringify({ ...body, model, stream: true }),
+      signal,
+    })
+    if (!response.ok) {
+      const failure = await failureOf(response)
+      if (/MissingSessionID/i.test(failure.message)) {
+        log(`${source.label}：上游要求会话头 ${source.sessionHeader}（应已自动带上，若出现请提 issue）`)
+      }
+      return failure
+    }
+    log(`${source.label}：${model} 已建立回合（会话 ${String(credential.session).slice(0, 8)}…）`)
+    return { ok: true, chunks: readSse(response.body) }
+  }
+
   if (session === '') session = sessionId()
   const gated = applyFreeTierGate({ ...body, model })
   const response = await fetch(`${source.baseUrl}${source.chatPath}`, {

@@ -15,8 +15,9 @@
  * @module src/doctor.mjs
  */
 
-import { OPENCODE, applyFreeTierGate, projectId, requestId, sessionId, shapeHeaders } from './opencode.mjs'
+import { OPENCODE, OPENCODE_GO, applyFreeTierGate, goCredential, goKeyTail, projectId, requestId, sessionId, shapeHeaders } from './opencode.mjs'
 import { SOURCES, needsLogin } from './sources.mjs'
+import { hasGoCredential } from './opencode.mjs'
 import { credentialStatus, ensureCredential } from './auth.mjs'
 import { chat as buddyChat, listModels } from './buddy.mjs'
 import { toOpenAiRequest } from './anthropic.mjs'
@@ -114,6 +115,61 @@ export async function probeOpencodeGate({ baseUrl = OPENCODE.baseUrl, fetchImpl 
     })
   }
   return { baseUrl, rows, tightened: false, relaxed: rows.filter(row => row.verdict === 'relaxed').map(row => row.label) }
+}
+
+/**
+ * 重推 Go 套餐（认证通道）的三条事实：
+ * 模型清单要 key、会话头必填、带上会话头能出字。
+ *
+ * 与免费档那条路的区别是这里**没有**形状门禁，所以探针也短：
+ * 缺会话头应得 `400 MissingSessionID`，而不是 FreeTierError。
+ */
+export async function probeOpencodeGo(source = OPENCODE_GO, { fetchImpl = fetch, timeoutMs = 20_000 } = {}) {
+  const credential = goCredential()
+  if (credential === undefined) return { configured: false, rows: [] }
+  const rows = []
+  const url = `${source.baseUrl}${source.chatPath}`
+  const body = { model: source.defaultModel, stream: true, max_tokens: 8, messages: [{ role: 'user', content: 'ping' }] }
+
+  const call = async headers => {
+    try {
+      const response = await fetchImpl(url, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', accept: 'text/event-stream', ...headers },
+        body: JSON.stringify(body),
+        signal: AbortSignal.timeout(timeoutMs),
+      })
+      const text = await response.text()
+      return { status: response.status, ok: response.ok, message: response.ok ? '' : text.slice(0, 160) }
+    } catch (error) {
+      return { status: 0, ok: false, message: error?.message ?? String(error) }
+    }
+  }
+
+  const auth = { authorization: `Bearer ${credential.apiKey}` }
+  const withSession = await call({ ...auth, [source.sessionHeader]: credential.session })
+  rows.push({
+    label: `带 ${source.sessionHeader} 的一次最小对话`,
+    verdict: withSession.ok ? 'pass' : /MissingSessionID/.test(withSession.message) ? 'fail' : 'fail',
+    ...withSession,
+  })
+  const withoutSession = await call(auth)
+  rows.push({
+    label: `不带 ${source.sessionHeader} 应被拒`,
+    verdict: !withoutSession.ok && /MissingSessionID/.test(withoutSession.message) ? 'pass' : withoutSession.ok ? 'relaxed' : 'inconclusive',
+    ...withoutSession,
+  })
+  const listing = await (async () => {
+    try {
+      const response = await fetchImpl(`${source.baseUrl}${source.modelsPath}`, { headers: auth, signal: AbortSignal.timeout(timeoutMs) })
+      const payload = response.ok ? await response.json() : null
+      return { status: response.status, ok: response.ok, count: Array.isArray(payload?.data) ? payload.data.length : 0 }
+    } catch (error) {
+      return { status: 0, ok: false, message: error?.message ?? String(error) }
+    }
+  })()
+  rows.push({ label: '模型清单要 key', verdict: listing.ok ? 'pass' : 'fail', ...listing })
+  return { configured: true, tail: goKeyTail(), rows }
 }
 
 // ── 腾讯内容风控 ────────────────────────────────────────────────────────────
@@ -247,6 +303,12 @@ export function credentialChecks() {
   for (const source of SOURCES) {
     if (!needsLogin(source)) {
       rows.push({ label: source.label, ok: true, text: '无需登录（匿名免费档）' })
+      continue
+    }
+    if (source.auth === 'key') {
+      rows.push(hasGoCredential()
+        ? { label: source.label, ok: true, text: `已配置 API key（末四位 ${goKeyTail()}）` }
+        : { label: source.label, ok: false, text: '未配置 API key', fix: '菜单「一键配置」里选 OpenCode Go 套餐填 key' })
       continue
     }
     const status = credentialStatus(source)

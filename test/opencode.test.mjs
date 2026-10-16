@@ -160,3 +160,53 @@ test('端到端：Claude Code 的请求经桥 → OpenCode 免费档，工具名
   assert.ok(!JSON.stringify(frames).includes('"grep"'), '桩工具的调用不能转发给 Claude Code')
   assert.equal(frames.find(frame => frame.event === 'message_delta').data.delta.stop_reason, 'tool_use')
 })
+
+test('Go 套餐：必须带 key 与会话头，且不需要免费档那套形状', async t => {
+  const home = scratch()
+  const { saveGoKey, goCredential, listModels, chat, OPENCODE_GO } = await import('../src/opencode.mjs')
+  const seen = []
+  const server = http.createServer(async (req, res) => {
+    if (req.url === '/models') {
+      seen.push({ url: req.url, headers: req.headers, body: undefined })
+      res.writeHead(200, { 'content-type': 'application/json' })
+      res.end(JSON.stringify({ data: [{ id: 'deepseek-v4.1-flash', object: 'model', owned_by: 'opencode' }] }))
+      return
+    }
+    const body = await readBody(req)
+    seen.push({ url: req.url, headers: req.headers, body })
+    res.writeHead(200, { 'content-type': 'text/event-stream' })
+    res.end(sse([{ choices: [{ delta: { content: 'pong' } }] }, { choices: [], usage: { prompt_tokens: 3, completion_tokens: 1 } }]))
+  })
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
+  t.after(() => server.close())
+  const source = { ...OPENCODE_GO, baseUrl: `http://127.0.0.1:${server.address().port}` }
+
+  // 没配 key：清单要报错，对话要返回可读失败（而不是发一个必然 401 的请求）
+  assert.equal(goCredential(), undefined)
+  await assert.rejects(() => listModels(source), /还没配置 API key/)
+  assert.equal((await chat(source, 'x', { messages: [] })).ok, false)
+
+  const first = saveGoKey('oc_sk_test_0000000000000000000000000000', { file: `${home}/credentials.json` })
+  assert.equal(first.session.length > 8, true)
+  // 会话 id 落盘复用：再存一次 key 不该换会话（换了会让同一台机器被看成很多客户端）
+  // 但 key 本身要换新的 —— 断言里用的必须是**最后一次**存进去的那个
+  const saved = saveGoKey('oc_sk_test_1111111111111111111111111111', { file: `${home}/credentials.json` })
+  assert.equal(saved.session, first.session)
+
+  const models = await listModels(source)
+  assert.equal(models[0].id, 'deepseek-v4.1-flash')
+  const listing = seen[0]
+  assert.equal(listing.headers.authorization, `Bearer ${saved.apiKey}`)
+  assert.equal(listing.headers['x-opencode-session'], saved.session, '清单请求也要带会话头')
+
+  // 裸 OpenAI 报文就能过：不该被塞进门禁的四个桩工具，也不该强塞那 5 个 x-opencode-* 头
+  const result = await chat(source, 'deepseek-v4.1-flash', { messages: [{ role: 'user', content: 'ping' }] })
+  assert.equal(result.ok, true)
+  const call = seen[1]
+  assert.equal(call.headers.authorization, `Bearer ${saved.apiKey}`)
+  assert.equal(call.headers['x-opencode-session'], saved.session)
+  assert.equal(call.headers['x-opencode-client'], undefined, '认证通道不需要免费档的客户端头')
+  assert.equal(call.body.stream, true)
+  assert.equal(call.body.tools, undefined, '认证通道不需要补门禁工具')
+  assert.equal(call.body.model, 'deepseek-v4.1-flash')
+})

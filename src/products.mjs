@@ -24,6 +24,8 @@ const UA_CN_LINE = 'WorkBuddy/5.5.2 WorkBuddy/5.5.2 CLI/5.5.2'
  */
 export const CN = {
   id: 'cn',
+  /** 登录方式：oauth = 浏览器授权轮询；none = 无需登录；key = 填 API key。 */
+  auth: 'oauth',
   label: 'WorkBuddy 国内版（CodeBuddy）',
   platform: 'ide',
   endpoint: 'https://copilot.tencent.com',
@@ -43,6 +45,7 @@ export const CN = {
 /** 国际版 = WorkBuddy（www.workbuddy.ai）。 */
 export const INTL = {
   id: 'intl',
+  auth: 'oauth',
   label: 'WorkBuddy 国际版',
   platform: 'workbuddy-ai',
   endpoint: 'https://www.workbuddy.ai',

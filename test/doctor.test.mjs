@@ -84,3 +84,40 @@ test('本地体检：密钥不一致 / 模型不一致 / 服务跑着别的代�
   assert.match(texts, /没有服务在跑/)
   for (const issue of messy.issues) assert.ok(issue.fix !== undefined && issue.fix !== '', '每条问题都要给修法')
 })
+
+test('Go 套餐探针：会话头必填这条事实会被重推出来', async t => {
+  const fs = await import('node:fs')
+  process.env.BRIDGE_HOME = fs.mkdtempSync('/tmp/ccb-goprobe-')
+  const { saveGoKey, OPENCODE_GO } = await import('../src/opencode.mjs')
+  const { probeOpencodeGo } = await import('../src/doctor.mjs')
+  // 假上游：只认「带 key + 带会话头」，缺会话头就回 MissingSessionID（真上游的行为）
+  const server = http.createServer(async (req, res) => {
+    if (req.url === '/models') {
+      res.writeHead(req.headers.authorization?.startsWith('Bearer ') ? 200 : 401, { 'content-type': 'application/json' })
+      res.end(JSON.stringify({ data: [{ id: 'deepseek-v4.1-flash' }] }))
+      return
+    }
+    if (req.headers['x-opencode-session'] === undefined) {
+      res.writeHead(400, { 'content-type': 'application/json' })
+      res.end(JSON.stringify({ type: 'error', error: { type: 'MissingSessionID', message: 'Request is missing x-opencode-session' } }))
+      return
+    }
+    res.writeHead(200, { 'content-type': 'text/event-stream' })
+    res.end('data: {"choices":[{"delta":{"content":"pong"}}]}\n\ndata: [DONE]\n\n')
+  })
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
+  t.after(() => server.close())
+  const source = { ...OPENCODE_GO, baseUrl: `http://127.0.0.1:${server.address().port}` }
+
+  // 没配 key 时整节跳过（不报错）
+  assert.equal((await probeOpencodeGo(source)).configured, false)
+
+  saveGoKey('oc_sk_probe_000000000000000000000000000')
+  const result = await probeOpencodeGo(source)
+  assert.equal(result.configured, true)
+  const verdict = label => result.rows.find(row => row.label.startsWith(label))?.verdict
+  assert.equal(verdict('带 x-opencode-session'), 'pass')
+  assert.equal(verdict('不带 x-opencode-session'), 'pass', '缺会话头被拒 → 这条必填项仍然成立')
+  assert.equal(verdict('模型清单要 key'), 'pass')
+  assert.equal(result.rows.find(row => row.label.startsWith('模型清单')).count, 1)
+})

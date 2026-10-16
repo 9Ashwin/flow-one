@@ -110,6 +110,29 @@ Esc 清空、↑↓ 移动、回车确认（筛选结果里不再插分组标题
 | `cn/` | WorkBuddy 国内版（CodeBuddy，`copilot.tencent.com`） | 要 |
 | `intl/` | WorkBuddy 国际版（`www.workbuddy.ai`） | 要 |
 | `oc/` | **OpenCode 免费档**（`opencode.ai/inference`） | **不要**，装完即用 |
+| `ocg/` | **OpenCode Go 套餐**（`opencode.ai/zen/go/v1`） | 要一把 API key（`oc_sk_…`） |
+
+### OpenCode Go 套餐（`ocg/`）
+
+买了 Go 套餐（$10/月起）就在菜单里选「一键配置 → OpenCode Go 套餐」，把
+`oc_sk_…` 粘贴进去（输入时不回显）；配好之后**自动多挂一条来源**，模型清单里出现
+`ocg/` 前缀的 37 个模型：DeepSeek V4.1 Flash / Pro、GLM-5.1/5.2/5.3、Kimi K3、
+Grok 4.6/4.7、Qwen3.8、Claude Haiku 5.5、Gemini 4 Argon…
+
+这条路与免费档**不是同一条**，规矩也不同（2026-10-16 实测；DSH 桌面端的
+`cordis.yml` 里也是同一套配置）：
+
+| 事实 | 说明 |
+| --- | --- |
+| 端点 `/zen/go/v1` | 免费档是 `/inference/v1`，两条路的模型清单不一样 |
+| `Authorization: Bearer oc_sk_…` 必需 | 无头或乱写 key 都是 401 |
+| **`x-opencode-session` 必需** | 缺了回 `400 MissingSessionID`（"cannot be routed efficiently"）；值是随意的会话 id，UUID 与 `ses_` 形状都收 —— 桥会在首次配置时生成并落盘复用 |
+| **不需要**免费档那套形状 | 裸 OpenAI 报文直接 200，不用补那四个小写工具、也不用发 `x-opencode-client` |
+
+两个实操细节：`reasoning_effort: "off"` 上游**不接受**（422，文案还是误导性的
+"Endpoint is unavailable"），本桥的档位映射只会发 `low/medium/high`；deepseek 这族
+**默认就思考**，`max_tokens` 给小了可能全被推理吃掉、正文为空 —— 调小 `max_tokens`
+调试时容易误判成「桥坏了」。
 
 ### OpenCode 免费档（`oc/`）
 
@@ -134,7 +157,8 @@ FreeTierError: OpenCode's free tier can only be used from within OpenCode.
 那是 Claude Code 执行不了的工具名。
 
 **这两条门禁的完整事实、证据与复验方式在 [docs/gates.md](docs/gates.md)**；
-`ccb doctor` 会把它们**逐项重推一遍**（先验完整形状，再逐项去掉一个要件确认它确实
+`ccb doctor` 会把它们**逐项重推一遍**（Go 套餐那条路也会：带会话头的一次最小对话、
+不带会话头应被拒、模型清单要 key）（先验完整形状，再逐项去掉一个要件确认它确实
 还是必填），上游放松或收紧都会当场显形 —— 不用等用户来提「用不了」。`big-pickle` 等 `-free` 结尾的模型同样可用；
 不带 `-free` 的（`deepseek-v4.1-flash`、`deepseek-v4-pro` 等）属于 $10/月的
 OpenCode Go 订阅，走了会报 `AuthError`。

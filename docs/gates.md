@@ -92,7 +92,35 @@ FreeTierError: OpenCode's free tier can only be used from within OpenCode.
 
 ---
 
-## 三、失效时是什么样
+## 三、OpenCode Go 套餐（认证通道，`/zen/go/v1`）
+
+与免费档**不是同一条路**：端点不同、模型清单不同（Go 37 个）、规矩也不同。
+DSH 桌面端的 `cordis.yml` 里 `opencode-go` 就是这套配置（`apiKeyEnv:
+OPENCODE_GO_API_KEY`、`baseURL: https://opencode.ai/zen/go/v1`、
+`headers: { x-opencode-session: <uuid> }`）。
+
+| 要件 | 事实 | 证据 |
+| --- | --- | --- |
+| `Authorization: Bearer oc_sk_…` | 必需 | 2026-10-16：无头、乱写 key 都 401 |
+| `x-opencode-session` | **必需**，值随意（UUID 或 `ses_` 形状都收） | 2026-10-16：缺 → `400 MissingSessionID`（"cannot be routed efficiently"）；两种值都 200 |
+| 免费档那套形状（5 个客户端头、四个小写工具、`ses_` 形状） | **不需要** | 同上：裸 OpenAI 报文直接 200 |
+| `reasoning_effort` | `low` / `medium` / `high` / `max` / `minimal` 都 200；**`off` 被拒** | 2026-10-16：`off` → 422，且文案是误导性的 `Endpoint is unavailable` |
+
+补充事实（都是实测撞出来的）：
+
+- **deepseek 这族默认就思考**：`max_tokens` 给小了（实测 48 与 400）可能整段额度被
+  `reasoning_content` 吃掉，正文为空、`stop_reason: max_tokens` —— 看着像桥坏了，
+  其实不是；
+- **`high` 偶发 503**：首次实测撞到一次，随后连测 3 次都 200，属上游抖动，重试即可；
+- 能力元数据（窗口 / 输出上限 / 视觉）同样取自 models.dev：`deepseek-v4.1-flash` =
+  1M 窗口 / 384k 输出，与 DSH 配置里手写的值一致。
+
+**复验**：`ccb doctor` 的「OpenCode Go 套餐（认证通道）」一节会重推这三条
+（带会话头的最小对话、不带会话头应被拒、模型清单要 key）。
+
+---
+
+## 四、失效时是什么样
 
 | 失效点 | 症状 | 响亮吗 |
 | --- | --- | --- |
@@ -107,7 +135,7 @@ FreeTierError: OpenCode's free tier can only be used from within OpenCode.
 
 ---
 
-## 四、怎么自己加一条探针
+## 五、怎么自己加一条探针
 
 `src/doctor.mjs` 里的探针都是纯函数 + 可注入的 `fetchImpl` / 服务器地址，所以能离线测：
 
@@ -115,6 +143,8 @@ FreeTierError: OpenCode's free tier can only be used from within OpenCode.
   `pass`（该拒的被拒）/ `relaxed`（该拒的没拒）/ `fail` / `inconclusive`；
 - `probeTencentFingerprint(product)` —— 走**本工具自己的翻译层 + 改写器**再真发一次，
   返回 `{ ok, blocked, limited }`；
+- `probeOpencodeGo()` —— 认证通道的三条（会话头必填、key 必需、能出字），返回带
+  `verdict` 的行；未配置 key 时整节跳过；
 - `localIssues({ settings, serviceEnv, serviceCli, runningCli, healthOk })` —— 纯函数，
   喂假数据即可断言（密钥不一致、`model` 与 `ANTHROPIC_MODEL` 不一致、服务跑着别的代码、
   没人监听这四类都覆盖到了）。

@@ -321,6 +321,63 @@ export async function select({ message, options, initial = 0, filterable = false
   })
 }
 
+/**
+ * 密钥输入：键入的字符回显成 `*`。
+ *
+ * 密钥要落到凭据文件里，不该留在终端回滚缓冲里被人瞄到 —— 所以单独一个组件，
+ * 而不是拿 `input()` 凑合。
+ */
+export async function password({ message, validate }) {
+  const stdin = stdinOf()
+  readline.emitKeypressEvents(stdin)
+  const wasRaw = stdin.isRaw
+  stdin.setRawMode?.(true)
+  stdin.resume()
+  let value = ''
+  const render = () => `${cyan('?')} ${message} ${value === '' ? dim('粘贴后回车') : '*'.repeat(Math.min(value.length, 24))}`
+  process.stdout.write(render())
+  return await new Promise((resolve, reject) => {
+    const restore = () => {
+      stdin.removeListener('keypress', listener)
+      if (!wasRaw) stdin.setRawMode?.(false)
+      stdin.pause()
+    }
+    const repaint = () => {
+      process.stdout.write(`\r${ESC}2K${render()}`)
+    }
+    const listener = (str, key) => {
+      try {
+        if (key?.ctrl && key.name === 'c') {
+          restore()
+          process.stdout.write(`\n${yellow('已取消')}\n`)
+          process.exit(130)
+        }
+        const name = key?.name
+        if (name === 'return' || name === 'enter') {
+          const complaint = typeof validate === 'function' ? validate(value) : undefined
+          if (complaint !== undefined) {
+            process.stdout.write(`\n${red(complaint)}\n${render()}`)
+            return
+          }
+          restore()
+          process.stdout.write(`\n${green('✔')} ${message} ${'*'.repeat(Math.min(value.length, 24))}\n`)
+          resolve(value)
+          return
+        }
+        if (name === 'backspace' || name === 'delete') value = value.slice(0, -1)
+        // 粘贴会一次性送来整串：只要不是控制键就整段收下
+        else if (typeof str === 'string' && str.length > 0 && key?.ctrl !== true && key?.meta !== true && str >= ' ') value += str
+        repaint()
+      } catch (error) {
+        restore()
+        process.stdout.write('\n')
+        reject(error)
+      }
+    }
+    stdin.on('keypress', listener)
+  })
+}
+
 /** 是/否确认；直接回车采用 `initial`。 */
 export async function confirm({ message, initial = true }) {
   const hint = initial ? 'Y/n' : 'y/N'

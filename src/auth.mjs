@@ -24,7 +24,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import crypto from 'node:crypto'
 import { spawn } from 'node:child_process'
-import { credentialFile } from './config.mjs'
+import { credentialFile } from './home.mjs'
 
 const STATE_TIMEOUT_MS = 10_000
 const REQUEST_TIMEOUT_MS = 60_000

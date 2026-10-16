@@ -11,7 +11,7 @@
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { SOURCES, SOURCE_NAMES, sourceByName } from './sources.mjs'
+import { SOURCE_NAMES, sourceByName, defaultSources } from './sources.mjs'
 import { bridgeHome, credentialFile } from './home.mjs'
 
 export const DEFAULTS = {
@@ -34,7 +34,7 @@ export const DEFAULTS = {
   /** 是否对腾讯后端做已知内容指纹的窄改写（详见 src/fingerprint.mjs）。 */
   fingerprintRewrite: true,
   /** 同时挂载的来源，顺序决定「没有前缀的模型 ID」落到谁身上。 */
-  products: [...SOURCES],
+  products: defaultSources(),
   quiet: false,
 }
 
@@ -76,7 +76,7 @@ export const USAGE = `claude-code-openai-bridge —— 让 Claude Code CLI 用�
 
 选项：
   --mode <direct|gateway>  直连腾讯产品（默认），或转发给 OpenAI 兼容上游
-  --product <cn|intl|oc>   只挂载指定的来源，可重复；默认三条都挂
+  --product <cn|intl|oc|ocg>  只挂载指定的来源，可重复；默认挂已配好的全部
   --host <地址>            监听地址（默认 ${DEFAULTS.host}）
   --port <端口>            监听端口（默认 ${DEFAULTS.port}）
   --model <ID>             默认模型 ID；直连模式不给则由上游清单决定
@@ -124,7 +124,7 @@ function resolveSources(names) {
     if (source === undefined) throw new Error(`未知来源：${name}（可选 ${SOURCE_NAMES}）`)
     if (!picked.includes(source)) picked.push(source)
   }
-  return picked.length > 0 ? picked : [...SOURCES]
+  return picked.length > 0 ? picked : defaultSources()
 }
 
 const FLAGS = {

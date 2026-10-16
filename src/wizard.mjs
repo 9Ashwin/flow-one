@@ -18,9 +18,9 @@ import net from 'node:net'
 import crypto from 'node:crypto'
 import process from 'node:process'
 import { CN, INTL } from './products.mjs'
-import { OPENCODE } from './opencode.mjs'
+import { OPENCODE, OPENCODE_GO, goCredential, goKeyTail, hasGoCredential, saveGoKey } from './opencode.mjs'
 import { SOURCES, needsLogin, sourceByName } from './sources.mjs'
-import { credentialChecks, localIssues, localSnapshot, probeOpencodeGate, probeTencentFingerprint } from './doctor.mjs'
+import { credentialChecks, localIssues, localSnapshot, probeOpencodeGate, probeOpencodeGo, probeTencentFingerprint } from './doctor.mjs'
 import { login, credentialStatus } from './auth.mjs'
 import { createDirectUpstream, createGatewayUpstream } from './upstreams.mjs'
 import { credentialFile } from './config.mjs'
@@ -30,7 +30,7 @@ import {
 } from './install.mjs'
 import {
   banner, blank, box, confirm, gray, green, heading, info, input, menu, note,
-  section, select, spinner, style, success, warn, fail, dim, yellow,
+  section, select, password, spinner, style, success, warn, fail, dim, yellow,
 } from './prompt.mjs'
 
 const DEFAULT_PORT = 8788
@@ -135,6 +135,7 @@ function currentSettings() {
 
 function loggedInLabel(product) {
   if (!needsLogin(product)) return `${product.id} 无需登录`
+  if (product.auth === 'key') return hasGoCredential() ? `${product.id} 已配 key` : `${product.id} 未配 key`
   const status = credentialStatus(product)
   if (!status.loggedIn) return `${product.id} 未登录`
   return `${product.id} ${status.nickname === '' ? '已登录' : status.nickname}`
@@ -160,6 +161,22 @@ export async function ensureLoggedIn(products, { force = false } = {}) {
     // 无需登录的来源（OpenCode 免费档）也要明说一句，别让人以为它被漏掉了
     if (!needsLogin(product)) {
       success(`${product.label} 无需登录，直接可用`)
+      continue
+    }
+    // 填 key 这条路：没有浏览器授权可走，直接问 key
+    if (product.auth === 'key') {
+      if (hasGoCredential() && !force) {
+        success(`${product.label} 已配 key（末四位 ${goKeyTail()}）`)
+        continue
+      }
+      heading(`配置 ${product.label}`)
+      note(dim('  在 opencode.ai 控制台生成 API key（Go 套餐订阅里的那个），粘贴到这里。'))
+      const value = await password({
+        message: 'OpenCode API key',
+        validate: input => (input.trim().length < 20 ? '看起来不像一个 key' : undefined),
+      })
+      const saved = saveGoKey(value)
+      success(`已保存（末四位 ${saved.apiKey.slice(-4)}），会话 id ${saved.session.slice(0, 8)}…`)
       continue
     }
     const status = credentialStatus(product)
@@ -265,6 +282,7 @@ export async function setupWizard() {
       { label: 'WorkBuddy 国内版（CodeBuddy）', hint: loggedInLabel(CN), value: CN },
       { label: 'WorkBuddy 国际版', hint: loggedInLabel(INTL), value: INTL },
       { label: 'OpenCode 免费档', hint: `${loggedInLabel(OPENCODE)}，免费模型`, value: OPENCODE },
+      { label: 'OpenCode Go 套餐', hint: `${loggedInLabel(OPENCODE_GO)}，付费订阅（DeepSeek V4.1 Pro、GLM、Kimi、Grok…）`, value: OPENCODE_GO },
       { label: '转发给已有的 OpenAI 兼容网关', hint: '自建网关 / LiteLLM / Ollama', value: GATEWAY },
     ],
   })
@@ -498,6 +516,7 @@ export async function loginFlow() {
       { label: '两条都重新登录', hint: `${loggedInLabel(CN)} / ${loggedInLabel(INTL)}`, value: [CN, INTL] },
       { label: '国内版（CodeBuddy）', hint: loggedInLabel(CN), value: [CN] },
       { label: '国际版（WorkBuddy）', hint: loggedInLabel(INTL), value: [INTL] },
+      { label: 'OpenCode Go 套餐（换 key）', hint: loggedInLabel(OPENCODE_GO), value: [OPENCODE_GO] },
     ],
   })
   await ensureLoggedIn(which, { force: true })
@@ -543,7 +562,8 @@ export async function doctorFlow() {
   note(dim('  被拦的表现是 400 + code 11128；额度受限不算门禁问题'))
   let blocked = false
   for (const source of SOURCES) {
-    if (!needsLogin(source)) continue
+    // 只测腾讯那两条线：这一节验的是内容风控的字面量规则，与 OpenCode 两条路无关
+    if (source.auth !== 'oauth') continue
     const status = credentialStatus(source)
     if (!status.loggedIn) {
       note(`  ${gray(`${source.label} 未登录，跳过`)}`)
@@ -558,6 +578,21 @@ export async function doctorFlow() {
       blocked = true
       fail(`${source.label} 被内容风控拦下：${result.message}`)
     } else fail(`${source.label} 探测失败：${result.message}`)
+  }
+
+  blank()
+  const go = await probeOpencodeGo()
+  section('OpenCode Go 套餐（认证通道）')
+  if (go.configured !== true) {
+    note(`  ${gray('未配置 API key，跳过（菜单「一键配置」里选 OpenCode Go 套餐）')}`)
+  } else {
+    note(dim(`  key 末四位 ${go.tail}；这条路没有形状门禁，但要求会话头`))
+    for (const row of go.rows) {
+      if (row.verdict === 'pass') success(`${row.label} → ${row.status}${row.count === undefined ? '' : `（${row.count} 个模型）`}`)
+      else if (row.verdict === 'relaxed') note(`  ${yellow('○')} ${row.label} → ${row.status} ${gray('（这条已不再是必填项）')}`)
+      else if (row.verdict === 'inconclusive') warn(`${row.label} → ${row.status || '连不上'} ${row.message ?? ''}`)
+      else fail(`${row.label} → ${row.status} ${row.message ?? ''}`)
+    }
   }
 
   blank()

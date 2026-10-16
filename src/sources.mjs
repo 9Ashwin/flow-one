@@ -14,15 +14,25 @@
  */
 
 import { CN, INTL } from './products.mjs'
-import { OPENCODE } from './opencode.mjs'
+import { OPENCODE, OPENCODE_GO, hasGoCredential } from './opencode.mjs'
 
-export const SOURCES = [CN, INTL, OPENCODE]
+export const SOURCES = [CN, INTL, OPENCODE, OPENCODE_GO]
+
+/**
+ * 默认挂载哪些来源。
+ *
+ * 要 key 的来源（OpenCode Go）**没配 key 就不挂** —— 挂了也只是每次启动多一条
+ * 「模型清单不可用」的噪声，还容易让人以为服务坏了。
+ */
+export const defaultSources = () => SOURCES.filter(source => source.auth !== 'key' || hasGoCredential())
 
 /** 命令行、模型前缀、向导都认这些别名，省得用户去猜内部叫法。 */
 const ALIASES = new Map([
   ['cn', CN], ['buddy', CN], ['codebuddy', CN], ['国内', CN], ['国内版', CN],
   ['intl', INTL], ['workbuddy', INTL], ['workbuddy-ai', INTL], ['国际', INTL], ['国际版', INTL],
   ['oc', OPENCODE], ['opencode', OPENCODE], ['免费', OPENCODE], ['免费档', OPENCODE],
+  ['ocg', OPENCODE_GO], ['opencode-go', OPENCODE_GO], ['opencodego', OPENCODE_GO],
+  ['go', OPENCODE_GO], ['套餐', OPENCODE_GO], ['go套餐', OPENCODE_GO],
 ])
 
 /** 未知名字返回 undefined，由调用方列出可选值报错。 */
@@ -34,5 +44,5 @@ export function sourceByName(name) {
 
 export const SOURCE_NAMES = SOURCES.map(source => `${source.id}（${source.label}）`).join(' / ')
 
-/** 需要登录的来源（向导据此决定要不要走浏览器授权）。 */
-export const needsLogin = source => source.kind !== 'openai'
+/** 需要凭据的来源（向导据此决定要不要走登录：腾讯是浏览器授权，Go 套餐是填 key）。 */
+export const needsLogin = source => source.auth !== 'none'
