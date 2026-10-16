@@ -97,6 +97,14 @@ Node 版在移植期间**留在仓库里当规格**（它就是行为定义）�
 
 ### 3.5 服务与 CLI（Lead）
 
+- **后台服务只在需要时问一次**：`装成开机自启的后台服务？` 这个提示不能每次配置都出现。
+  规则：读 install.json——
+  - 已经装过（服务文件存在）→ **不再问**，直接按当前配置更新，并打一行
+    `✔ 后台服务已更新（launchd / systemd）`；
+  - 没装过且用户从没表态 → 问一次，把选择记进 install.json（`autoStart`）；
+  - 没装过但用户此前明确拒绝过 → 不再问，只提示怎么开启（`ccb setup --service`）。
+  显式 flag（`--service` / `--no-service`）永远覆盖记忆值，脚本化场景要能用。
+
 - 路由：`POST /v1/messages`、`POST /v1/messages/count_tokens`、`GET /v1/models`、`GET /health`；
   鉴权用 `x-api-key` 或 `Authorization: Bearer`，比较要**恒定时间**。
 - 模型名要剥掉 `[1m]` 这类方括号后缀再解析；未指定时兜底 `config.model`，再兜底第一条来源的默认模型。
