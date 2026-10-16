@@ -6,7 +6,8 @@
   "type": "module",
   "main": "./src/server.mjs",
   "bin": {
-    "claude-code-bridge": "./cli.mjs"
+    "claude-code-bridge": "./cli.mjs",
+    "ccb": "./cli.mjs"
   },
   "files": [
     "cli.mjs",
@@ -14,7 +15,8 @@
   ],
   "scripts": {
     "start": "node cli.mjs",
-    "test": "node --test"
+    "test": "node --test",
+    "prepublishOnly": "node --test"
   },
   "engines": {
     "node": ">=18.17"
@@ -29,5 +31,13 @@
     "bridge",
     "llm"
   ],
-  "license": "MIT"
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/9Ashwin/claude-code-openai-bridge.git"
+  },
+  "homepage": "https://github.com/9Ashwin/claude-code-openai-bridge#readme",
+  "bugs": {
+    "url": "https://github.com/9Ashwin/claude-code-openai-bridge/issues"
+  }
 }

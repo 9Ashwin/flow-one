@@ -33,7 +33,7 @@ test('写 Claude Code 配置：合并而不是覆盖，写前先备份', async (
   assert.equal(written.env.ANTHROPIC_AUTH_TOKEN, 'k-1')
   assert.equal(written.env.ANTHROPIC_MODEL, 'cn/deepseek-v4.1-flash[1m]')
   assert.equal(written.env.ANTHROPIC_DEFAULT_HAIKU_MODEL, 'cn/deepseek-v4.1-flash[1m]')
-  assert.equal(written.model, 'cn/deepseek-v4.1-flash[1m]', '不能留着会在网关里找不到的 sonnet 别名')
+  assert.equal(written.model, 'cn/deepseek-v4.1-flash[1m]', 'model 字段与 env 必须同一个值：两个字段说法不一致会静默跑成另一个模型')
   // 不写 modelOverrides：那要靠把自己伪装成 Claude 的模型 ID 才能消诊断，代价太大
   assert.equal(written.modelOverrides, undefined)
   assert.equal(fs.statSync(path.join(home, 'install.json')).mode & 0o777, 0o600)
@@ -44,8 +44,9 @@ test('还原：只删自己写的且没被改过的键', async () => {
   const { installClaudeSettings, uninstallClaudeSettings } = await import('../src/install.mjs')
   const file = path.join(home, 'claude', 'settings.json')
   fs.mkdirSync(path.dirname(file), { recursive: true })
-  fs.writeFileSync(file, JSON.stringify({ env: { KEEP: 'me' } }))
+  fs.writeFileSync(file, JSON.stringify({ env: { KEEP: 'me' }, model: 'opus' }))
   installClaudeSettings({ file, baseUrl: 'http://127.0.0.1:8788', apiKey: 'k-2', model: 'cn/x' })
+  assert.equal(JSON.parse(fs.readFileSync(file, 'utf8')).model, 'cn/x[1m]', '顶层 model 与 env 必须同一个值')
 
   // 用户自己改了令牌，还原时就不能动它
   const edited = JSON.parse(fs.readFileSync(file, 'utf8'))
@@ -58,6 +59,7 @@ test('还原：只删自己写的且没被改过的键', async () => {
   assert.equal(after.env.ANTHROPIC_AUTH_TOKEN, 'user-changed', '用户改过的值必须保留')
   assert.equal(after.env.ANTHROPIC_BASE_URL, undefined)
   assert.equal(after.env.ANTHROPIC_MODEL, undefined)
+  assert.equal(after.model, 'opus', '顶层 model 要还原成安装前的值')
   assert.ok(result.removed.includes('ANTHROPIC_BASE_URL'))
   assert.ok(!result.removed.includes('ANTHROPIC_AUTH_TOKEN'))
 })

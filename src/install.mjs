@@ -118,12 +118,19 @@ export function installClaudeSettings(options) {
     ANTHROPIC_DEFAULT_OPUS_MODEL: sized,
   }
   settings.env = { ...settings.env, ...env }
-  // Claude Code 自己的默认模型名会盖过 env；显式钉成我们的模型，省得它去请求
-  // sonnet/opus 这类在网关里不存在的别名。
-  if (typeof settings.model === 'string' && /^(sonnet|opus|haiku|fable)/.test(settings.model)) settings.model = sized
+  // `model` 顶层字段也要一起钉住：它和 env.ANTHROPIC_MODEL 谁优先由 Claude Code
+  // 自己的版本决定，两个字段说法不一致时就会静默跑成另一个模型（真实隐患：
+  // 从网关模式切到直连后，这里还留着 `workbuddy/xxx`，而直连清单里没有这个 ID，
+  // 请求会掉进兜底模型）。只留一个真相源：两个字段始终写成同一个值。
+  const previousModel = settings.model
+  settings.model = sized
   writeJsonAtomic(file, settings, 0o644)
   const state = readInstallState()
-  state.claudeSettings = { file, backup: backupPath ?? null, env }
+  state.claudeSettings = {
+    file, backup: backupPath ?? null, env,
+    // 认账：还原时要把 `model` 恢复成我们改它之前的样子
+    previousModel: previousModel === undefined ? null : previousModel,
+  }
   writeInstallState(state)
   return { file, backup: backupPath, env }
 }
@@ -145,6 +152,13 @@ export function uninstallClaudeSettings() {
     removed.push(key)
   }
   if (settings.env !== undefined && Object.keys(settings.env).length === 0) delete settings.env
+  // 顶层 model 字段：仍是我们写的那个才还原（用户自己改过就留他的）
+  const written = record.env?.ANTHROPIC_MODEL
+  if (written !== undefined && settings.model === written) {
+    if (record.previousModel === null || record.previousModel === undefined) delete settings.model
+    else settings.model = record.previousModel
+    removed.push('model')
+  }
   const backupPath = backup(file)
   writeJsonAtomic(file, settings, 0o644)
   const next = readInstallState()

@@ -12,37 +12,37 @@ Claude Code CLI ──► 本桥 127.0.0.1:8788 ──► WorkBuddy 国内版 co
     Messages)            ⇄ 翻译             ──► WorkBuddy 国际版 www.workbuddy.ai
 ```
 
-## 快速开始
+## 安装
 
-需要 Node ≥ 18.17（用到内置 `fetch`）。不需要 `npm install`，没有依赖。
+三种方式，任选一种。命令名有两个：**`ccb`** 与 **`claude-code-bridge`**，同一个入口。
+
+**1. 不克隆，直接用**
+
+```bash
+npx -y github:9Ashwin/claude-code-openai-bridge status     # 每次从 GitHub 取最新
+npm i -g github:9Ashwin/claude-code-openai-bridge          # 或者装成全局命令
+```
+
+**2. 克隆后链成全局命令**（要改代码就用这个：`git pull` 之后命令即刻是新的）
 
 ```bash
 git clone https://github.com/9Ashwin/claude-code-openai-bridge.git
 cd claude-code-openai-bridge
-node cli.mjs          # ← 在终端里直接跑，会进交互式菜单
+npm link          # 之后任意目录直接 ccb
 ```
 
-菜单是 **zcf 那种「打印编号 + 输入编号」**，不是一屏方向键选择：
+**3. 从 npm 全局安装**（发布之后）
 
+```bash
+npm i -g claude-code-openai-bridge
 ```
-  ╭──────────────────────────────────╮
-  │ claude-code-openai-bridge  0.1.0 │
-  │ Claude Code ← WorkBuddy 本地反代 │
-  ╰──────────────────────────────────╯
-  模型 cn/deepseek-v4.1-flash   服务 运行中（8789）
-  账号 cn 阿斯温月 · intl starry99c@163.com
 
-请选择要做什么：
-  1. 一键配置  登录 → 选模型 → 写 Claude Code 配置 → 后台常驻
-  2. 切换模型  改完自动重启服务
-  3. 查看状态  登录有效期 / 服务 / 文件位置
+需要 Node ≥ 18.17（用到内置 `fetch`）。**没有依赖**，不会往 `node_modules` 里装东西。
 
-  ──────── 维护 ────────
-  4. 重新登录（换账号）  浏览器授权
-  0. 还原配置  移除本工具写入的键并卸载后台服务
-  Q. 退出
+## 快速开始
 
-? 请输入编号
+```bash
+ccb               # 在终端里直接跑，进交互式菜单
 ```
 
 选 `1` 之后它自己走完四步：选上游 → 选产品线并登录 → 选模型 → 写配置并常驻。
@@ -66,9 +66,11 @@ node cli.mjs          # ← 在终端里直接跑，会进交互式菜单
 
 ## 命令行
 
+下面一律写 `ccb`，换成 `claude-code-bridge` 等价。
+
 | 命令 | 说明 |
 | --- | --- |
-| `claude-code-bridge` | 终端里跑进菜单；无 TTY（systemd / 管道）直接起服务 |
+| `ccb` | 终端里跑进菜单；无 TTY（systemd / 管道）直接起服务 |
 | `switch` | 只换模型（菜单里的「切换模型」） |
 | `setup` / `--setup` | 交互式一键配置 |
 | `uninstall` / `--uninstall` | 还原 Claude Code 配置并卸载后台服务 |
@@ -231,6 +233,15 @@ launchd 自启与 `/health`。
 也不要把本桥暴露到公网。协议细节参考了
 [dsh-our-free-model](https://github.com/Ebony-Vinyl/dsh-our-free-model)（MIT）中被实测
 验证过的逆向结论，本项目的实现与之独立。
+
+## 发布（维护者）
+
+包名 `claude-code-openai-bridge` 在 npm 上**尚未被占用**（2026-10-16 查证；`ccb` 这个名字已被别人占用，所以发布用全名，`ccb` 只是本包提供的命令别名）。
+
+```bash
+npm login          # 交互式，需要 npm 账号与一次性验证码
+npm publish        # prepublishOnly 会先跑一遍 node --test，测试不过发不出去
+```
 
 ## License
 
