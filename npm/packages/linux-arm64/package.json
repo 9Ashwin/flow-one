@@ -1,5 +1,5 @@
 {
-  "name": "@9ashwin/flow-one-linux-arm64",
+  "name": "@ashwin99/flow-one-linux-arm64",
   "version": "0.2.0",
   "description": "flow-one 的 linux-arm64 预编译二进制（由主包自动选中）",
   "license": "MIT",

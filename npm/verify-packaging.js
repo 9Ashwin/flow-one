@@ -16,7 +16,7 @@ const expected = ['darwin-arm64', 'darwin-x64', 'linux-arm64', 'linux-x64']
 const problems = []
 
 for (const platform of expected) {
-  const name = `@9ashwin/flow-one-${platform}`
+  const name = `@ashwin99/flow-one-${platform}`
   const declared = main.optionalDependencies?.[name]
   if (declared === undefined) {
     problems.push(`optionalDependencies 缺少 ${name}`)

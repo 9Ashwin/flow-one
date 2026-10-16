@@ -15,6 +15,11 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DRY_RUN=""
 [ "${1:-}" = "--dry-run" ] && DRY_RUN="--dry-run"
 
+# npm 对发布要求「2FA 或带 bypass 的 granular token」。用 granular token 时不需要这个；
+# 若你的账号只能用动态码，就 NPM_OTP=123456 bash scripts/publish-npm.sh（5 个包可能要换几次码）。
+OTP=""
+[ -n "${NPM_OTP:-}" ] && OTP="--otp=${NPM_OTP}"
+
 VERSION="$(node -p "require('$ROOT/package.json').version")"
 PLATFORMS=(darwin-arm64 darwin-x64 linux-arm64 linux-x64)
 
@@ -40,7 +45,7 @@ publish() {
     return 0
   fi
   echo "  → 发布 ${label}（$name@${VERSION}）"
-  ( cd "$dir" && npm publish --access public $DRY_RUN )
+  ( cd "$dir" && npm publish --access public $DRY_RUN $OTP )
 }
 
 for platform in "${PLATFORMS[@]}"; do

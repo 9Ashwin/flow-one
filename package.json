@@ -16,10 +16,10 @@
     "node": ">=18.17"
   },
   "optionalDependencies": {
-    "@9ashwin/flow-one-darwin-arm64": "0.2.0",
-    "@9ashwin/flow-one-darwin-x64": "0.2.0",
-    "@9ashwin/flow-one-linux-arm64": "0.2.0",
-    "@9ashwin/flow-one-linux-x64": "0.2.0"
+    "@ashwin99/flow-one-darwin-arm64": "0.2.0",
+    "@ashwin99/flow-one-darwin-x64": "0.2.0",
+    "@ashwin99/flow-one-linux-arm64": "0.2.0",
+    "@ashwin99/flow-one-linux-x64": "0.2.0"
   },
   "scripts": {
     "prepublishOnly": "node npm/verify-packaging.js"
