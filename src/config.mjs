@@ -30,6 +30,8 @@ export const DEFAULTS = {
   maxTokensCap: 0,
   showThinking: false,
   heartbeatMs: 15000,
+  /** 是否对腾讯后端做已知内容指纹的窄改写（详见 src/fingerprint.mjs）。 */
+  fingerprintRewrite: true,
   /** 同时挂载的产品线，顺序决定「没有前缀的模型 ID」落到谁身上。 */
   products: [PRODUCTS[0], PRODUCTS[1]],
   quiet: false,
@@ -38,7 +40,7 @@ export const DEFAULTS = {
 /** 网关模式下的默认模型：DSH 渠道网关里 WorkBuddy 国际版的常用模型。 */
 const GATEWAY_DEFAULT_MODEL = 'workbuddy/deepseek-v4.1-flash'
 
-const SUBCOMMANDS = new Set(['login', 'status', 'models'])
+const SUBCOMMANDS = new Set(['login', 'status', 'models', 'setup', 'uninstall'])
 
 export function bridgeHome(env = process.env, home = os.homedir()) {
   const override = String(env.BRIDGE_HOME ?? '').trim()
@@ -72,6 +74,8 @@ export const USAGE = `claude-code-openai-bridge —— 让 Claude Code CLI 用�
   claude-code-bridge login [cn|intl]    登录（不带产品名时两个都登）
   claude-code-bridge status             查看登录状态
   claude-code-bridge models             列出可用模型 ID
+  claude-code-bridge setup              交互式一键配置（登录 → 选模型 → 写配置 → 后台常驻）
+  claude-code-bridge uninstall          还原本工具写过的配置并卸载后台服务
 
 选项：
   --mode <direct|gateway>  直连腾讯产品（默认），或转发给 OpenAI 兼容上游
@@ -84,6 +88,7 @@ export const USAGE = `claude-code-openai-bridge —— 让 Claude Code CLI 用�
   --max-tokens <N>         下发前的 max_tokens 上限，0 表示不限制
   --heartbeat <毫秒>       思考期间的心跳间隔，0 关闭（默认 ${DEFAULTS.heartbeatMs}）
   --thinking               把上游的思考增量渲染成 thinking 块（默认丢弃）
+  --no-fingerprint-rewrite 关闭腾讯侧内容指纹的窄改写（默认开启，见 README）
   --quiet                  只打印错误
   --help                   显示本帮助
 
@@ -94,7 +99,8 @@ export const USAGE = `claude-code-openai-bridge —— 让 Claude Code CLI 用�
 
 环境变量：BRIDGE_MODE / BRIDGE_PRODUCTS / BRIDGE_HOST / BRIDGE_PORT / BRIDGE_MODEL /
 BRIDGE_API_KEY / BRIDGE_MODEL_MAP / BRIDGE_MAX_TOKENS_CAP / BRIDGE_SHOW_THINKING /
-BRIDGE_HEARTBEAT_MS / BRIDGE_HOME / UPSTREAM_BASE_URL / UPSTREAM_API_KEY
+BRIDGE_HEARTBEAT_MS / BRIDGE_FINGERPRINT_REWRITE / BRIDGE_HOME / UPSTREAM_BASE_URL /
+UPSTREAM_API_KEY
 `
 
 function parseModelMap(raw) {
@@ -132,6 +138,7 @@ const FLAGS = {
   '--api-key': 'apiKey',
   '--map': 'modelMap',
   '--max-tokens': 'maxTokensCap',
+  '--fingerprint-rewrite': 'fingerprintRewrite',
   '--heartbeat': 'heartbeatMs',
   '--upstream': 'upstream',
   '--upstream-key': 'upstreamKey',
@@ -164,6 +171,7 @@ export function resolveConfig({ env = process.env, argv = [], home = os.homedir(
   if (String(env.BRIDGE_MODEL_MAP ?? '').trim() !== '') config.modelMap = parseModelMap(env.BRIDGE_MODEL_MAP)
   if (String(env.BRIDGE_MAX_TOKENS_CAP ?? '').trim() !== '') config.maxTokensCap = Number(env.BRIDGE_MAX_TOKENS_CAP)
   if (env.BRIDGE_SHOW_THINKING !== undefined) config.showThinking = truthy(env.BRIDGE_SHOW_THINKING)
+  if (env.BRIDGE_FINGERPRINT_REWRITE !== undefined) config.fingerprintRewrite = truthy(env.BRIDGE_FINGERPRINT_REWRITE)
   if (String(env.BRIDGE_PRODUCTS ?? '').trim() !== '') productNames.push(...String(env.BRIDGE_PRODUCTS).split(','))
 
   const rest = []
@@ -171,6 +179,8 @@ export function resolveConfig({ env = process.env, argv = [], home = os.homedir(
     const flag = argv[index]
     if (flag === '--help' || flag === '-h') return { help: true, command: 'help', commandArgs: [], config }
     if (flag === '--thinking') { config.showThinking = true; continue }
+    if (flag === '--no-fingerprint-rewrite') { config.fingerprintRewrite = false; continue }
+    if (flag === '--setup' || flag === '--uninstall') { rest.push(flag.slice(2)); continue }
     if (flag === '--quiet') { config.quiet = true; continue }
     if (!flag.startsWith('--')) { rest.push(flag); continue }
     const field = FLAGS[flag]
@@ -181,6 +191,8 @@ export function resolveConfig({ env = process.env, argv = [], home = os.homedir(
       const number = Number(value)
       if (!Number.isInteger(number) || number < 0) throw new Error(`${flag} 需要非负整数`)
       config[field] = number
+    } else if (field === 'fingerprintRewrite') {
+      config.fingerprintRewrite = truthy(value)
     } else if (field === 'modelMap') {
       config.modelMap = { ...config.modelMap, ...parseModelMap(value) }
     } else if (field === 'product' || field === 'products') {

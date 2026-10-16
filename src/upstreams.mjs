@@ -83,7 +83,15 @@ export function createGatewayUpstream(config) {
     const payload = await response.json()
     return (Array.isArray(payload?.data) ? payload.data : [])
       .filter(row => typeof row?.id === 'string' && row.id !== '')
-      .map(row => ({ id: row.id, name: row.name ?? row.id }))
+      .map(row => ({
+        id: row.id,
+        name: row.name ?? row.id,
+        // dsh-our-free-model 的网关会在清单里带上这些；别家没有就留空。
+        ...typeof row.context_window === 'number' ? { contextWindow: row.context_window } : {},
+        ...typeof row.max_tokens === 'number' ? { maxOutputTokens: row.max_tokens } : {},
+        ...Array.isArray(row.input) ? { supportsImages: row.input.includes('image') } : {},
+        ...Array.isArray(row.reasoning?.openai_efforts) ? { efforts: row.reasoning.openai_efforts } : {},
+      }))
   }
 
   return {

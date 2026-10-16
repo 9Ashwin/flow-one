@@ -23,6 +23,7 @@ import crypto from 'node:crypto'
 import {
   anthropicMessage, createOutcome, createStreamTranslator, errorBody, estimateInputTokens, foldChunk, toOpenAiRequest,
 } from './anthropic.mjs'
+import { systemRewriterFor } from './fingerprint.mjs'
 
 const MAX_BODY_BYTES = 32 * 1024 * 1024
 const MODEL_TTL_MS = 60_000
@@ -116,7 +117,12 @@ export function createBridgeServer({ config, upstream, log = () => {} }) {
     const started = Date.now()
     const inputTokens = estimateInputTokens(body)
     const model = await resolveModel(body?.model)
-    const translated = toOpenAiRequest(body, { model, maxTokensCap: config.maxTokensCap })
+    const translated = toOpenAiRequest(body, {
+      model,
+      maxTokensCap: config.maxTokensCap,
+      // 腾讯后端会拦下自称是别的客户端的系统提示，只对腾讯系模型做窄改写。
+      rewriteSystem: systemRewriterFor(model, config.fingerprintRewrite),
+    })
     if (translated.error !== undefined) {
       anthropicError(res, 400, translated.error)
       return

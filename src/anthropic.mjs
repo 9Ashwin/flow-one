@@ -135,14 +135,15 @@ function toolChoiceFor(choice, hasTools) {
  *
  * @returns {{body: object}|{error: string}} 校验失败时给 `error`，由服务端翻成 400。
  */
-export function toOpenAiRequest(request, { model, maxTokensCap = 0 } = {}) {
+export function toOpenAiRequest(request, { model, maxTokensCap = 0, rewriteSystem } = {}) {
   if (!isObject(request)) return { error: 'the request body must be a JSON object' }
   if (!Array.isArray(request.messages) || request.messages.length === 0) {
     return { error: '`messages` must be a non-empty array' }
   }
 
   const messages = []
-  const system = flattenSystem(request.system)
+  const raw = flattenSystem(request.system)
+  const system = raw !== '' && typeof rewriteSystem === 'function' ? rewriteSystem(raw) : raw
   if (system !== '') messages.push({ role: 'system', content: system })
 
   for (const row of request.messages) {

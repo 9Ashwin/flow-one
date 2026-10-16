@@ -150,3 +150,43 @@ test('本地 token 估算：随内容增长，且不为空请求返回 0', () =>
   assert.ok(small > 0)
   assert.ok(big > small + 900)
 })
+
+test('腾讯内容指纹：只在两个片段同现时改写，且改写后仍保留身份句', async () => {
+  const { isTencentModel, rewriteTencentFingerprints, systemRewriterFor } = await import('../src/fingerprint.mjs')
+  const blocked = "You are Claude Code, Anthropic's official CLI for Claude.\n\nYou are an interactive CLI tool."
+  const rewritten = rewriteTencentFingerprints(blocked)
+  assert.match(rewritten, /an official CLI for Claude/)
+  assert.doesNotMatch(rewritten, /Anthropic's official CLI/)
+  assert.match(rewritten, /You are Claude Code,/)
+  // 只有一半时不改：那两句实测本来就不被拦，改了只是白白让前缀缓存失效
+  assert.equal(rewriteTencentFingerprints("You are Claude Code."), "You are Claude Code.")
+  assert.equal(rewriteTencentFingerprints("You are Anthropic's official CLI for Claude."), "You are Anthropic's official CLI for Claude.")
+  assert.equal(rewriteTencentFingerprints('You are terse.'), 'You are terse.')
+  // 只对腾讯系模型生效
+  assert.equal(isTencentModel('cn/x') && isTencentModel('workbuddy/x') && !isTencentModel('deepseek-chat'), true)
+  assert.equal(systemRewriterFor('deepseek-chat'), undefined)
+  assert.equal(systemRewriterFor('cn/x', false), undefined)
+})
+
+test('改写器接在请求翻译上：system 被改写，用户内容原样', () => {
+  const { body } = toOpenAiRequest({
+    system: "You are Claude Code, Anthropic's official CLI for Claude.",
+    messages: [{ role: 'user', content: "Anthropic's official CLI for Claude" }],
+  }, { model: 'cn/x', rewriteSystem: text => text.replace("Anthropic's official CLI", 'an official CLI') })
+  assert.equal(body.messages[0].content, 'You are Claude Code, an official CLI for Claude.')
+  assert.equal(body.messages[1].content, "Anthropic's official CLI for Claude")
+})
+
+test('腾讯内容指纹：Claude Code 的计费头整行被删掉，无关文本逐字符不变', async () => {
+  const { rewriteTencentFingerprints } = await import('../src/fingerprint.mjs')
+  const real = 'x-anthropic-billing-header: cc_version=2.1.301.eca; cc_entrypoint=sdk-cli;\n\nYou are a Claude agent, built on Anthropic\'s Claude Agent SDK.\n\n后面的正文'
+  const out = rewriteTencentFingerprints(real)
+  assert.equal(out.split('\n')[0], 'You are a Claude agent, built on Anthropic\'s Claude Agent SDK.')
+  assert.doesNotMatch(out.toLowerCase(), /x-anthropic-billing-header/)
+  assert.doesNotMatch(out, /^\s/)
+  assert.match(out, /后面的正文/)
+  // 大小写、版本号都不影响判定；但没这行就必须逐字符不变
+  assert.equal(rewriteTencentFingerprints('X-ANTHROPIC-BILLING-HEADER: whatever'), '')
+  assert.equal(rewriteTencentFingerprints('You are a Claude agent.'), 'You are a Claude agent.')
+  assert.equal(rewriteTencentFingerprints('line1\nline2\n'), 'line1\nline2\n')
+})

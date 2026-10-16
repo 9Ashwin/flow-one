@@ -13,6 +13,8 @@ import { credentialStatus, login } from './src/auth.mjs'
 import { productByName } from './src/products.mjs'
 import { createDirectUpstream, createGatewayUpstream } from './src/upstreams.mjs'
 import { createBridgeServer } from './src/server.mjs'
+import { isInteractive, note, style } from './src/prompt.mjs'
+import { mainMenu, setupWizard, statusFlow, uninstallFlow } from './src/wizard.mjs'
 
 function makeLogger(quiet) {
   return message => { if (!quiet) process.stdout.write(`${message}\n`) }
@@ -128,15 +130,26 @@ async function commandServe(config, log) {
 }
 
 async function main() {
-  const { help, command, commandArgs, config } = resolveConfig({ argv: process.argv.slice(2) })
+  const argv = process.argv.slice(2)
+  const { help, command, commandArgs, config } = resolveConfig({ argv })
   if (help) {
     process.stdout.write(USAGE)
     return
   }
   const log = makeLogger(config.quiet)
+  if (command === 'setup') return await setupWizard()
+  if (command === 'uninstall') return await uninstallFlow()
   if (command === 'login') return await commandLogin(config, commandArgs, log)
   if (command === 'status') return await commandStatus(config, log)
   if (command === 'models') return await commandModels(config, log)
+
+  // 裸跑且在终端里 → 进菜单。不带参数又没有 TTY（systemd、launchd、管道）时
+  // 直接起服务，脚本与后台服务的行为因此不受菜单影响。
+  if (argv.length === 0 && isInteractive()) {
+    const chosen = await mainMenu()
+    if (chosen !== 'serve') return
+    note(style.dim('前台运行中，Ctrl+C 退出'))
+  }
   return await commandServe(config, log)
 }
 
