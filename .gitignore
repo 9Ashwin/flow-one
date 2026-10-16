@@ -4,7 +4,7 @@ node_modules/
 .idea/
 .vscode/
 # Go 版（go-rewrite 分支）
-/claude-code-bridge
+/flow-one
 .tmp/
 *.test
 coverage.out
