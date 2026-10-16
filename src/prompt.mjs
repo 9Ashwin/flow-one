@@ -199,16 +199,24 @@ const searchTextOf = option => `${option.label ?? ''} ${option.value ?? ''} ${op
  *
  * 结果超过 `windowSize` 时只画光标附近那一段，并标出总条数：清单再长也不会把
  * 屏幕刷掉。默认（`filterable: false`）保持原来的形态：全量列出 + 数字直选。
+ *
+ * 选项带 `separator: true` 时只作分组标题：不编号、不可选、光标跳过；一敲字筛选
+ * 就把它们去掉 —— 筛选结果里再插分组标题只会误导。
  */
 export async function select({ message, options, initial = 0, filterable = false, windowSize = 12 }) {
   if (options.length === 0) throw new Error('select 需要至少一个选项')
-  // 光标不落在禁用项上：禁用项通常是「还没登录」这类，选下去只会再报一次错
+  // 光标不落在禁用项（「还没登录」这类，选下去只会再报一次错）与分组标题上：
+  // 落在标题上会让第一次按下方向键看起来「没反应」。
   const firstEnabled = (list, from = 0) => {
     if (list.length === 0) return 0
     let index = Math.min(Math.max(from, 0), list.length - 1)
-    for (let step = 0; step < list.length && list[index]?.disabled === true; step++) index = (index + 1) % list.length
+    for (let step = 0; step < list.length; step++) {
+      if (list[index]?.disabled !== true && list[index]?.separator !== true) break
+      index = (index + 1) % list.length
+    }
     return index
   }
+  const isReal = option => option !== undefined && option.separator !== true
   let query = ''
   let visible = options
   let cursor = firstEnabled(options, initial)
@@ -219,10 +227,23 @@ export async function select({ message, options, initial = 0, filterable = false
     note(`${green('✔')} ${message} ${bold(option.label)}`)
     return true
   }
+  const realCount = list => list.filter(isReal).length
   const applyQuery = () => {
     const needle = query.trim().toLowerCase()
-    visible = needle === '' ? options : options.filter(option => searchTextOf(option).includes(needle))
+    // 筛选时丢掉分组标题：结果里再插「免费模型 / 其余模型」只会误导
+    visible = needle === ''
+      ? options
+      : options.filter(option => isReal(option) && searchTextOf(option).includes(needle))
     cursor = firstEnabled(visible)
+  }
+  /** 上下移动时跳过分组标题（它们在 filterable 模式下不参与选择）。 */
+  const step = delta => {
+    if (visible.length === 0) return
+    let next = cursor
+    for (let i = 0; i < visible.length; i++) {
+      next = (next + delta + visible.length) % visible.length
+      if (isReal(visible[next])) { cursor = next; return }
+    }
   }
   const hint = filterable ? '直接敲字筛选，↑↓ 选择，回车确认' : '↑↓ 选择，或直接按编号，回车确认'
   note(`${cyan('?')} ${message}  ${dim(hint)}`)
@@ -232,8 +253,8 @@ export async function select({ message, options, initial = 0, filterable = false
       const lines = []
       if (filterable) {
         lines.push(query === ''
-          ? `  ${dim(`直接敲字筛选 · 共 ${options.length} 项`)}`
-          : `  ${cyan('筛选')} ${bold(query)}  ${dim(`${visible.length}/${options.length} 项`)}`)
+          ? `  ${dim(`直接敲字筛选 · 共 ${realCount(options)} 项`)}`
+          : `  ${cyan('筛选')} ${bold(query)}  ${dim(`${realCount(visible)}/${realCount(options)} 项`)}`)
       }
       if (visible.length === 0) {
         lines.push(`  ${yellow('没有匹配项')}  ${dim('退格删字，Esc 清空')}`)
@@ -241,24 +262,31 @@ export async function select({ message, options, initial = 0, filterable = false
       }
       const size = filterable ? Math.min(windowSize, visible.length) : visible.length
       const start = Math.min(Math.max(cursor - Math.floor(size / 2), 0), Math.max(0, visible.length - size))
+      const digits = String(Math.max(realCount(visible), 1)).length
+      let ordinal = visible.slice(0, start).filter(isReal).length
       for (let index = start; index < start + size; index++) {
         const option = visible[index]
+        if (option.separator === true) {
+          lines.push(dim(`  ──── ${option.label} ────`))
+          continue
+        }
+        ordinal += 1
         const active = index === cursor
-        const number = String(index + 1).padStart(String(visible.length).length)
-        const text = `${number}. ${option.label}`
+        const text = `${String(ordinal).padStart(digits)}. ${option.label}`
         const pointer = active ? cyan('❯') : ' '
         const suffix = option.hint === undefined || option.hint === '' ? '' : `  ${dim(option.hint)}`
         lines.push(`${pointer} ${option.disabled === true || !active ? dim(text) : text}${suffix}`)
       }
       if (start > 0 || start + size < visible.length) {
-        lines.push(dim(`  … 第 ${start + 1}-${start + size} 项，共 ${visible.length} 项（继续敲字缩小范围）`))
+        const hidden = realCount(visible) - visible.slice(start, start + size).filter(isReal).length
+        lines.push(dim(`  … 还有 ${hidden} 项（继续敲字缩小范围）`))
       }
       return lines
     },
     onKey: (str, key, finish) => {
       const name = key.name
-      if (name === 'up') { typed = ''; cursor = (cursor - 1 + visible.length) % visible.length }
-      else if (name === 'down') { typed = ''; cursor = (cursor + 1) % visible.length }
+      if (name === 'up') { typed = ''; step(-1) }
+      else if (name === 'down') { typed = ''; step(1) }
       else if (filterable && (name === 'backspace' || name === 'delete')) { query = query.slice(0, -1); applyQuery() }
       else if (filterable && name === 'escape') { query = ''; applyQuery() }
       else if (name === 'return' || name === 'enter') {

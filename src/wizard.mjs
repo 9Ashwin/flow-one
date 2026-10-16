@@ -189,11 +189,18 @@ export async function ensureLoggedIn(products, { force = false } = {}) {
  */
 export async function pickModel(rows) {
   const ranked = rankRows(rows)
+  const free = ranked.filter(row => row.free === true)
+  const paid = ranked.filter(row => row.free !== true)
+  const toOption = (row, index) => ({ label: row.id, hint: modelHint(row, index === 0 && row.free !== true), value: row.id })
   const picked = await select({
     message: '用哪个模型？',
     filterable: true,
     options: [
-      ...ranked.map((row, index) => ({ label: row.id, hint: modelHint(row, index === 0), value: row.id })),
+      // 免费档排在最前并单独成组：一眼能看到哪些不花钱，也不用在 88 个 oc 模型里翻
+      ...free.length > 0 ? [{ label: `免费模型（${free.length} 个）`, value: '__free__', separator: true }] : [],
+      ...free.map(toOption),
+      ...paid.length > 0 ? [{ label: `其余模型（${paid.length} 个，按量计费 / 订阅）`, value: '__paid__', separator: true }] : [],
+      ...paid.map(toOption),
       { label: '手动输入模型 ID', hint: '清单里没有的模型', value: '__manual__' },
     ],
   })
@@ -210,8 +217,12 @@ export async function pickModel(rows) {
 }
 
 /** 推荐模型排前面，其余保持远端顺序。 */
+/** 免费优先，其次按推荐顺序；同组内保持远端给的原顺序。 */
 function rankRows(rows) {
-  return [...rows].sort((a, b) => rank(a.id) - rank(b.id))
+  return [...rows].sort((a, b) => {
+    const free = (b.free === true ? 1 : 0) - (a.free === true ? 1 : 0)
+    return free !== 0 ? free : rank(a.id) - rank(b.id)
+  })
 }
 
 function rank(id) {

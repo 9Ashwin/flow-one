@@ -186,3 +186,34 @@ test('多选：空格勾选、回车确认、至少勾一条、互斥规则生�
     setStdinForTest(null)
   }
 })
+
+test('分组标题：初始光标与上下移动都不落在标题上，也不占用编号', async () => {
+  const { PassThrough } = await import('node:stream')
+  const { select, setStdinForTest } = await import('../src/prompt.mjs')
+  const fake = new PassThrough()
+  fake.isTTY = true
+  fake.setRawMode = () => {}
+  setStdinForTest(fake)
+  const key = (str, name) => fake.emit('keypress', str, { name })
+  const options = [
+    { label: '免费模型（2 个）', value: 'sep1', separator: true },
+    { label: 'oc/free-a', value: 'free-a' },
+    { label: 'oc/free-b', value: 'free-b' },
+    { label: '其余模型（1 个）', value: 'sep2', separator: true },
+    { label: 'cn/paid', value: 'paid' },
+  ]
+  try {
+    // 初始光标应在第一个真实项，而不是标题行（否则第一次按 ↓ 看起来没反应）
+    const first = select({ message: 'q', options, filterable: true })
+    key('', 'return')
+    assert.equal(await first, 'free-a')
+
+    // 从 free-a 往下：跳过 sep2 落到 cn/paid
+    const skipped = select({ message: 'q', options, filterable: true })
+    key('', 'down'); key('', 'down')
+    key('', 'return')
+    assert.equal(await skipped, 'paid')
+  } finally {
+    setStdinForTest(null)
+  }
+})
