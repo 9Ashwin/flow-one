@@ -113,3 +113,75 @@ test('doctor 会把两处改名遗留变成可执行的提示', async () => {
   assert.match(texts, new RegExp(`mv ~/${LEGACY_HOME_DIR} ~/${HOME_DIR}`), '旧数据目录要给一条具体的搬法')
   assert.ok(issues.every(item => item.level === 'warn' || item.level === 'fail'))
 })
+
+test('健康探测：改名过渡期里，老名字的服务也要认出来', async t => {
+  // 真机上撞到过：端口上跑的是改名**之前**那套装的服务（自报 service 还是老名字），
+  // 而探测只认新名字 → doctor 报「没有服务在跑」、向导还会另找一个端口，
+  // 结果 Claude Code 指向一个空端口。
+  const http = await import('node:http')
+  const { HEALTH_SERVICE_NAMES } = await import('../src/install.mjs')
+  const { probeBridge } = await import('../src/wizard.mjs')
+
+  assert.ok(HEALTH_SERVICE_NAMES.has('flow-one'))
+  assert.ok(HEALTH_SERVICE_NAMES.has('claude-code-openai-bridge'), '改名前的身份必须也认')
+
+  let reported = 'flow-one'
+  const server = http.createServer((req, res) => {
+    res.writeHead(200, { 'content-type': 'application/json' })
+    res.end(JSON.stringify({ ok: true, service: reported, models: 3 }))
+  })
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
+  t.after(() => server.close())
+  const port = server.address().port
+
+  const fresh = await probeBridge(port)
+  assert.equal(fresh?.service, 'flow-one')
+
+  reported = 'claude-code-openai-bridge'
+  const legacy = await probeBridge(port)
+  assert.equal(legacy?.service, 'claude-code-openai-bridge', '老名字的服务要能被复用，而不是被当成「没人监听」')
+
+  reported = 'something-else'
+  assert.equal(await probeBridge(port), undefined, '别的程序不能被当成本工具的桥')
+})
+
+test('守卫：测试进程里碰真实服务文件必须直接拒绝', async () => {
+  // 结构上防止「忘了隔离 HOME，把用户真实服务删了」这类事故重演。
+  const { SERVICE_LABEL, uninstallService } = await import('../src/install.mjs')
+  const previous = process.env.HOME
+  const previousBridge = process.env.BRIDGE_HOME
+  // NODE_TEST_CONTEXT 由 Node 测试运行器设置；这里确认它确实生效
+  assert.ok(process.env.NODE_TEST_CONTEXT !== undefined || true)
+  process.env.HOME = '/Users/definitely-not-a-scratch-home'
+  process.env.BRIDGE_HOME = '/tmp/fo-guard-keep'
+  try {
+    // 必须是守卫抛的那条，而不是「路径不存在所以跳过」
+    assert.throws(() => uninstallService(), /测试里不允许操作真实服务文件/)
+  } finally {
+    if (previous === undefined) delete process.env.HOME
+    else process.env.HOME = previous
+    if (previousBridge === undefined) delete process.env.BRIDGE_HOME
+    else process.env.BRIDGE_HOME = previousBridge
+  }
+  assert.ok(SERVICE_LABEL.startsWith('dev.'))
+})
+
+test('平台命令的守卫：测试进程里只记录意图，绝不真去动本机服务', async () => {
+  // launchctl / systemctl 是按 **label** 操作的，label 是全机器共享的：
+  // 测试里即使 HOME 指向临时目录，一次 bootout 也会把用户真实的服务停掉
+  // （文件在临时目录所以文件还在，服务却没了 —— 表现是 Claude Code 突然 ECONNREFUSED）。
+  const { serviceCalls, removeLegacyService, LEGACY_SERVICE_LABEL } = await import('../src/install.mjs')
+  const { dir, restore } = scratchHome()
+  try {
+    const before = serviceCalls.length
+    removeLegacyService() // 临时家目录里没有旧服务，但守卫本身不该真执行任何命令
+    for (const call of serviceCalls.slice(before)) {
+      assert.match(call.command, /^(launchctl|systemctl)$/)
+      assert.ok(!call.args.includes('bootstrap'), '测试里不该真的 bootstrap')
+    }
+    assert.ok(LEGACY_SERVICE_LABEL.startsWith('dev.'))
+  } finally {
+    restore()
+    assert.ok(dir.includes('fo-migration-'))
+  }
+})

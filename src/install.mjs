@@ -27,12 +27,32 @@ const sleep = ms => new Promise(resolve => { setTimeout(resolve, ms) })
 /** launchd 里这个 label 是否已加载。 */
 function launchdLoaded(label) {
   try {
-    execFileSync('launchctl', ['print', `gui/${process.getuid()}/${label}`], { stdio: 'ignore' })
+    platformRun('launchctl', ['print', `gui/${process.getuid()}/${label}`], { stdio: 'ignore' })
     return true
   } catch {
     return false
   }
 }
+/**
+ * 平台命令的统一入口。
+ *
+ * ⚠️ **测试进程里绝不真执行**：`launchctl` / `systemctl` 都是按 **label** 操作的，
+ * 而 label 是全机器共享的 —— 测试里即使把 HOME 指到临时目录，一次
+ * `bootout gui/501/dev.claude-code-openai-bridge` 仍然会把用户**真实**的服务停掉
+ * （文件在临时目录所以文件还在，服务却没了，表现是 Claude Code 突然 ECONNREFUSED）。
+ * 真出过这个事故，所以这里做成「测试里只记录意图」：
+ * 想看调用序列就断言 `serviceCalls`，想真跑就在非测试进程里跑。
+ */
+export const serviceCalls = []
+
+function platformRun(command, args, options = {}) {
+  if (process.env.NODE_TEST_CONTEXT !== undefined) {
+    serviceCalls.push({ command, args })
+    return ''
+  }
+  return execFileSync(command, args, options).toString()
+}
+
 export const SERVICE_LABEL = 'dev.flow-one'
 /**
  * 改名前的服务名。
@@ -41,6 +61,15 @@ export const SERVICE_LABEL = 'dev.flow-one'
  * （谁赢取决于启动顺序），表现是服务时好时坏，而界面上完全看不出来。
  */
 export const LEGACY_SERVICE_LABEL = 'dev.claude-code-openai-bridge'
+
+/**
+ * `/health` 里 `service` 字段认哪些名字。
+ *
+ * 改名之后**必须同时认旧的**：正在跑的可能是改名之前装的那份（全局 npm 包），
+ * 它自报的还是旧名字。只认新名字会把「服务明明在跑」判成「没人监听」——
+ * 真机上就撞到过：doctor 报 ✘「配置指向的端口上没有服务在跑」，而 `claude` 其实是通的。
+ */
+export const HEALTH_SERVICE_NAMES = new Set(['flow-one', 'claude-code-openai-bridge'])
 
 /**
  * `systemctl --user` 要用的 `XDG_RUNTIME_DIR`。
@@ -65,7 +94,7 @@ export function xdgRuntimeDir(env = process.env, { uid = process.getuid?.(), exi
 /** 带上补好的 `XDG_RUNTIME_DIR` 再调 `systemctl --user`。 */
 function systemctl(args, env = process.env) {
   const dir = xdgRuntimeDir(env)
-  return execFileSync('systemctl', ['--user', ...args], {
+  return platformRun('systemctl', ['--user', ...args], {
     stdio: 'pipe',
     env: dir === undefined ? env : { ...env, XDG_RUNTIME_DIR: dir },
   })
@@ -305,6 +334,30 @@ function servicePaths() {
   return servicePathsFor(SERVICE_LABEL)
 }
 
+/**
+ * 测试进程里**不允许**操作真实的服务文件。
+ *
+ * 真出过事故：一个演示脚本只把 `BRIDGE_HOME` 指到临时目录、忘了 `HOME`，
+ * 它调的 `uninstallService()` 于是对**真实**的 launchd 服务发了 bootout 并删掉了
+ * plist —— 用户的 Claude Code 当场 ECONNREFUSED。这类错误不该靠人记得隔离，
+ * 应该由代码拒绝：测试进程（Node 测试运行器会设 NODE_TEST_CONTEXT）里，
+ * 服务文件必须落在系统临时目录下，否则直接抛。
+ */
+function assertScratchServicePath(paths) {
+  if (process.env.NODE_TEST_CONTEXT === undefined) return
+  if (paths.path === '') return
+  // 用**字符串前缀**比较，不去 realpath 父目录：父目录通常还不存在，
+  // realpathSync 会抛，而我第一版把那个异常当成「安全」直接放行了 —— 守卫于是形同虚设。
+  // macOS 上 /var 与 /private/var 是同一处的两种写法，所以两个根都认。
+  const roots = [os.tmpdir(), fs.realpathSync(os.tmpdir())].map(root => (root.endsWith('/') ? root : `${root}/`))
+  if (!roots.some(root => paths.path.startsWith(root))) {
+    throw new Error(
+      `测试里不允许操作真实服务文件：${paths.path}\n` +
+      '把 HOME（不只是 BRIDGE_HOME）指到临时目录再跑。',
+    )
+  }
+}
+
 /** 改名前的服务文件位置（存在就说明是改名之前装的）。 */
 export function legacyServicePaths() {
   return servicePathsFor(LEGACY_SERVICE_LABEL)
@@ -352,11 +405,12 @@ export function recordServiceChoice(autoStart) {
  */
 export function removeLegacyService() {
   const { kind, path: file } = legacyServicePaths()
+  assertScratchServicePath(legacyServicePaths())
   if (kind === 'unsupported' || file === '' || !fs.existsSync(file)) return { removed: false }
   try {
     if (kind === 'launchd') {
       try {
-        execFileSync('launchctl', ['bootout', `gui/${process.getuid()}/${LEGACY_SERVICE_LABEL}`], { stdio: 'ignore' })
+        platformRun('launchctl', ['bootout', `gui/${process.getuid()}/${LEGACY_SERVICE_LABEL}`], { stdio: 'ignore' })
       } catch { /* 没加载过就算了 */ }
     } else {
       try {
@@ -421,6 +475,7 @@ export function currentCliPath() {
  */
 export async function installService({ port, apiKey, env = {} }) {
   const { kind, path: file } = servicePaths()
+  assertScratchServicePath(servicePaths())
   if (kind === 'unsupported') {
     return { ok: false, kind, reason: `暂不支持 ${process.platform} 的自启，请自行把 \`node ${CLI_PATH}\` 放进你的启动项` }
   }
@@ -443,14 +498,14 @@ export async function installService({ port, apiKey, env = {} }) {
       const domain = `gui/${process.getuid()}`
       if (launchdLoaded(SERVICE_LABEL)) {
         try {
-          execFileSync('launchctl', ['bootout', `${domain}/${SERVICE_LABEL}`], { stdio: 'ignore' })
+          platformRun('launchctl', ['bootout', `${domain}/${SERVICE_LABEL}`], { stdio: 'ignore' })
         } catch { /* 已经没了也算成功 */ }
         for (let attempt = 0; attempt < 40 && launchdLoaded(SERVICE_LABEL); attempt++) await sleep(250)
       }
       let loaded = false
       for (let attempt = 0; attempt < 5 && !loaded; attempt++) {
         try {
-          execFileSync('launchctl', ['bootstrap', domain, file], { stdio: 'pipe' })
+          platformRun('launchctl', ['bootstrap', domain, file], { stdio: 'pipe' })
           loaded = true
         } catch (error) {
           if (attempt === 4) throw error
@@ -471,6 +526,7 @@ export async function installService({ port, apiKey, env = {} }) {
 
 export function uninstallService() {
   const { kind, path: file } = servicePaths()
+  assertScratchServicePath(servicePaths())
   // 改名前的旧服务也要带走：卸载就该什么都不剩
   const legacy = removeLegacyService()
   // 「装成开机自启」那一问也跟着忘掉：用户既然来卸载，下次配置就该重新问一遍。
@@ -489,7 +545,7 @@ export function uninstallService() {
       : { skipped: true, reason: '没有装过后台服务' }
   }
   try {
-    if (kind === 'launchd') execFileSync('launchctl', ['bootout', `gui/${process.getuid()}/${SERVICE_LABEL}`], { stdio: 'pipe' })
+    if (kind === 'launchd') platformRun('launchctl', ['bootout', `gui/${process.getuid()}/${SERVICE_LABEL}`], { stdio: 'pipe' })
     else systemctl(['disable', '--now', `${SERVICE_LABEL}.service`])
   } catch { /* 没在跑就算了，文件还是要删掉 */ }
   fs.rmSync(file, { force: true })

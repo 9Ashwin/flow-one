@@ -21,6 +21,7 @@ import { CN, INTL } from './products.mjs'
 import { OPENCODE, OPENCODE_GO, goCredential, goKeyTail, hasGoCredential, saveGoKey } from './opencode.mjs'
 import { SOURCES, needsLogin, sourceByName } from './sources.mjs'
 import { credentialChecks, localIssues, localSnapshot, probeOpencodeGate, probeOpencodeGo, probeTencentFingerprint } from './doctor.mjs'
+import { HEALTH_SERVICE_NAMES } from './install.mjs'
 import { login, credentialStatus } from './auth.mjs'
 import { createDirectUpstream, createGatewayUpstream } from './upstreams.mjs'
 import { credentialFile } from './config.mjs'
@@ -84,7 +85,8 @@ export async function probeBridge(port) {
     const response = await fetch(`http://127.0.0.1:${port}/health`, { signal: AbortSignal.timeout(1200) })
     if (!response.ok) return undefined
     const body = await response.json()
-    return body?.service === 'flow-one' ? body : undefined
+    // 认新旧两个名字：改名过渡期里，端口上跑的可能是老名字的那份（见 install.mjs）
+    return HEALTH_SERVICE_NAMES.has(body?.service) ? body : undefined
   } catch {
     return undefined
   }
@@ -592,7 +594,11 @@ export async function doctorFlow() {
   note(`  ${gray(snapshot.settingsFile)}`)
   const url = snapshot.settings?.env?.ANTHROPIC_BASE_URL
   const port = typeof url === 'string' ? Number(/:([0-9]+)\s*$/.exec(url)?.[1]) : undefined
-  const healthOk = snapshot.service.installed && Number.isFinite(port) ? (await probeBridge(port)) !== undefined : false
+  // 「端口上有没有人在听」只能由**探测**回答，不能由「服务文件装没装」推断：
+  // 端口上跑的可能是改名前的旧服务（label 不同 → installed 为 false），也可能是前台起的。
+  // 真机上撞到过：服务明明在跑、claude 也通，doctor 却报「没有服务在跑」——
+  // 因为旧 label 的服务不算 installed，于是连探测都没做就直接判 false。
+  const healthOk = Number.isFinite(port) ? (await probeBridge(port)) !== undefined : false
   const { issues, ok } = localIssues({ ...snapshot, healthOk })
   for (const text of ok) success(text)
   for (const issue of issues) {
