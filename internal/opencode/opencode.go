@@ -30,23 +30,28 @@ import (
 
 	"github.com/9Ashwin/claude-code-openai-bridge/errs"
 	"github.com/9Ashwin/claude-code-openai-bridge/internal/config"
+	"github.com/9Ashwin/claude-code-openai-bridge/internal/source"
+	"github.com/9Ashwin/claude-code-openai-bridge/internal/sse"
 )
 
+// 两条路的**事实**（端点、匿名凭据、UA）。导出是因为 doctor 要自己构造原始请求去
+// 逐项重推门禁形状（先确认完整形状 200，再逐个去掉一个要件确认它仍必填）——
+// 探测的那一侧必须拿得到同样的端点与头部取值。
 const (
-	// anonymousKey 是免费档的匿名凭据（官方 CLI 没有 key 时也用它）。
-	anonymousKey = "public"
+	// AnonymousKey 是免费档的匿名凭据（官方 CLI 没有 key 时也用它）。
+	AnonymousKey = "public"
 
-	// defaultUserAgent 是免费档照抄官方客户端的 UA（版本号是照抄的一部分）。
-	defaultUserAgent = "opencode/1.18.22"
+	// DefaultUserAgent 是免费档照抄官方客户端的 UA（版本号是照抄的一部分）。
+	DefaultUserAgent = "opencode/1.18.22"
 
 	// 两条路的端点不一样：免费档在 /inference/v1，Go 套餐在 /zen/go/v1。
-	freeBaseURL    = "https://opencode.ai/inference"
-	freeChatPath   = "/v1/chat/completions"
-	freeModelsPath = "/v1/models"
+	FreeBaseURL    = "https://opencode.ai/inference"
+	FreeChatPath   = "/v1/chat/completions"
+	FreeModelsPath = "/v1/models"
 
-	goBaseURL    = "https://opencode.ai/zen/go/v1"
-	goChatPath   = "/chat/completions"
-	goModelsPath = "/models"
+	GoBaseURL    = "https://opencode.ai/zen/go/v1"
+	GoChatPath   = "/chat/completions"
+	GoModelsPath = "/models"
 
 	// 免费档形状门禁要求的 5 个头。
 	projectHeader    = "x-opencode-project"
@@ -63,9 +68,6 @@ const (
 
 	// modelsTimeout 是模型清单与能力表的出站上限；对话不走它（跟着请求的 ctx 取消）。
 	modelsTimeout = 20 * time.Second
-
-	// maxErrorBody 限制我们为了报错而读进来的正文长度。
-	maxErrorBody = 64 << 10
 )
 
 // Options 是构造一条来源的输入。零值即生产默认：真上游端点、BRIDGE_HOME 下的数据目录、
@@ -136,81 +138,29 @@ func ok(resp *http.Response) bool {
 	return resp.StatusCode >= 200 && resp.StatusCode < 300
 }
 
-// failure 把上游的非 2xx 响应收敛成类型化错误：分类看状态码与正文，消息尽量保留
-// 上游原本的理由 —— FreeTierError 与 MissingSessionID 这两句要能一眼看见。
-func failure(status int, raw []byte) *errs.Error {
-	message := failureMessage(status, raw)
-	lower := strings.ToLower(message)
+// classify 在 sse.Failure 的通用分类（upstream/bad_status）之上，再细分本来源自己的
+// 几种失败：免费档门禁（403 FreeTierError）与缺会话头（400 MissingSessionID）都要能
+// 一眼看出来 —— 它们**响亮但容易被误读**，doctor 与向导据此给不同的话。
+func classify(failed *errs.Error) *errs.Error {
+	lower := strings.ToLower(failed.Message)
 	switch {
 	case strings.Contains(lower, "free tier can only be used"), strings.Contains(lower, "freetiererror"):
-		return errs.Upstream(errs.SubtypeShapeRejected, message).WithCode(status)
+		return errs.Upstream(errs.SubtypeShapeRejected, failed.Message).WithCode(failed.Code)
 	case strings.Contains(lower, "missingsessionid"), strings.Contains(lower, "missing session"):
-		return errs.Upstream(errs.SubtypeMissingSession, message).WithCode(status)
-	case status == http.StatusTooManyRequests, strings.Contains(lower, "quota"), strings.Contains(lower, "rate limit"):
-		return errs.Upstream(errs.SubtypeQuotaLimited, message).WithCode(status)
+		return errs.Upstream(errs.SubtypeMissingSession, failed.Message).WithCode(failed.Code)
+	case failed.Code == http.StatusTooManyRequests, strings.Contains(lower, "quota"), strings.Contains(lower, "rate limit"):
+		return errs.Upstream(errs.SubtypeQuotaLimited, failed.Message).WithCode(failed.Code)
 	default:
-		return errs.Upstream(errs.SubtypeBadStatus, message).WithCode(status)
+		return failed
 	}
 }
 
-// failureMessage 从上游正文里抽出最像「理由」的那句话；抽不出来就退回状态码本身。
-func failureMessage(status int, raw []byte) string {
-	message := fmt.Sprintf("上游返回 %d", status)
-	text := strings.TrimSpace(string(raw))
-	if text == "" {
-		return message
+// shortID 取 id 的前几位，只用于日志里认人（会话 id 是 ASCII，按字节切安全）。
+func shortID(id string, length int) string {
+	if len(id) <= length {
+		return id
 	}
-	var payload map[string]any
-	if err := json.Unmarshal([]byte(text), &payload); err != nil {
-		return truncate(text, 500)
-	}
-	if detail := detailOf(payload); detail != "" {
-		return detail
-	}
-	encoded, err := json.Marshal(payload)
-	if err != nil {
-		return truncate(text, 500)
-	}
-	return truncate(string(encoded), 500)
-}
-
-// detailOf 取上游报文里最像「理由」的字段：OpenCode 是 `{error:{type,message}}`，
-// 别家多是 `{error:{message}}` 或 `{msg}`。
-func detailOf(payload map[string]any) string {
-	if inner, isObject := payload["error"].(map[string]any); isObject {
-		if text, found := stringField(inner, "message"); found {
-			return text
-		}
-		if text, found := stringField(inner, "type"); found {
-			return text
-		}
-		if encoded, err := json.Marshal(inner); err == nil {
-			return truncate(string(encoded), 500)
-		}
-	}
-	for _, key := range []string{"msg", "message", "error"} {
-		if text, found := stringField(payload, key); found {
-			return text
-		}
-	}
-	return ""
-}
-
-func stringField(payload map[string]any, key string) (string, bool) {
-	text, isText := payload[key].(string)
-	if !isText || text == "" {
-		return "", false
-	}
-	return text, true
-}
-
-// truncate 按字符（不是字节）截断，别把一个 UTF-8 字符切成半个。
-func truncate(text string, limit int) string {
-	runes := []rune(text)
-	if len(runes) <= limit {
-		return text
-	}
-	return string(runes[:limit])
+	return id[:length]
 }
 
 // networkFailure 把出站失败收敛成 network 分类：超时与连不上要分得开。
@@ -239,15 +189,6 @@ func decodeBody(raw []byte) (map[string]any, error) {
 	return body, nil
 }
 
-// readErrorBody 读一点正文用于报错（上限 maxErrorBody，别把一整篇 HTML 读进来）。
-func readErrorBody(body io.Reader) []byte {
-	raw, err := io.ReadAll(io.LimitReader(body, maxErrorBody))
-	if err != nil {
-		return nil
-	}
-	return raw
-}
-
 // getJSON 发一次 GET 并把 2xx 的正文交给 decode；失败一律是类型化错误。
 func (c client) getJSON(ctx context.Context, label string, url string, header http.Header, decode func(io.Reader) error) error {
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
@@ -265,7 +206,10 @@ func (c client) getJSON(ctx context.Context, label string, url string, header ht
 	}
 	defer response.Body.Close()
 	if !ok(response) {
-		return failure(response.StatusCode, readErrorBody(response.Body))
+		return classify(sse.Failure(response))
 	}
 	return decode(response.Body)
 }
+
+// source.Stream 的编译期断言：两条路交出去的分片都必须能直接喂给翻译层。
+var _ source.Stream = (*sse.Reader)(nil)

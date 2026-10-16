@@ -29,14 +29,22 @@ type GoKey struct {
 
 // ReadGoKey 读出已配置的 Go 套餐凭据。没配（或文件坏掉）时 ok=false。
 //
-// 会话 id 是**必填**的 `x-opencode-session`：条目里没有就现场铸一个 UUID ——
-// 值本身无所谓（只用于服务端路由亲和），但每次都不带会被上游 400 MissingSessionID。
+// 会话 id 是**必填**的 `x-opencode-session`：条目里没有（老版本写的凭据）就铸一个
+// UUID —— 值本身无所谓（只用于服务端路由亲和），但每次都不带会被上游 400 MissingSessionID。
+// 这条路要**复用**同一个值：GoTier 会在进程内把它粘住。
 func ReadGoKey() (GoKey, bool) {
 	file, err := credentialPath()
 	if err != nil {
 		return GoKey{}, false
 	}
-	return readGoKey(file)
+	key, configured := storedGoKey(file)
+	if !configured {
+		return GoKey{}, false
+	}
+	if key.Session == "" {
+		key.Session = uuidV4()
+	}
+	return key, true
 }
 
 // HasGoKey 报告是否已配 key。向导据此只报状态，不再重复问（AGENTS.md「别重复问同一件事」）。
@@ -93,7 +101,8 @@ func SaveGoKey(apiKey string) (GoKey, error) {
 	return GoKey{APIKey: trimmed, Session: session}, nil
 }
 
-func readGoKey(file string) (GoKey, bool) {
+// storedGoKey 读凭据条目原文；session 可能为空（老版本或手写的凭据里没有）。
+func storedGoKey(file string) (GoKey, bool) {
 	entry, found := readStore(file)[goEntry].(map[string]any)
 	if !found {
 		return GoKey{}, false
@@ -103,9 +112,6 @@ func readGoKey(file string) (GoKey, bool) {
 		return GoKey{}, false
 	}
 	session, _ := entry["session"].(string)
-	if session == "" {
-		session = uuidV4()
-	}
 	return GoKey{APIKey: apiKey, Session: session}, true
 }
 

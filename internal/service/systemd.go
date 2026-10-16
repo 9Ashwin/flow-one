@@ -55,28 +55,50 @@ func systemdQuote(value string) string {
 
 var execStartPattern = regexp.MustCompile(`(?m)^ExecStart=(.+)$`)
 
-// parseSystemdExecStart 从 unit 文本里取出 ExecStart 的第一个参数（服务的可执行文件）。
-func parseSystemdExecStart(text string) string {
+// parseSystemdExecStart 从 unit 文本里取出 ExecStart 的命令行（按 systemd 的规矩切成参数）。
+func parseSystemdExecStart(text string) []string {
 	match := execStartPattern.FindStringSubmatch(text)
 	if match == nil {
-		return ""
+		return nil
 	}
-	return firstSystemdArgument(strings.TrimSpace(match[1]))
+	return systemdArguments(strings.TrimSpace(match[1]))
 }
 
-// firstSystemdArgument 取第一个参数：去掉 systemd 允许的前缀标记（`-`/`+`/`!`/`@`），
-// 含引号时按引号取。
-func firstSystemdArgument(value string) string {
+// systemdArguments 按 systemd 的规矩拆参数：空白分隔，双引号内的空白不算分隔、引号内的
+// `\` 与 `\"` 是转义。开头允许出现 systemd 的前缀标记（`-` 表示忽略失败），要丢掉 ——
+// 那是标记，不是路径的一部分。
+func systemdArguments(value string) []string {
 	value = strings.TrimLeft(value, "-+!@")
-	if rest, quoted := strings.CutPrefix(value, `"`); quoted {
-		if end := strings.Index(rest, `"`); end >= 0 {
-			return rest[:end]
+	var (
+		arguments []string
+		current   strings.Builder
+		quoted    bool
+		escaped   bool
+		started   bool
+	)
+	for _, char := range value {
+		switch {
+		case escaped:
+			current.WriteRune(char)
+			escaped = false
+		case quoted && char == '\\':
+			escaped = true
+		case char == '"':
+			quoted = !quoted
+			started = true
+		case (char == ' ' || char == '\t') && !quoted:
+			if started {
+				arguments = append(arguments, current.String())
+				current.Reset()
+				started = false
+			}
+		default:
+			current.WriteRune(char)
+			started = true
 		}
-		return rest
 	}
-	fields := strings.Fields(value)
-	if len(fields) == 0 {
-		return ""
+	if started {
+		arguments = append(arguments, current.String())
 	}
-	return fields[0]
+	return arguments
 }

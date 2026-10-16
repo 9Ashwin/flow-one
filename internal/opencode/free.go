@@ -14,6 +14,7 @@ import (
 
 	"github.com/9Ashwin/claude-code-openai-bridge/errs"
 	"github.com/9Ashwin/claude-code-openai-bridge/internal/source"
+	"github.com/9Ashwin/claude-code-openai-bridge/internal/sse"
 )
 
 // FreeTier 是 OpenCode 免费档（来源 id `oc`）。
@@ -28,7 +29,7 @@ type FreeTier struct {
 
 // NewFreeTier 建一条免费档来源。
 func NewFreeTier(opts Options) (*FreeTier, error) {
-	conn, err := newClient(opts, freeBaseURL)
+	conn, err := newClient(opts, FreeBaseURL)
 	if err != nil {
 		return nil, err
 	}
@@ -53,12 +54,12 @@ func (f *FreeTier) Rewriter() source.Rewriter { return nil }
 // 无元数据 —— 上层据此不加 `[1m]` 后缀）。
 func (f *FreeTier) ListModels(ctx context.Context) ([]source.Model, error) {
 	header := http.Header{}
-	header.Set("authorization", "Bearer "+anonymousKey)
-	header.Set("user-agent", defaultUserAgent)
+	header.Set("authorization", "Bearer "+AnonymousKey)
+	header.Set("user-agent", DefaultUserAgent)
 	ctx, cancel := withTimeout(ctx, modelsTimeout)
 	defer cancel()
 	ids := []string{}
-	if err := f.getJSON(ctx, f.Label(), f.baseURL+freeModelsPath, header, func(body io.Reader) error {
+	if err := f.getJSON(ctx, f.Label(), f.baseURL+FreeModelsPath, header, func(body io.Reader) error {
 		var payload struct {
 			Data []struct {
 				ID string `json:"id"`
@@ -94,14 +95,14 @@ func (f *FreeTier) Chat(ctx context.Context, req source.ChatRequest) (source.Str
 		return nil, errs.InternalFrom(err)
 	}
 	session := f.currentSession()
-	request, err := http.NewRequestWithContext(ctx, http.MethodPost, f.baseURL+freeChatPath, bytes.NewReader(payload))
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, f.baseURL+FreeChatPath, bytes.NewReader(payload))
 	if err != nil {
 		return nil, errs.InternalFrom(err)
 	}
-	request.Header.Set("authorization", "Bearer "+anonymousKey)
+	request.Header.Set("authorization", "Bearer "+AnonymousKey)
 	request.Header.Set("content-type", "application/json")
 	request.Header.Set("accept", "text/event-stream")
-	for key, values := range ShapeHeaders(ProjectID(f.home), session, RequestID()) {
+	for key, values := range ShapeHeaders(projectID(f.home), session, NewRequestID()) {
 		for _, value := range values {
 			request.Header.Add(key, value)
 		}
@@ -111,17 +112,16 @@ func (f *FreeTier) Chat(ctx context.Context, req source.ChatRequest) (source.Str
 		return nil, networkFailure(f.Label(), err)
 	}
 	if !ok(response) {
-		read := readErrorBody(response.Body)
+		failed := classify(sse.Failure(response))
 		response.Body.Close()
-		failed := failure(response.StatusCode, read)
 		if failed.Subtype == errs.SubtypeShapeRejected {
 			// FreeTierError 只说明形状没被认出来，指出来比让用户猜有用
 			f.logf("%s：被免费档门禁拒绝（报文形状未被识别），请提 issue 附上本机版本", f.Label())
 		}
 		return nil, failed
 	}
-	f.logf("%s：%s 已建立回合（会话 %s…）", f.Label(), req.Model, truncate(session, 12))
-	return newRestoreStream(newSSEStream(response.Body), gate), nil
+	f.logf("%s：%s 已建立回合（会话 %s…）", f.Label(), req.Model, shortID(session, 12))
+	return newRestoreStream(sse.NewReader(response.Body), gate), nil
 }
 
 // currentSession 返回进程级复用的会话 id：一个进程一个 id，别每次请求都换 ——
@@ -130,7 +130,7 @@ func (f *FreeTier) currentSession() string {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.session == "" {
-		f.session = SessionID()
+		f.session = NewSessionID()
 	}
 	return f.session
 }
@@ -147,7 +147,7 @@ func ShapeHeaders(project string, session string, request string) http.Header {
 	header.Set(sessionIDHeader, session)
 	header.Set(requestHeader, request)
 	header.Set(clientHeader, clientHeaderName)
-	header.Set("user-agent", defaultUserAgent)
+	header.Set("user-agent", DefaultUserAgent)
 	return header
 }
 

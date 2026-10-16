@@ -14,6 +14,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/9Ashwin/claude-code-openai-bridge/internal/config"
 )
 
 // base62 是官方 id 模块的字母表（0-9A-Za-z，顺序就是这一串）。
@@ -26,41 +28,59 @@ var idSequence struct {
 	counter int64
 }
 
-// SessionID 生成免费档要求的会话 id：`ses_` + 12 位小写 hex + 14 位 base62。
+// NewSessionID 生成免费档要求的会话 id：`ses_` + 12 位小写 hex + 14 位 base62。
 //
 // 尾段总长 26（12 hex + 14 base62）来自官方 id 模块的 `LENGTH = 26`；把 26 当成
 // 随机段长度会得到 38 字符，门禁一律 403 —— 这是最容易写错的一点。
-func SessionID() string {
+//
+// 导出是给 doctor 用的：它要自己拼门禁形状（完整形状 + 逐个去掉一个要件）。
+func NewSessionID() string {
 	stamp := time.Now().UnixMilli()
 	return "ses_" + timeHex(^(stamp*0x1000 + nextSequence(stamp))) + randomBase62(14)
 }
 
-// RequestID 是每请求一个的 id，用网关同样接受的 `msg_` 铸造形状。
-func RequestID() string {
+// NewRequestID 是每请求一个的 id，用网关同样接受的 `msg_` 铸造形状。
+func NewRequestID() string {
 	return "msg_" + timeHex(time.Now().UnixMilli()*0x1000+1) + randomBase62(14)
 }
 
-// ProjectID 返回 40 位小写 hex 的项目 id，并把它落在 `home/opencode.json` 里复用。
+// ProjectID 返回本机身份 id（40 位小写 hex），落在 `BRIDGE_HOME/opencode.json` 里复用。
 //
 // 与官方 CLI 的 `sha1("git-remote:" + …)` 同形。本机身份必须重启后不变 —— 每次换一个
-// 会让同一台机器在服务端被看成很多独立客户端。落盘失败不影响本次请求。
-func ProjectID(home string) string {
-	file := filepath.Join(home, "opencode.json")
-	if payload, err := os.ReadFile(file); err == nil {
-		var stored struct {
-			ProjectID string `json:"projectId"`
-		}
-		if json.Unmarshal(payload, &stored) == nil && isProjectID(stored.ProjectID) {
-			return stored.ProjectID
+// 会让同一台机器在服务端被看成很多独立客户端。数据目录解析不了时也返回一个合法值，
+// 只是不落盘。
+func ProjectID() string {
+	home, err := config.Home()
+	if err != nil {
+		return projectID("")
+	}
+	return projectID(home)
+}
+
+// projectID 是落盘复用那一份实现；home 为空表示不落盘。
+func projectID(home string) string {
+	if home != "" {
+		file := filepath.Join(home, "opencode.json")
+		if payload, err := os.ReadFile(file); err == nil {
+			var stored struct {
+				ProjectID string `json:"projectId"`
+			}
+			if json.Unmarshal(payload, &stored) == nil && isProjectID(stored.ProjectID) {
+				return stored.ProjectID
+			}
 		}
 	}
 	identity := make([]byte, 16)
 	_, _ = rand.Read(identity)
 	sum := sha1.Sum([]byte("git-remote:opencode/" + hex.EncodeToString(identity)))
 	value := hex.EncodeToString(sum[:])
+	if home == "" {
+		return value
+	}
 	if err := os.MkdirAll(home, 0o700); err == nil {
-		if payload, err := json.MarshalIndent(map[string]string{"projectId": value}, "", "  "); err == nil {
-			_ = os.WriteFile(file, payload, 0o600)
+		payload, err := json.MarshalIndent(map[string]string{"projectId": value}, "", "  ")
+		if err == nil {
+			_ = os.WriteFile(filepath.Join(home, "opencode.json"), payload, 0o600)
 		}
 	}
 	return value

@@ -247,3 +247,19 @@ func TestReadSettingsSurvivesGarbage(t *testing.T) {
 	written := readFile(t, file)
 	assert.Equal(t, "oc/x", written["model"])
 }
+
+func TestReadInstallStateNumbersAreFloat64(t *testing.T) {
+	home, _ := scratch(t)
+	require.NoError(t, WriteInstallState(home, map[string]any{
+		"service": map[string]any{"kind": "launchd", "path": "/tmp/x.plist", "port": 8788},
+	}))
+
+	// 消费方（cmd 的 choosePort、doctor）按惯例断言 float64 才拿得到端口；
+	// 这里用 json.Number 会让那条断言静默失败，于是「复用已有端口」就哑了
+	state := ReadInstallState(home)
+	service, isObject := state["service"].(map[string]any)
+	require.True(t, isObject)
+	port, isNumber := service["port"].(float64)
+	require.True(t, isNumber, "账本里的数字要落到 float64")
+	assert.Equal(t, 8788.0, port)
+}

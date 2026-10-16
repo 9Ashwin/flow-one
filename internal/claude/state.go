@@ -25,13 +25,17 @@ func InstallStatePath(home string) string {
 
 // ReadInstallState 读安装账本。不存在、读不到、坏掉都返回空账本 —— 坏账本不该挡住
 // 安装，而且下次写入会把它整个换掉。
+//
+// 这里用**标准**的 json.Unmarshal（数字落到 float64，不是 json.Number）：账本是本工具
+// 自己写的，不需要数字原文保真；而消费方（cmd / doctor）按惯例断言 `.(float64)` 才拿得到
+// 端口，用 json.Number 会让那条断言静默失败。settings.json 那边才需要保真（见 decodeJSON）。
 func ReadInstallState(home string) map[string]any {
 	payload, err := os.ReadFile(InstallStatePath(home))
 	if err != nil {
 		return map[string]any{}
 	}
 	state := map[string]any{}
-	if err := decodeJSON(payload, &state); err != nil || state == nil {
+	if err := json.Unmarshal(payload, &state); err != nil || state == nil {
 		return map[string]any{}
 	}
 	return state

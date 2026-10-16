@@ -172,7 +172,7 @@ func TestRecordReportsWhatWeInstalled(t *testing.T) {
 	writeStateFile(t, home, map[string]any{
 		"service": map[string]any{
 			"kind": "systemd", "path": "/tmp/x.service", "port": 8788,
-			"env": map[string]string{"BRIDGE_MODEL": "oc/x"}, "cliPath": "/opt/ccb/bridge",
+			"env": map[string]string{"BRIDGE_PORT": "8788", "BRIDGE_MODEL": "oc/x"}, "cliPath": "/opt/ccb/bridge",
 		},
 	})
 
@@ -181,7 +181,7 @@ func TestRecordReportsWhatWeInstalled(t *testing.T) {
 	assert.Equal(t, KindSystemd, record.Kind)
 	assert.Equal(t, "/tmp/x.service", record.Path)
 	assert.Equal(t, 8788, record.Port)
-	assert.Equal(t, map[string]string{"BRIDGE_MODEL": "oc/x"}, record.Env)
+	assert.Equal(t, map[string]string{"BRIDGE_PORT": "8788", "BRIDGE_MODEL": "oc/x"}, record.Env)
 	assert.Equal(t, "/opt/ccb/bridge", record.CLIPath)
 }
 
@@ -210,4 +210,36 @@ func writeStateFile(t *testing.T, home string, state map[string]any) {
 	require.NoError(t, err)
 	require.NoError(t, os.MkdirAll(home, 0o700))
 	require.NoError(t, os.WriteFile(filepath.Join(home, "install.json"), payload, 0o600))
+}
+
+func TestCLIPathRecognizesInterpreterPlusScript(t *testing.T) {
+	// 真实踩到过：Node 版留下的 plist 是 [node, cli.mjs]，只取第一条会得到 node，
+	// 于是 doctor 报「服务跑的不是当前这份代码：…/bin/node」—— 假阳性，
+	// 而这条检查存在的全部意义就是抓「服务指向另一份代码」。
+	legacy := `<?xml version="1.0"?>
+<plist version="1.0"><dict>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/Users/me/.local/share/mise/installs/node/24.18.1/bin/node</string>
+    <string>/Users/me/.local/share/mise/installs/node/24.18.1/lib/node_modules/claude-code-openai-bridge/cli.mjs</string>
+  </array>
+</dict></plist>`
+	assert.Equal(t,
+		"/Users/me/.local/share/mise/installs/node/24.18.1/lib/node_modules/claude-code-openai-bridge/cli.mjs",
+		CLIPathFromServiceFile(legacy, KindLaunchd))
+
+	// Go 版自己的形态：二进制 + 子命令（子命令不是绝对路径，应落在第一条）
+	goStyle := `<?xml version="1.0"?>
+<plist version="1.0"><dict>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/opt/ccb/bridge</string>
+    <string>serve</string>
+  </array>
+</dict></plist>`
+	assert.Equal(t, "/opt/ccb/bridge", CLIPathFromServiceFile(goStyle, KindLaunchd))
+
+	// systemd 侧同理
+	assert.Equal(t, "/opt/ccb/cli.mjs",
+		CLIPathFromServiceFile("[Service]\nExecStart=/usr/bin/node /opt/ccb/cli.mjs\n", KindSystemd))
 }

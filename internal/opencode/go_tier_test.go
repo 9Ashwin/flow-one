@@ -187,8 +187,30 @@ func TestGoTierMetadata(t *testing.T) {
 func TestSourceEndpoints(t *testing.T) {
 	// 两条路的端点不同是刻意的：免费档在 /inference/v1，Go 套餐在 /zen/go/v1，
 	// 把它们合成一条会同时弄坏两边。
-	assert.Equal(t, "https://opencode.ai/inference/v1/chat/completions", freeBaseURL+freeChatPath)
-	assert.Equal(t, "https://opencode.ai/inference/v1/models", freeBaseURL+freeModelsPath)
-	assert.Equal(t, "https://opencode.ai/zen/go/v1/chat/completions", goBaseURL+goChatPath)
-	assert.Equal(t, "https://opencode.ai/zen/go/v1/models", goBaseURL+goModelsPath)
+	assert.Equal(t, "https://opencode.ai/inference/v1/chat/completions", FreeBaseURL+FreeChatPath)
+	assert.Equal(t, "https://opencode.ai/inference/v1/models", FreeBaseURL+FreeModelsPath)
+	assert.Equal(t, "https://opencode.ai/zen/go/v1/chat/completions", GoBaseURL+GoChatPath)
+	assert.Equal(t, "https://opencode.ai/zen/go/v1/models", GoBaseURL+GoModelsPath)
+}
+
+func TestGoTierStickySessionWhenCredentialHasNone(t *testing.T) {
+	home := scratch(t)
+	resetCapabilities(t)
+	// 手写/老版本的凭据里只有 key，没有会话 id：铸一个并在进程内粘住，
+	// 不能每次请求换一个（那会让同一台机器被看成很多独立客户端）
+	require.NoError(t, writeFile(t, home+"/credentials.json", `{"opencode-go":{"apiKey":"oc_sk_handwritten"}}`))
+	rec := newRecorder(t, nil)
+	goTier, err := NewGoTier(Options{BaseURL: rec.server.URL, HTTPClient: rec.server.Client()})
+	require.NoError(t, err)
+
+	for range 2 {
+		stream, err := goTier.Chat(context.Background(), source.ChatRequest{Body: freeBody(), Model: "x"})
+		require.NoError(t, err)
+		drain(t, stream)
+	}
+	requests := rec.taken()
+	require.Len(t, requests, 2)
+	session := requests[0].header.Get("X-Opencode-Session")
+	assert.Regexp(t, uuidPattern, session)
+	assert.Equal(t, session, requests[1].header.Get("X-Opencode-Session"))
 }

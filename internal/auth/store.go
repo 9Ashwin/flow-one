@@ -5,10 +5,12 @@ package auth
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/9Ashwin/claude-code-openai-bridge/errs"
 )
@@ -140,7 +142,19 @@ func (s Store) update(change func(map[string]json.RawMessage) error) error {
 	if err != nil {
 		return err
 	}
+	// 坏文件走「先备份再重写」：凭据文件里躺着腾讯两条线的登录态，静默整表重写会把
+	// 还能手工救回来的内容（比如多了一个逗号）一起毁掉；但直接拒绝写又会让人连
+	// 「重新登录」都做不了。备份一份再写，两个诉求都满足 —— 与 claude.Install 同策略。
 	table := s.Read()
+	if raw, readErr := os.ReadFile(file); readErr == nil {
+		var probe map[string]json.RawMessage
+		if jsonErr := json.Unmarshal(raw, &probe); jsonErr != nil {
+			backup := fmt.Sprintf("%s.bak-%s", file, time.Now().UTC().Format("2006-01-02T15-04-05-000Z"))
+			if writeErr := os.WriteFile(backup, raw, 0o600); writeErr != nil {
+				return errs.InternalFrom(writeErr)
+			}
+		}
+	}
 	if err := change(table); err != nil {
 		return err
 	}

@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -125,4 +126,39 @@ func TestStoredCredentialFieldNames(t *testing.T) {
 	require.True(t, ok)
 	assert.Equal(t, "阿星", account["nickname"])
 	assert.Equal(t, "e1", account["enterpriseId"])
+}
+
+func TestStoreBacksUpBrokenFileBeforeRewriting(t *testing.T) {
+	// 凭据文件里同时躺着腾讯两条线的登录态：坏掉的 JSON 既不能被静默毁掉，
+	// 也不能把「重新登录」堵死 —— 所以策略是**先备份再重写**。
+	dir := t.TempDir()
+	path := filepath.Join(dir, "credentials.json")
+	original := `{"cn": {"accessToken": "keep-me"},`
+	if err := os.WriteFile(path, []byte(original), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	store := Store{Path: path}
+	require.NoError(t, store.Save("cn", Credential{Token: Token{AccessToken: "fresh"}}),
+		"坏文件不该挡住重新登录")
+
+	entries, err := os.ReadDir(dir)
+	require.NoError(t, err)
+	backups := []string{}
+	for _, entry := range entries {
+		if strings.Contains(entry.Name(), ".bak-") {
+			backups = append(backups, entry.Name())
+		}
+	}
+	require.Len(t, backups, 1, "重写前必须留一份备份")
+	kept, err := os.ReadFile(filepath.Join(dir, backups[0]))
+	require.NoError(t, err)
+	assert.Equal(t, original, string(kept), "备份里要原样保留坏文件内容，便于手工修复")
+
+	stored, ok := store.Get("cn")
+	require.True(t, ok)
+	assert.Equal(t, "fresh", stored.AccessToken)
+
+	// 文件不存在时正常写入，且不产生备份
+	fresh := Store{Path: filepath.Join(dir, "nested", "credentials.json")}
+	require.NoError(t, fresh.Save("cn", Credential{}))
 }

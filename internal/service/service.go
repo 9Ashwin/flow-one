@@ -10,9 +10,9 @@
 //     journalctl 提示；
 //   - service_unsupported.go：其它平台老实说「不支持」，而不是留一条只有 macOS 能走的路径。
 //
-// 公共流程（安装、卸载、状态、账本）留在这个不带头文件里；两份**纯文本**的渲染与解析
-// （launchd.go / systemd.go）也不带平台头 —— 它们不碰系统命令，于是两边的服务文件
-// 在任一平台上都能断言。
+// 公共流程（安装、卸载、状态、账本）留在这个不带平台头的文件里；两份**纯文本**的渲染
+// 与解析（launchd.go / systemd.go）同样不带平台头 —— 它们不碰系统命令，于是两边的
+// 服务文件在任一平台上都能断言。
 //
 // 本层只读写状态，**不做交互**：问不问「装成开机自启」由 cmd 层的向导决定，
 // 答案存在账本里（Choice / RecordChoice），装过就不再问第二遍。
@@ -165,18 +165,50 @@ func CurrentCLIPath() string {
 // CLIPathFromServiceFile 从服务文件内容里取出被执行的 CLI 路径。纯函数，两种 kind 都认，
 // 所以两边的断言都能在任一平台上跑。
 //
-// 与 Node 版的差别：那边的服务文件是 `[node, cli.mjs]`，取**最后**一条才是脚本；Go 版服务
-// 文件的第一条就是本程序的二进制，取**第一条**才对应「服务跑的是哪份代码」。
+// 两种形态都要认：`[node, /abs/cli.mjs]`（解释器 + 脚本，Node 版留下的 plist 就是这种）
+// 与 `[/abs/claude-code-bridge, serve]`（二进制 + 子命令）。判据是「第二个参数是不是
+// 绝对路径」。只取第一条会把前者报成 `…/bin/node` —— doctor 会因此误报
+// 「服务跑的不是当前这份代码」，而那条检查存在的全部意义就是抓这个。
 func CLIPathFromServiceFile(text string, kind Kind) string {
 	switch kind {
 	case KindLaunchd:
-		if command := parseLaunchdCommand(text); len(command) > 0 {
-			return command[0]
-		}
+		return launchdCLIPath(parseLaunchdCommand(text))
 	case KindSystemd:
-		return parseSystemdExecStart(text)
+		return systemdCLIPath(parseSystemdExecStart(text))
 	}
 	return ""
+}
+
+// launchdCLIPath 从 ProgramArguments 里挑出「真正被执行的那份代码」。
+//
+// 两种形态都要认，只取第一条或只取最后一条都会错一种：
+//
+//	[node, /abs/path/cli.mjs]          → /abs/path/cli.mjs（解释器 + 脚本）
+//	[/abs/path/claude-code-bridge, serve] → /abs/path/claude-code-bridge（二进制 + 子命令）
+//
+// 判据是「第二个参数是不是绝对路径」：`serve` 不是，于是落到第一条。
+// 早先只取第一条，doctor 会对着 Node 版留下的 plist 报「服务跑的是 …/bin/node」——
+// 假阳性，而这条检查存在的全部意义就是抓「服务指向另一份代码」。
+func launchdCLIPath(command []string) string {
+	if len(command) == 0 {
+		return ""
+	}
+	if len(command) > 1 && filepath.IsAbs(command[1]) {
+		return command[1]
+	}
+	return command[0]
+}
+
+// systemdCLIPath 同理：`ExecStart=/usr/bin/node /opt/ccb/cli.mjs` 要取脚本路径。
+// 参数切分复用 parseSystemdExecStart 背后的分词器（它处理了引号与转义）。
+func systemdCLIPath(args []string) string {
+	if len(args) == 0 {
+		return ""
+	}
+	if len(args) > 1 && filepath.IsAbs(args[1]) {
+		return args[1]
+	}
+	return args[0]
 }
 
 // Record 读账本里的「后台服务」那一节。doctor 用它比对服务环境与当前密钥/模型。

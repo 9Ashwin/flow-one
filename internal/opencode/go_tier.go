@@ -9,9 +9,11 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"sync"
 
 	"github.com/9Ashwin/claude-code-openai-bridge/errs"
 	"github.com/9Ashwin/claude-code-openai-bridge/internal/source"
+	"github.com/9Ashwin/claude-code-openai-bridge/internal/sse"
 )
 
 // GoTier 是 OpenCode Go 套餐（来源 id `ocg`）。
@@ -24,11 +26,13 @@ import (
 //   - **不需要**免费档那套形状门禁：裸 OpenAI 报文直接 200，所以这里既不补桩也不改工具名。
 type GoTier struct {
 	client
+	mu      sync.Mutex
+	session string
 }
 
 // NewGoTier 建一条 Go 套餐来源。
 func NewGoTier(opts Options) (*GoTier, error) {
-	conn, err := newClient(opts, goBaseURL)
+	conn, err := newClient(opts, GoBaseURL)
 	if err != nil {
 		return nil, err
 	}
@@ -61,7 +65,7 @@ func (g *GoTier) ListModels(ctx context.Context) ([]source.Model, error) {
 	ctx, cancel := withTimeout(ctx, modelsTimeout)
 	defer cancel()
 	ids := []string{}
-	if err := g.getJSON(ctx, g.Label(), g.baseURL+goModelsPath, header, func(body io.Reader) error {
+	if err := g.getJSON(ctx, g.Label(), g.baseURL+GoModelsPath, header, func(body io.Reader) error {
 		var payload struct {
 			Data []struct {
 				ID string `json:"id"`
@@ -99,7 +103,7 @@ func (g *GoTier) Chat(ctx context.Context, req source.ChatRequest) (source.Strea
 	if err != nil {
 		return nil, errs.InternalFrom(err)
 	}
-	request, err := http.NewRequestWithContext(ctx, http.MethodPost, g.baseURL+goChatPath, bytes.NewReader(payload))
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, g.baseURL+GoChatPath, bytes.NewReader(payload))
 	if err != nil {
 		return nil, errs.InternalFrom(err)
 	}
@@ -112,21 +116,38 @@ func (g *GoTier) Chat(ctx context.Context, req source.ChatRequest) (source.Strea
 		return nil, networkFailure(g.Label(), err)
 	}
 	if !ok(response) {
-		read := readErrorBody(response.Body)
+		failed := classify(sse.Failure(response))
 		response.Body.Close()
-		failed := failure(response.StatusCode, read)
 		if failed.Subtype == errs.SubtypeMissingSession {
 			// 会话头本应自动带上；真出现说明是我们这边的 bug
 			g.logf("%s：上游要求会话头 %s（应已自动带上，若出现请提 issue）", g.Label(), sessionHeader)
 		}
 		return nil, failed
 	}
-	g.logf("%s：%s 已建立回合（会话 %s…）", g.Label(), req.Model, truncate(key.Session, 8))
-	return newSSEStream(response.Body), nil
+	g.logf("%s：%s 已建立回合（会话 %s…）", g.Label(), req.Model, shortID(key.Session, 8))
+	return sse.NewReader(response.Body), nil
 }
 
 // credential 每次请求都重新读一遍：向导存下 key 之后，已经建好的来源要能立刻用上。
-func (g *GoTier) credential() (GoKey, bool) { return readGoKey(g.credentialFile) }
+//
+// 凭据里没有会话 id 时（老版本或手写的凭据）铸一个并在本进程内粘住：会话 id 只影响
+// 服务端路由亲和，但每次换一个会让同一台机器被看成很多独立客户端。
+func (g *GoTier) credential() (GoKey, bool) {
+	key, configured := storedGoKey(g.credentialFile)
+	if !configured {
+		return GoKey{}, false
+	}
+	if key.Session != "" {
+		return key, true
+	}
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.session == "" {
+		g.session = uuidV4()
+	}
+	key.Session = g.session
+	return key, true
+}
 
 // missingKey 是「还没配 key」的类型化错误：归到认证，别让用户以为是网络问题。
 func missingKey(label string) *errs.Error {

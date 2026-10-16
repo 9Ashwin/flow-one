@@ -8,6 +8,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"regexp"
+	"slices"
+	"strings"
 	"testing"
 
 	"github.com/9Ashwin/claude-code-openai-bridge/errs"
@@ -36,30 +38,33 @@ func TestSessionAndRequestIDShapes(t *testing.T) {
 	scratch(t)
 	// 尾段总长 26 = 12 hex + 14 base62；误做成「随机 26 位」会得到 38 字符而被 403
 	for range 50 {
-		session := SessionID()
+		session := NewSessionID()
 		assert.Regexp(t, sessionPattern, session)
 		assert.Len(t, session, 4+26)
 
-		request := RequestID()
+		request := NewRequestID()
 		assert.Regexp(t, requestPattern, request)
 		assert.Len(t, request, 4+26)
 	}
 	// 同一毫秒内也不能重复（sequence 递增）
-	first, second := SessionID(), SessionID()
+	first, second := NewSessionID(), NewSessionID()
 	assert.NotEqual(t, first[:16], second[:16])
 }
 
 func TestProjectIDPersistsAcrossCalls(t *testing.T) {
 	home := scratch(t)
-	first := ProjectID(home)
+	first := projectID(home)
 	assert.Regexp(t, projectPattern, first)
-	assert.Equal(t, first, ProjectID(home), "项目 id 必须落盘复用，每次换一个会被看成新客户端")
+	assert.Equal(t, first, projectID(home), "项目 id 必须落盘复用，每次换一个会被看成新客户端")
 
 	// 形状不对的落盘值要重新生成（用户手改过）
 	require.NoError(t, writeFile(t, home+"/opencode.json", `{"projectId":"nope"}`))
-	regenerated := ProjectID(home)
+	regenerated := projectID(home)
 	assert.Regexp(t, projectPattern, regenerated)
 	assert.NotEqual(t, "nope", regenerated)
+
+	// 导出的那一个走 BRIDGE_HOME，doctor 直接用它拼形状
+	assert.Equal(t, regenerated, ProjectID())
 }
 
 func TestFreeTierOutboundShape(t *testing.T) {
@@ -347,4 +352,28 @@ func countOf(values []string, want string) int {
 		}
 	}
 	return count
+}
+
+func TestShapeHeadersIsExactlyTheFullGateShape(t *testing.T) {
+	// doctor 拿它当「完整形状」的基准，再逐项删掉一个要件做变体：所以这里必须是
+	// 一个不多一个不少的那 5 个头，别名头与 session 同值。
+	header := ShapeHeaders("project-1", "ses_0123456789ab0123456789ABCD", "msg_0123456789ab0123456789ABCD")
+	names := []string{}
+	for name := range header {
+		lower := strings.ToLower(name)
+		if strings.HasPrefix(lower, "x-opencode-") {
+			names = append(names, lower)
+		}
+	}
+	slices.Sort(names)
+	assert.Equal(t, []string{
+		"x-opencode-client",
+		"x-opencode-project",
+		"x-opencode-request",
+		"x-opencode-session",
+		"x-opencode-session-id",
+	}, names, "门禁形状就是这 5 个头")
+	assert.Equal(t, "cli", header.Get("X-Opencode-Client"))
+	assert.Equal(t, header.Get("X-Opencode-Session"), header.Get("X-Opencode-Session-Id"))
+	assert.Regexp(t, `^opencode/`, header.Get("User-Agent"))
 }
