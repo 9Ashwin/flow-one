@@ -17,30 +17,31 @@ Claude Code CLI ──► 本桥 127.0.0.1:8788 ──► WorkBuddy 国内版 co
 
 ## 安装
 
-三种方式，任选一种。命令名有两个：**`fo`** 与 **`flow-one`**，同一个入口。
-
-**1. 不克隆，直接用**
+**不走 npm 仓库，直接从 GitHub 装**（零依赖，装下来就是能跑的代码；有 Node ≥ 18.17 即可）。
 
 ```bash
-npx -y github:9Ashwin/flow-one status     # 每次从 GitHub 取最新
-npm i -g github:9Ashwin/flow-one          # 或者装成全局命令
+npm i -g github:9Ashwin/flow-one      # 装完有 flow-one 与 fo 两个命令
 ```
 
-**2. 克隆后链成全局命令**（要改代码就用这个：`git pull` 之后命令即刻是新的）
+不想装成全局命令，也可以每次现取：
+
+```bash
+npx -y github:9Ashwin/flow-one status
+```
+
+要改代码就用 clone + link（`git pull` 之后命令即刻是新的）：
 
 ```bash
 git clone https://github.com/9Ashwin/flow-one.git
-cd flow-one
-npm link          # 之后任意目录直接 fo
+cd flow-one && npm link
 ```
 
-**3. 从 npm 全局安装**（发布之后）
+**更新**：重跑同一条 `npm i -g github:9Ashwin/flow-one`。
+**钉住某个版本**：`npm i -g github:9Ashwin/flow-one#v0.3.0`
+（注意：`v0.2.x` 两个 tag 是**已弃用的 Go 实现**，别钉它们。）
 
-```bash
-npm i -g flow-one
-```
-
-需要 Node ≥ 18.17（用到内置 `fetch`）。**没有依赖**，不会往 `node_modules` 里装东西。
+> 为什么不发 npm：npm 现在不允许凭据直接发布新包，只能先 stage 再由维护者带 2FA 批准
+> （`E_STAGE_REQUIRED`），而单包零依赖本来就不需要仓库中介 —— 从 GitHub 装同样是一条命令。
 
 ## 快速开始
 
