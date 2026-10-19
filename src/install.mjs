@@ -19,6 +19,7 @@ import path from 'node:path'
 import { execFileSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { bridgeHome } from './config.mjs'
+import { writeFileAtomic } from './atomic.mjs'
 
 const CLI_PATH = fileURLToPath(new URL('../cli.mjs', import.meta.url))
 
@@ -155,11 +156,14 @@ function readJson(file) {
   }
 }
 
+/**
+ * 账本与 `settings.json` 都走这里落盘。
+ *
+ * 「临时文件 + rename」的跨平台代价（Windows 上目标被占用就 EPERM）收在
+ * {@link writeFileAtomic} 里，这里只负责 JSON 的形状。
+ */
 function writeJsonAtomic(file, value, mode = 0o600) {
-  fs.mkdirSync(path.dirname(file), { recursive: true })
-  const temporary = `${file}.${process.pid}.tmp`
-  fs.writeFileSync(temporary, `${JSON.stringify(value, null, 2)}\n`, { mode })
-  fs.renameSync(temporary, file)
+  writeFileAtomic(file, `${JSON.stringify(value, null, 2)}\n`, mode)
 }
 
 function backup(file) {

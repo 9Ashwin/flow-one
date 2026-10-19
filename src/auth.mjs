@@ -25,6 +25,7 @@ import path from 'node:path'
 import crypto from 'node:crypto'
 import { spawn } from 'node:child_process'
 import { credentialFile } from './home.mjs'
+import { writeFileAtomic } from './atomic.mjs'
 
 const STATE_TIMEOUT_MS = 10_000
 const REQUEST_TIMEOUT_MS = 60_000
@@ -60,10 +61,10 @@ export function readStore(file = storePath()) {
 }
 
 function writeStore(data, file = storePath()) {
+  // 目录自己建（0700：凭据不给同机器上的其他人看）；落盘走公共的原子写 ——
+  // Windows 上目标被占用时 rename 会 EPERM，那份退让逻辑不该在凭据这条路上缺席
   fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 })
-  const temporary = `${file}.${process.pid}.tmp`
-  fs.writeFileSync(temporary, JSON.stringify(data, null, 2), { mode: 0o600 })
-  fs.renameSync(temporary, file)
+  writeFileAtomic(file, JSON.stringify(data, null, 2), 0o600)
 }
 
 export function saveCredential(product, credential, file = storePath()) {

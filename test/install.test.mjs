@@ -338,3 +338,53 @@ test('卸载：把「要不要自启」的答案一起忘掉，下次配置重�
     else process.env.XDG_CONFIG_HOME = previous.XDG_CONFIG_HOME
   }
 })
+
+test('「自己把桥跑起来」的命令：Windows 的 cmd / PowerShell 也得能照抄', async () => {
+  const { serveCommand } = await import('../src/wizard.mjs')
+  const command = serveCommand(8788, 'k-1')
+  // `BRIDGE_PORT=8788 … node cli.mjs` 是 POSIX 赋值前缀，cmd 与 PowerShell 都不认；
+  // 而这条提示恰恰在 Windows 上最常出现（那边没有后台常驻）
+  assert.doesNotMatch(command, /BRIDGE_[A-Z_]+=/, '不能再给 POSIX 的 env 赋值前缀')
+  assert.match(command, /--port 8788/)
+  assert.match(command, /--api-key k-1/)
+
+  // 光有文本不够：这条命令得真能被解析成「前台起桥 + 同一个端口/密钥」
+  const { resolveConfig } = await import('../src/config.mjs')
+  const parsed = resolveConfig({ argv: command.split(' ').slice(2), env: {} })
+  assert.equal(parsed.command, 'serve')
+  assert.equal(parsed.config.port, 8788)
+  assert.equal(parsed.config.apiKey, 'k-1')
+})
+
+test('Windows：settings.json 被占用（rename EPERM）时，向导第 4 步仍要把配置写进去', async () => {
+  const home = scratch()
+  const { installClaudeSettings } = await import('../src/install.mjs')
+  const dir = path.join(home, 'claude')
+  const file = path.join(dir, 'settings.json')
+  fs.mkdirSync(dir, { recursive: true })
+  fs.writeFileSync(file, JSON.stringify({ env: { KEEP: 'me' } }))
+
+  // Windows 上「目标被占用」的表现就是 rename 报 EPERM（POSIX 上 rename 允许覆盖已打开的文件，
+  // 所以这个行为在 mac/Linux 上造不出来，只能把平台连同 rename 一起换成 Windows 的样子）
+  const platform = Object.getOwnPropertyDescriptor(process, 'platform')
+  const realRename = fs.renameSync
+  Object.defineProperty(process, 'platform', { value: 'win32', configurable: true })
+  fs.renameSync = () => { throw Object.assign(new Error('EPERM: operation not permitted, rename'), { code: 'EPERM' }) }
+  try {
+    // 真机上这里直接把向导带崩了，且 settings.json 一个字都没写进去
+    installClaudeSettings({ file, baseUrl: 'http://127.0.0.1:8788', apiKey: 'k-win', model: 'cn/x' })
+  } finally {
+    Object.defineProperty(process, 'platform', platform)
+    fs.renameSync = realRename
+  }
+
+  const written = JSON.parse(fs.readFileSync(file, 'utf8'))
+  assert.equal(written.env.KEEP, 'me', '被占用不是吃掉别人配置的理由')
+  assert.equal(written.env.ANTHROPIC_BASE_URL, 'http://127.0.0.1:8788')
+  assert.equal(written.env.ANTHROPIC_AUTH_TOKEN, 'k-win')
+  assert.deepEqual(
+    fs.readdirSync(dir).filter(name => name.endsWith('.tmp')),
+    [],
+    '退让路径也不能把临时文件留在人家的配置目录里',
+  )
+})

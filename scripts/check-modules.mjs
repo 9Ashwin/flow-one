@@ -40,6 +40,7 @@ const LAYERS = new Map([
   ['src/anthropic.mjs', 0],
   ['src/fingerprint.mjs', 0],
   ['src/errors.mjs', 0],
+  ['src/atomic.mjs', 0],
   // 1 来源层：各自实现一条上游
   ['src/auth.mjs', 1],
   ['src/buddy.mjs', 1],

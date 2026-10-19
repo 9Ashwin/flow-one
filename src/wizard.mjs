@@ -303,6 +303,18 @@ export async function decideService({ service, state = serviceState(), choice = 
 }
 
 /**
+ * 「自己把桥跑起来」要照抄的那条命令。
+ *
+ * 不写成 `BRIDGE_PORT=8788 BRIDGE_API_KEY=… node cli.mjs`：那是 POSIX 的赋值前缀，
+ * Windows 的 cmd 与 PowerShell 都不认（照抄只会得到「不是内部或外部命令」），而这条提示
+ * 恰恰在 Windows 上最常出现 —— 那边没有后台常驻，向导每次都会走到这一步。
+ * flag 形式三种壳都认，端口与密钥也跟 `settings.json` 里钉住的一致。
+ */
+export function serveCommand(port, apiKey) {
+  return `node cli.mjs serve --port ${port} --api-key ${apiKey}`
+}
+
+/**
  * 一键配置。
  *
  * `options.service` 是调用方给的显式表态（`--service` / `--no-service`）；
@@ -401,13 +413,13 @@ export async function setupWizard(options = {}) {
       }
     } else {
       fail(service.reason)
-      warn(`先手动跑起来：BRIDGE_PORT=${port} BRIDGE_API_KEY=${apiKey} node cli.mjs`)
+      warn(`先手动跑起来：${serveCommand(port, apiKey)}`)
     }
   } else if (running === undefined) {
     // 配置已经指向这个端口，这里却没人听 —— 必须当场说清楚，
     // 否则用户回到 Claude Code 只会看到 ECONNREFUSED。
     fail(`端口 ${port} 上没有服务在跑，Claude Code 会连不上`)
-    warn(`先把桥跑起来：BRIDGE_PORT=${port} BRIDGE_API_KEY=${apiKey} node cli.mjs`)
+    warn(`先把桥跑起来：${serveCommand(port, apiKey)}`)
   } else if (running.model !== model) {
     warn(`端口 ${port} 上已有服务在跑，但它钉的模型是 ${running.model}；要换成 ${model} 需要重装服务`)
   } else {
