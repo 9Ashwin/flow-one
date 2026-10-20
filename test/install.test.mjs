@@ -356,6 +356,16 @@ test('「自己把桥跑起来」的命令：Windows 的 cmd / PowerShell 也得
   assert.equal(parsed.config.apiKey, 'k-1')
 })
 
+test('launchctl print 成功但没有 stdout（stdio:ignore 返回 null）不能被当成「服务没加载」', async () => {
+  const { commandOutput } = await import('../src/install.mjs')
+  // v0.3.0 是 `execFileSync(...).toString()`：stdio:'ignore' 的成功调用返回 null，
+  // 于是抛 TypeError → launchdLoaded 把「已加载」判成「没加载」→ installService 跳过
+  // bootout，bootstrap 撞上 Bootstrap failed: 5 → 返回 ok:false，而旧进程带着旧 API key
+  // 继续跑。用户看到的是「配置写好了，Claude Code 却一直 401」。
+  assert.equal(commandOutput(null), '', '成功但没输出 ≠ 失败')
+  assert.equal(commandOutput(Buffer.from('ok')), 'ok', '有输出时照旧')
+})
+
 test('Windows：settings.json 被占用（rename EPERM）时，向导第 4 步仍要把配置写进去', async () => {
   const home = scratch()
   const { installClaudeSettings } = await import('../src/install.mjs')

@@ -46,12 +46,27 @@ function launchdLoaded(label) {
  */
 export const serviceCalls = []
 
+/**
+ * `execFileSync` 的输出统一成字符串。
+ *
+ * ⚠️ `stdio: 'ignore'` 时它返回的是 **null**，不是空字符串 —— 直接 `.toString()`
+ * 会抛 `TypeError: Cannot read properties of null`。
+ */
+export function commandOutput(result) {
+  return result === null || result === undefined ? '' : `${result}`
+}
+
 function platformRun(command, args, options = {}) {
   if (process.env.NODE_TEST_CONTEXT !== undefined) {
     serviceCalls.push({ command, args })
     return ''
   }
-  return execFileSync(command, args, options).toString()
+  // 真机上撞到过（2026-10-20）：这里原来是 `execFileSync(...).toString()`。
+  // 而 `launchdLoaded` 用的是 `stdio: 'ignore'`（成功调用返回 null）→ 成功也抛 TypeError
+  // → 被 catch 当成「没加载」。后果是 installService 跳过 bootout、bootstrap 撞上
+  // `Bootstrap failed: 5: Input/output error` 失败返回 ok:false，**旧进程带着旧 API key
+  // 继续跑**：用户看到的是「配置明明写好了，Claude Code 却一直 401」。
+  return commandOutput(execFileSync(command, args, options))
 }
 
 export const SERVICE_LABEL = 'dev.flow-one'
