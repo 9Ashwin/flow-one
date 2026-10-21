@@ -265,8 +265,11 @@ export async function probeTencentFingerprint(product, {
  */
 export function classifyTencentFailure(message) {
   const text = String(message ?? '')
-  const blocked = /Illegal API invocation|unapproved channel|11128|请求被拦截/i.test(text)
-  const limited = !blocked && /频率限制|额度|超出|quota|rate limit|too many/i.test(text)
+  // 「渠道校验」是 11128 的新说法（2026-10-21 实测：`request illegal` +
+  // displayTips「这次调用没通过渠道校验」），照样算风控拦下。
+  const blocked = /Illegal API invocation|unapproved channel|渠道校验|11128|请求被拦截/i.test(text)
+  // `14018 Credits exhausted` 是国际版的额度耗尽：必须与风控分开报，否则会把人引去翻规则。
+  const limited = !blocked && /频率限制|额度|超出|quota|rate limit|too many|Credits exhausted|14018/i.test(text)
   return { blocked, limited }
 }
 

@@ -152,6 +152,35 @@ export async function listModels(product, credential, { signal, log = () => {} }
 
 // ── 对话 ────────────────────────────────────────────────────────────────────
 
+/**
+ * 上游失败时能拿到的「人话」。
+ *
+ * 两条上游的失败形状**不一样**，只认一种就会把另一条的理由丢掉：
+ *
+ * - 风控 / 渠道校验：`{code:11128, msg:'request illegal', displayMsg:{zh,en}, displayTips:{zh,en}}`
+ * - 额度 / 频率：`{error:{data:{code:14018, msg:'Credits exhausted…'}}}`
+ *
+ * `msg` 常常只是 `request illegal` 这种没信息量的一行；真正能指导人的是 `displayMsg` /
+ * `displayTips`（「这次调用没通过渠道校验…」）和 `code` —— `fo doctor` 靠 code 把
+ * 「风控拦下」与「额度受限」分开，判错了会把人引去翻规则，而实际只要换线路或等额度。
+ */
+export function failureDetail(raw) {
+  const text = String(raw ?? '')
+  if (text === '') return ''
+  let payload
+  try { payload = JSON.parse(text) } catch { return text.slice(0, 300) }
+  const data = payload?.error?.data ?? payload
+  const code = typeof data?.code === 'number' ? data.code : undefined
+  const localized = data?.displayMsg?.zh ?? data?.displayMsg?.en
+  const tips = data?.displayTips?.zh ?? data?.displayTips?.en
+  const primary = [localized, tips].filter(item => typeof item === 'string' && item !== '').join('：')
+    || data?.msg || data?.message || data?.error?.message || ''
+  const parts = []
+  if (code !== undefined) parts.push(`上游 ${code}`)
+  if (primary !== '') parts.push(primary)
+  return parts.length === 0 ? text.slice(0, 300) : parts.join('：')
+}
+
 /** 前缀缓存键：同一段 system 前缀稳定命中，实测同一请求的计费差约 17 倍。 */
 export function cacheKeyFor(messages, model) {
   const system = messages.find(message => message.role === 'system')
@@ -230,13 +259,7 @@ export async function chat(product, openAiBody, { model, meta, signal, log = () 
     if (response.ok) return { ok: true, response }
     let detail = ''
     try {
-      const raw = await response.text()
-      try {
-        const payload = JSON.parse(raw)
-        detail = payload?.msg ?? payload?.message ?? payload?.error?.message ?? raw.slice(0, 300)
-      } catch {
-        detail = raw.slice(0, 300)
-      }
+      detail = failureDetail(await response.text())
     } catch { /* 读不到正文就只用状态码 */ }
     if ((response.status === 401 || response.status === 403) && attempt === 0) {
       log(`${product.label}：令牌被拒（HTTP ${response.status}），正在续期后重试`)
