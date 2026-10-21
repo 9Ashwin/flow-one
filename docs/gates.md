@@ -45,6 +45,25 @@ doctor 会先发一次完整形状确认能过，再**逐项去掉一个要件**
 **复验**：`fo doctor` 会把这三条字面量拼进一次最小请求真发出去。额度/频率受限会单独
 报出来（那不是门禁问题）。
 
+### 变体：渠道校验（2026-10-21 起，与内容无关）
+
+同是 `400` + `code 11128`，但判据**不是**上表那三条字面量 —— 任何请求都拦：
+
+| 事实 | 证据 |
+| --- | --- |
+| `intl/deepseek-v4.1-flash`、`intl/hy3`、`intl/step-5-preview` 对**平凡 system**（`You are a helpful assistant.`）也回 11128 | 2026-10-21 实测 |
+| 换 `displayTips` 的措辞：「这次调用没通过渠道校验，可能不是官方客户端发出的」（旧文案是 `Illegal API invocation from an unapproved channel`） | 同上 |
+| 去掉 `prompt_cache_key` / `thinking` / `max_tokens`、补 `tools`、换 `User-Agent`（含国内线形态与 6.0.0）、换 `X-Product-Code` / `X-IDE-*`、给 `session_id`：**全部照拦** | 同上，逐项单变量 |
+| 同账号其余 25 个 `intl/…` 模型不是 11128，而是 `429` + `code 14018 Credits exhausted` | 同上（整表 28 个模型逐个打过） |
+| `cn/…` 同模型同请求：`200` 正常出词 | 同上 |
+
+结论：这一轮是上游加的正向**渠道校验**，客户端侧没有已知的报文形状能过；`11128` 的
+两种含义（内容风控 / 渠道校验）必须靠 `displayTips` 与「换平凡 prompt 还拦不拦」区分。
+额度是另一回事（`14018`），别混。
+
+**复验**：`fo doctor` 的「腾讯内容风控」一节现在会把上游码与 `displayTips` 一起报出来
+（`verdict=fail` + `blocked=true`），不再把渠道校验误判成 `inconclusive`。
+
 **加新规则的流程**：
 
 1. 抓下**真实请求体** —— 用一个本地假上游接住 Claude Code 的请求最省事；
