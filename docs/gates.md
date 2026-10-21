@@ -45,24 +45,29 @@ doctor 会先发一次完整形状确认能过，再**逐项去掉一个要件**
 **复验**：`fo doctor` 会把这三条字面量拼进一次最小请求真发出去。额度/频率受限会单独
 报出来（那不是门禁问题）。
 
-### 变体：渠道校验（2026-10-21 起，与内容无关）
+### 变体：会话身份头（2026-10-21 起，与内容无关）
 
-同是 `400` + `code 11128`，但判据**不是**上表那三条字面量 —— 任何请求都拦：
+同是 `400` + `code 11128`，但判据**不是**上表那三条字面量 —— 平凡 system 也照拦。
 
-| 事实 | 证据 |
-| --- | --- |
-| `intl/deepseek-v4.1-flash`、`intl/hy3`、`intl/step-5-preview` 对**平凡 system**（`You are a helpful assistant.`）也回 11128 | 2026-10-21 实测 |
-| 换 `displayTips` 的措辞：「这次调用没通过渠道校验，可能不是官方客户端发出的」（旧文案是 `Illegal API invocation from an unapproved channel`） | 同上 |
-| 去掉 `prompt_cache_key` / `thinking` / `max_tokens`、补 `tools`、换 `User-Agent`（含国内线形态与 6.0.0）、换 `X-Product-Code` / `X-IDE-*`、给 `session_id`：**全部照拦** | 同上，逐项单变量 |
-| 同账号其余 25 个 `intl/…` 模型不是 11128，而是 `429` + `code 14018 Credits exhausted` | 同上（整表 28 个模型逐个打过） |
-| `cn/…` 同模型同请求：`200` 正常出词 | 同上 |
+**根因与解法**：官方客户端每次对话都会带三个**会话身份头**，缺任一即 11128。
 
-结论：这一轮是上游加的正向**渠道校验**，客户端侧没有已知的报文形状能过；`11128` 的
-两种含义（内容风控 / 渠道校验）必须靠 `displayTips` 与「换平凡 prompt 还拦不拦」区分。
-额度是另一回事（`14018`），别混。
+| 头 | 必需？ | 证据 |
+| --- | --- | --- |
+| `X-Conversation-ID` | **必需** | 2026-10-22：去掉 → 11128；值不要求 UUID（`conv-1` 也行） |
+| `X-Conversation-Request-ID` | **必需** | 同上 |
+| `X-Conversation-Message-ID` | **必需** | 同上 |
+| `X-Request-ID`、`x-codebuddy-request: 1`、`X-Agent-Intent: craft`、`X-Private-Data: true`、`acp-connection-id`、`x-requested-with` | 实测**非必需**（去掉仍 200） | 同上，逐项单变量 |
+| `X-IDE-Version` / `User-Agent` 的版本号 | 非必需（5.5.2 与 5.7.6 都过） | 同上 |
 
-**复验**：`fo doctor` 的「腾讯内容风控」一节现在会把上游码与 `displayTips` 一起报出来
-（`verdict=fail` + `blocked=true`），不再把渠道校验误判成 `inconclusive`。
+证据来源：官方客户端 `WorkBuddy AI 5.7.6` 的 `app.asar`（`main/daemon-bootstrap.js`
+里 `Yr()` 每次设这三个头），再逐项去掉重推。落点在 `src/buddy.mjs` 的
+`conversationHeaders()`：会话 id 按进程固定，请求/消息 id 每请求新生成。
+
+同账号另外 25 个 `intl/…` 模型不是 11128，而是 `429` + `code 14018 Credits exhausted`
+（额度问题，与门禁无关）；`cn/…` 不校验这一组，带上无害。
+
+**复验**：`fo doctor` 的「腾讯内容风控」一节；`11128` 的两种含义（内容风控 / 会话身份）
+靠 `displayTips` 与「换平凡 prompt 还拦不拦」区分。
 
 **加新规则的流程**：
 

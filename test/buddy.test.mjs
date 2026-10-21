@@ -73,3 +73,42 @@ test('chat 失败时把上游码与中文提示一起带出来（客户端只看
   // 这条断言就是这次真机误诊的回归点：doctor 曾经把它判成「与门禁无关」
   assert.equal(classifyTencentFailure(result.message).blocked, true)
 })
+
+test('国际版会话身份头：缺了就被渠道校验拦（2026-10-21 起的 11128）', async t => {
+  const seen = []
+  // 复刻上游的真实行为：缺任一「会话身份头」→ 400 + 11128；三个都在 → 正常出流
+  const server = http.createServer(async (req, res) => {
+    seen.push(req.headers)
+    const complete = req.headers['x-conversation-id'] !== undefined
+      && req.headers['x-conversation-request-id'] !== undefined
+      && req.headers['x-conversation-message-id'] !== undefined
+    if (!complete) {
+      res.writeHead(400, { 'content-type': 'application/json' })
+      res.end(BLOCKED_BODY)
+      return
+    }
+    res.writeHead(200, { 'content-type': 'text/event-stream' })
+    res.end('data: {"choices":[{"delta":{"content":"ok"}}]}\n\ndata: [DONE]\n\n')
+  })
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
+  t.after(() => server.close())
+  const endpoint = `http://127.0.0.1:${server.address().port}`
+
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'fo-buddy-'))
+  const file = path.join(dir, 'credentials.json')
+  fs.writeFileSync(file, JSON.stringify({ intl: { accessToken: 'at-test', expiresAt: Date.now() + 86_400_000 } }))
+  const product = { ...CN, id: 'intl', endpoint, apiDomain: '127.0.0.1', label: '替身产品' }
+  const body = { messages: [{ role: 'user', content: 'ping' }] }
+
+  const first = await chat(product, body, { model: 'deepseek-v4.1-flash', file })
+  assert.equal(first.ok, true, '三个会话头都在就该过')
+  await first.response.text()
+  const second = await chat(product, body, { model: 'deepseek-v4.1-flash', file })
+  assert.equal(second.ok, true)
+  await second.response.text()
+
+  // 会话 id 按进程固定，请求/消息 id 每轮新生成（与官方客户端同形）
+  assert.equal(seen[0]['x-conversation-id'], seen[1]['x-conversation-id'])
+  assert.notEqual(seen[0]['x-conversation-request-id'], seen[1]['x-conversation-request-id'])
+  assert.notEqual(seen[0]['x-conversation-message-id'], seen[1]['x-conversation-message-id'])
+})

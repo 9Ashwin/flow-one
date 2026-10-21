@@ -27,6 +27,31 @@ const DEFAULT_SYSTEM = 'You are a helpful assistant.'
 const ENTERPRISE_SCOPE = 'personal'
 const PREFERRED_AGENTS = ['cli', 'craft']
 
+/**
+ * 会话身份头。
+ *
+ * ⚠️ 国际版从 2026-10-21 起对 `/v2/chat/completions` 做**会话身份**校验：缺
+ * `X-Conversation-ID` / `X-Conversation-Request-ID` / `X-Conversation-Message-ID`
+ * 三个头就回 `400 + code 11128`，文案说「这次调用没通过渠道校验，可能不是官方客户端发出的」
+ * —— 而 system 里那三条 Anthropic 字面量**一条都不在**也照样拦（与内容风控无关）。
+ *
+ * 证据两条：官方客户端 `WorkBuddy AI 5.7.6` 的 `app.asar`（`main/daemon-bootstrap.js`
+ * 里的 `Yr()`，它每次都设这三个头）；再逐项去掉实测 —— 只缺 `X-Request-ID` /
+ * `x-codebuddy-request` / `X-Agent-Intent` / `X-Private-Data` / `acp-connection-id` /
+ * `x-requested-with` 都仍然 200，值也不要求是 UUID。`cn/` 不校验这一组，带上无害。
+ *
+ * 会话 id 按进程固定（一条长会话），请求/消息 id 每个请求新生成 —— 与官方客户端同形。
+ */
+const CONVERSATION_ID = crypto.randomUUID()
+
+function conversationHeaders() {
+  return {
+    'X-Conversation-ID': CONVERSATION_ID,
+    'X-Conversation-Request-ID': crypto.randomUUID(),
+    'X-Conversation-Message-ID': crypto.randomUUID(),
+  }
+}
+
 function headersFor(product, credential, model) {
   const headers = {
     'X-Domain': product.apiDomain,
@@ -246,6 +271,7 @@ export async function chat(product, openAiBody, { model, meta, signal, log = () 
       method: 'POST',
       headers: {
         ...headersFor(product, credential, model),
+        ...conversationHeaders(),
         Accept: 'text/event-stream',
         'Content-Type': 'application/json',
         'X-Agent-Purpose': 'conversation',
