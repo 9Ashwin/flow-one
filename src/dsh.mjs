@@ -81,6 +81,41 @@ export function newlineOf(text) {
   return String(text).includes('\r\n') ? '\r\n' : '\n'
 }
 
+/**
+ * 模型能处理的输入类型。
+ *
+ * DSH 的文档说得很清楚：`input` 不声明就继承适配器默认，而「声明上游真能处理的类型」是
+ * 配置者的责任。上游模型目录里带 `supportsImages`，据此写出 `[text, image]` 或纯文本；
+ * 不认识的模型按纯文本处理 —— 宁可保守，也别把图片丢给不支持的模型（2026-10-22 用户
+ * 发现 DSH 里图片用不了，就是这里漏了）。
+ */
+export function inputTypesOf(model) {
+  if (Array.isArray(model?.input)) {
+    const declared = model.input.filter(kind => typeof kind === 'string' && kind !== '')
+    if (declared.length > 0) return declared
+  }
+  return model?.supportsImages === true ? ['text', 'image'] : ['text']
+}
+
+const EFFORT_ORDER = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']
+
+/**
+ * 模型支持的推理档位（升序）。
+ *
+ * 上游模型目录里带 `efforts`（只声明了档位的模型才有，31/181）。没声明的模型不写
+ * `reasoningEfforts` —— DSH 那边就该「没有档位可选」，而不是硬塞一个假选项。
+ */
+export function effortLevelsOf(model) {
+  const efforts = Array.isArray(model?.efforts)
+    ? model.efforts.filter(effort => typeof effort === 'string' && effort !== '' && effort !== 'off')
+    : []
+  const rank = effort => {
+    const at = EFFORT_ORDER.indexOf(effort)
+    return at === -1 ? EFFORT_ORDER.length : at
+  }
+  return [...new Set(efforts)].sort((a, b) => rank(a) - rank(b))
+}
+
 /** 生成托管段（含标记）；`indent` 是 sibling provider 的缩进。 */
 export function dshProviderBlock({ port, sources, indent = 6 }) {
   const pad = offset => ' '.repeat(indent + offset)
@@ -97,6 +132,15 @@ export function dshProviderBlock({ port, sources, indent = 6 }) {
       lines.push(`${pad(6)}name: "${String(model.name ?? model.id).replace(/"/g, "'")}"`)
       if (Number.isFinite(model.contextWindow)) lines.push(`${pad(6)}contextWindow: ${model.contextWindow}`)
       if (Number.isFinite(model.maxOutputTokens)) lines.push(`${pad(6)}maxTokens: ${model.maxOutputTokens}`)
+      lines.push(`${pad(6)}input:`)
+      for (const kind of inputTypesOf(model)) lines.push(`${pad(8)}- ${kind}`)
+      const efforts = effortLevelsOf(model)
+      if (efforts.length > 0) {
+        // 形状照 DSH 自己写出来的那份：off 在最前、值为 null，其余档位的 API 值同名。
+        lines.push(`${pad(6)}reasoningEfforts:`)
+        lines.push(`${pad(8)}off: null`)
+        for (const effort of efforts) lines.push(`${pad(8)}${effort}: ${effort}`)
+      }
     }
   }
   lines.push(pad(0) + BLOCK_END)

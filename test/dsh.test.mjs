@@ -5,8 +5,8 @@ import os from 'node:os'
 import path from 'node:path'
 
 import {
-  BLOCK_BEGIN, applyDshConfig, applyDshProviders, newlineOf, removeDshConfig, removeDshProviders,
-  setDshCredential, removeDshCredential, dshCredentialFile, dshProfileFile,
+  BLOCK_BEGIN, applyDshConfig, applyDshProviders, dshCredentialFile, dshProfileFile, effortLevelsOf,
+  inputTypesOf, newlineOf, removeDshConfig, removeDshProviders, removeDshCredential, setDshCredential,
 } from '../src/dsh.mjs'
 
 const LF = [
@@ -163,4 +163,62 @@ test('applyDshConfig：provider + 凭据一步到位；没有 cn/intl 模型就�
 
   // 只挂了 oc/ocg 时没东西可写
   assert.equal(applyDshConfig({ port: 8788, apiKey: 'k', rows: [{ id: 'ocg/x' }], env, home }).ok, false)
+})
+
+/** 取某个模型条目在 YAML 文本里占的行（到下一个 `- id:` 为止）。 */
+function modelLines (text, id) {
+  const lines = text.split('\n')
+  const start = lines.findIndex(line => line.trim() === `- id: ${id}`)
+  assert.ok(start >= 0, `没有找到模型 ${id}`)
+  const out = []
+  for (let index = start + 1; index < lines.length; index++) {
+    if (/^\s*- id:/.test(lines[index])) break
+    out.push(lines[index].trim())
+  }
+  return out
+}
+
+test('DSH provider：模型条目照 DSH 自己的形状补齐 input 与 reasoningEfforts', () => {
+  const { file } = scratch()
+  applyDshProviders({
+    file,
+    port: 8788,
+    sources: [{
+      id: 'cn',
+      models: [
+        { id: 'cn/vision', name: 'Vision', contextWindow: 1000, maxOutputTokens: 100, supportsImages: true, efforts: ['max', 'low', 'high'] },
+        { id: 'cn/text-only', name: 'Text', contextWindow: 1000, maxOutputTokens: 100, supportsImages: false },
+        { id: 'cn/unknown', name: 'Unknown' },
+      ],
+    }],
+  })
+  const text = fs.readFileSync(file, 'utf8')
+
+  // 视觉模型：text + image；档位升序，off 在最前且值为 null（和 DSH UI 写出来的一致）
+  const vision = modelLines(text, 'cn/vision')
+  assert.deepEqual(vision.filter(line => line.startsWith('- ')), ['- text', '- image'])
+  assert.deepEqual(
+    vision.filter(line => /^(off|minimal|low|medium|high|xhigh|max):/.test(line)),
+    ['off: null', 'low: low', 'high: high', 'max: max'],
+  )
+
+  // 纯文本模型：显式只声明 text（同时也覆盖视觉模型的默认继承）
+  assert.deepEqual(modelLines(text, 'cn/text-only').filter(line => line.startsWith('- ')), ['- text'])
+  assert.deepEqual(modelLines(text, 'cn/text-only').filter(line => line.startsWith('off:')), [])
+
+  // 上游没给能力元数据：按纯文本 + 不给档位（不编造选项）
+  const unknown = modelLines(text, 'cn/unknown')
+  assert.deepEqual(unknown.filter(line => line.startsWith('- ')), ['- text'])
+  assert.deepEqual(unknown.filter(line => line.includes('reasoningEfforts')), [])
+})
+
+test('DSH provider：sample 的元数据解析（input / efforts）按保守规则', () => {
+  // 显式 input 优先于 supportsImages
+  assert.deepEqual(inputTypesOf({ supportsImages: true, input: ['text'] }), ['text'])
+  assert.deepEqual(inputTypesOf({ supportsImages: true }), ['text', 'image'])
+  assert.deepEqual(inputTypesOf({ supportsImages: false }), ['text'])
+  assert.deepEqual(inputTypesOf({}), ['text'])
+  // 档位去重、按升级顺序排，off 不混进档位列表
+  assert.deepEqual(effortLevelsOf({ efforts: ['max', 'off', 'low', 'high', 'low'] }), ['low', 'high', 'max'])
+  assert.deepEqual(effortLevelsOf({}), [])
 })
