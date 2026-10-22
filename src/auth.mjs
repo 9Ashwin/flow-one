@@ -181,13 +181,25 @@ function jwtEpoch(token, claim) {
 
 // ── 登录 ────────────────────────────────────────────────────────────────────
 
+/**
+ * 打开浏览器的命令行。
+ *
+ * Windows 上**不能**走 `cmd /c start`：登录链接带多个 `&`（`platform=…&state=…&version=…`），
+ * cmd 会把 `&` 当成命令分隔符，浏览器只拿到第一个参数之前的那半截，用户看到的是
+ * 一个缺 `state` 的页面（2026-10-22 真机）。`rundll32 url.dll,FileProtocolHandler`
+ * 由系统直接按参数接收 URL，不经过 shell 解析。
+ */
+export function browserCommand(url) {
+  if (process.platform === 'darwin') return { command: 'open', args: [url] }
+  if (process.platform === 'win32') return { command: 'rundll32', args: ['url.dll,FileProtocolHandler', url] }
+  return { command: 'xdg-open', args: [url] }
+}
+
 /** 没有 `open` 命令的机器（SSH、容器）只打印链接，不当作失败。 */
 export function openInBrowser(url, log = () => {}) {
-  const command = process.platform === 'darwin' ? ['open', [url]]
-    : process.platform === 'win32' ? ['cmd', ['/c', 'start', '', url]]
-      : ['xdg-open', [url]]
+  const { command, args } = browserCommand(url)
   try {
-    const child = spawn(command[0], command[1], { detached: true, stdio: 'ignore' })
+    const child = spawn(command, args, { detached: true, stdio: 'ignore' })
     child.on('error', () => log(`无法自动打开浏览器，请手动访问：${url}`))
     child.unref()
   } catch {

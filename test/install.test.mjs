@@ -4,6 +4,8 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 
+import { assertMode } from './platform.mjs'
+
 /** 每个用例一个隔离的 BRIDGE_HOME：安装状态与凭据都写到那里，绝不碰真实的家目录。 */
 function scratch() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'fo-install-'))
@@ -36,7 +38,7 @@ test('写 Claude Code 配置：合并而不是覆盖，写前先备份', async (
   assert.equal(written.model, 'cn/deepseek-v4.1-flash[1m]', 'model 字段与 env 必须同一个值：两个字段说法不一致会静默跑成另一个模型')
   // 不写 modelOverrides：那要靠把自己伪装成 Claude 的模型 ID 才能消诊断，代价太大
   assert.equal(written.modelOverrides, undefined)
-  assert.equal(fs.statSync(path.join(home, 'install.json')).mode & 0o777, 0o600)
+  assertMode(path.join(home, 'install.json'), 0o600)
 })
 
 test('还原：只删自己写的且没被改过的键', async () => {
@@ -267,7 +269,7 @@ test('后台服务：没问过就问一次（默认「要」），并把答案�
   const ledger = JSON.parse(fs.readFileSync(file, 'utf8'))
   assert.equal(ledger.autoStart, true)
   assert.equal(ledger.autoStartAsked, true, '「问过」要单独记，否则「选了不装」和「没问过」分不开')
-  assert.equal(fs.statSync(file).mode & 0o777, 0o600, '账本与凭据同目录，权限不能松')
+  assertMode(file, 0o600, '账本与凭据同目录，权限不能松')
 })
 
 test('后台服务：上次选了不装就不再问，只提示怎么开启', async () => {
@@ -312,8 +314,9 @@ test('卸载：把「要不要自启」的答案一起忘掉，下次配置重�
   // 服务文件的位置由 HOME 推出：给一个临时 HOME 就能走到「本来就没装过服务」那条路，
   // 既不碰真实家目录，也不会真去调 launchctl / systemctl。
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'fo-install-home-'))
-  const previous = { HOME: process.env.HOME, XDG_CONFIG_HOME: process.env.XDG_CONFIG_HOME }
+  const previous = { HOME: process.env.HOME, USERPROFILE: process.env.USERPROFILE, XDG_CONFIG_HOME: process.env.XDG_CONFIG_HOME }
   process.env.HOME = dir
+  process.env.USERPROFILE = dir
   process.env.XDG_CONFIG_HOME = path.join(dir, 'config')
   try {
     const { recordServiceChoice, serviceChoice, uninstallService } = await import('../src/install.mjs')
@@ -334,6 +337,8 @@ test('卸载：把「要不要自启」的答案一起忘掉，下次配置重�
   } finally {
     if (previous.HOME === undefined) delete process.env.HOME
     else process.env.HOME = previous.HOME
+    if (previous.USERPROFILE === undefined) delete process.env.USERPROFILE
+    else process.env.USERPROFILE = previous.USERPROFILE
     if (previous.XDG_CONFIG_HOME === undefined) delete process.env.XDG_CONFIG_HOME
     else process.env.XDG_CONFIG_HOME = previous.XDG_CONFIG_HOME
   }
