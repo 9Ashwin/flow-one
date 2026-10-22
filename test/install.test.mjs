@@ -529,3 +529,23 @@ test('配置指向本桥时 opt-out 不许把旧密钥/旧模型留着（2026-10
   assert.equal(await decideClientConfig({ ours: false, ask }), false)
   assert.equal(asked, 0)
 })
+
+test('桥的口令必须稳定：复用已有的，第一次装落固定默认值（不再每次 setup 换钥匙）', async () => {
+  scratch()
+  const { bridgeApiKey } = await import('../src/wizard.mjs')
+  const { recordBridge } = await import('../src/install.mjs')
+  const { DEFAULT_LOCAL_API_KEY } = await import('../src/config.mjs')
+
+  // 没装过：固定默认值，两次调用必须一样（随机会让客户端配置与 DSH 的凭据引用当场失效）
+  assert.equal(DEFAULT_LOCAL_API_KEY, 'flow-one-local')
+  assert.equal(bridgeApiKey({ record: {}, settings: {} }), DEFAULT_LOCAL_API_KEY)
+  assert.equal(bridgeApiKey({ record: {}, settings: {} }), DEFAULT_LOCAL_API_KEY)
+
+  // 已有：复用，不重新生成
+  recordBridge({ port: 8788, apiKey: 'existing-key', model: 'cn/x' })
+  assert.equal(bridgeApiKey(), 'existing-key')
+  // 账本里没有、但旧版写在 settings.json 里的：也复用（升级不能把人家配置弄失效）
+  assert.equal(bridgeApiKey({ record: {}, settings: { env: { ANTHROPIC_AUTH_TOKEN: 'from-settings' } } }), 'from-settings')
+  // 空串当没有：回落到默认
+  assert.equal(bridgeApiKey({ record: { apiKey: '' }, settings: {} }), DEFAULT_LOCAL_API_KEY)
+})

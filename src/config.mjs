@@ -38,6 +38,18 @@ export const DEFAULTS = {
   quiet: false,
 }
 
+/**
+ * 本桥的默认口令。
+ *
+ * 本地回环（127.0.0.1）其实可以不要口令，但 Claude Code / DSH 的配置里都要填一个 token。
+ * 所以给它一个**固定**的默认值，而不是每次 setup 现生成一把随机的：
+ * 随机换钥匙会让已经填好的客户端配置（以及 DSH 凭据 seam 里的引用）当场失效 ——
+ * 2026-10-22 真机就是这么坏的：DSH 里存着上一把 key，setup 一跑就「密钥无效」。
+ *
+ * 想换：`--api-key <x>` / `BRIDGE_API_KEY`；想彻底不要门禁：设成空（只监听回环）。
+ */
+export const DEFAULT_LOCAL_API_KEY = 'flow-one-local'
+
 /** 网关模式下的默认模型：DSH 渠道网关里 WorkBuddy 国际版的常用模型。 */
 const GATEWAY_DEFAULT_MODEL = 'workbuddy/deepseek-v4.1-flash'
 
@@ -82,7 +94,8 @@ export const USAGE = `flow-one —— 让 Claude Code CLI 用上 WorkBuddy（国
   --port <端口>            监听端口（默认 ${DEFAULTS.port}）
   --model <ID>             默认模型 ID；直连模式不给则由上游清单决定
   --map <A=B,C=D>          Claude 模型名 → 上游模型 ID 的显式映射
-  --api-key <KEY>          本桥自己的门禁密钥（默认不校验，仅监听回环）
+  --api-key <KEY>          本桥自己的门禁密钥（不传则不校验，仅监听回环）
+                           setup 首次落固定默认值 flow-one-local，之后一直复用（不换钥匙）
   --json                   错误以一行 JSON 信封输出到 stderr（脚本用）
   --service / --no-service 后台常驻：显式表态（覆盖上次记住的选择）
   --client / --no-client   要不要帮你也写 Claude Code 的配置：显式表态

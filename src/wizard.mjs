@@ -24,7 +24,7 @@ import { credentialChecks, localIssues, localSnapshot, probeOpencodeGate, probeO
 import { HEALTH_SERVICE_NAMES } from './install.mjs'
 import { login, credentialStatus } from './auth.mjs'
 import { createDirectUpstream, createGatewayUpstream } from './upstreams.mjs'
-import { credentialFile } from './config.mjs'
+import { credentialFile, DEFAULT_LOCAL_API_KEY } from './config.mjs'
 import { installClaudeSettings, installService, uninstallClaudeSettings, uninstallService, serviceState, serviceChoice, recordServiceChoice, claudeSettingsPath, readInstallState, serviceCliPath, currentCliPath, LEGACY_SERVICE_LABEL, clientChoice, recordClientChoice, bridgeRecord, recordBridge, sizedModelId, clientConfigIsOurs } from './install.mjs'
 import { HOME_DIR, LEGACY_HOME_DIR, legacyHomeInUse } from './home.mjs'
 import {
@@ -342,6 +342,18 @@ export function applyClientConfig({ wantsClient, file, baseUrl, apiKey, model, c
 }
 
 /**
+ * 桥的门禁口令：**复用已有的，第一次装就落固定默认值**。
+ *
+ * 之前每次 setup 都 `crypto.randomBytes` 一把新的，结果：Claude Code 的配置要跟着重写，
+ * DSH 凭据 seam 里引用的那把 key 直接过期（真机表现：DSH 报「密钥无效」，而桥其实活着）。
+ * 客户端配置会长期引用它，所以它必须是**稳定的**。
+ */
+export function bridgeApiKey({ record = bridgeRecord(), settings = currentSettings(), fallback = DEFAULT_LOCAL_API_KEY } = {}) {
+  const existing = record?.apiKey ?? settings?.env?.ANTHROPIC_AUTH_TOKEN
+  return typeof existing === 'string' && existing.trim() !== '' ? existing : fallback
+}
+
+/**
  * 「自己配」要的那三项：地址 / 令牌 / 模型 ID。
  *
  * 只返回文本、**不写任何文件** —— 这就是「不帮你改配置」那条路的意义。
@@ -474,7 +486,8 @@ export async function setupWizard(options = {}) {
   section('第 4 步 · 写入并常驻')
   // 端口不给选项：优先复用已在跑的本工具实例，否则取第一个空闲端口。
   const port = await choosePort()
-  const apiKey = crypto.randomBytes(24).toString('base64url')
+  // 口令必须稳定：客户端配置会长期引用它（随机换会让 Claude Code 401、DSH 报「密钥无效」）
+  const apiKey = bridgeApiKey()
   const wantsClient = await decideClientConfig({
     client: options.client,
     ours: clientConfigIsOurs({ port }),
@@ -566,7 +579,7 @@ export async function switchModel() {
   // 接入参数优先读账本的 bridge 段：选了「不写客户端配置」的人，settings.json 里没有我们的键
   const record = bridgeRecord()
   const port = record.port ?? Number(new URL(settings.env?.ANTHROPIC_BASE_URL ?? `http://127.0.0.1:${DEFAULT_PORT}`).port)
-  const apiKey = record.apiKey ?? settings.env?.ANTHROPIC_AUTH_TOKEN ?? crypto.randomBytes(24).toString('base64url')
+  const apiKey = bridgeApiKey({ record, settings })
   const env = installed.service?.env ?? {}
   const upstream = env.BRIDGE_MODE === 'gateway'
     ? createGatewayUpstream({ upstream: env.UPSTREAM_BASE_URL ?? 'http://127.0.0.1:8326', upstreamKey: env.UPSTREAM_API_KEY ?? '' })

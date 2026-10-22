@@ -195,7 +195,7 @@ node cli.mjs --mode gateway --upstream http://127.0.0.1:8326 \
 | `--port` | `BRIDGE_PORT` | `8788` | 监听端口 |
 | `--model` | `BRIDGE_MODEL` | 直连为空 / 网关为 `workbuddy/deepseek-v4.1-flash` | 兜底模型 ID |
 | `--map` | `BRIDGE_MODEL_MAP` | 空 | `A=B,C=D` 形式的模型映射 |
-| `--api-key` | `BRIDGE_API_KEY` | 空（不校验） | 本桥自己的门禁密钥 |
+| `--api-key` | `BRIDGE_API_KEY` | 空（不校验） | 本桥自己的门禁密钥；`setup` 首次写固定默认值 `flow-one-local`，之后**一直复用**（客户端会长期引用它，随机换会让 Claude Code 401、DSH 报「密钥无效」） |
 | `--max-tokens` | `BRIDGE_MAX_TOKENS_CAP` | 0（不限） | 下发前的单次输出上限 |
 | `--heartbeat` | `BRIDGE_HEARTBEAT_MS` | 15000 | 思考期静默时发 ping 帧的间隔，0 关闭 |
 | `--thinking` | `BRIDGE_SHOW_THINKING` | 关 | 把上游思考增量渲染成 `thinking` 块 |
