@@ -380,34 +380,35 @@ export async function password({ message, validate }) {
 
 /** 是/否确认；直接回车采用 `initial`。 */
 export async function confirm({ message, initial = true }) {
-  const hint = initial ? 'Y/n' : 'y/N'
-  process.stdout.write(`${cyan('?')} ${message} ${dim(`(${hint})`)} `)
-  return await new Promise(resolve => {
-    const stdin = stdinOf()
-    readline.emitKeypressEvents(stdin)
-    const wasRaw = stdin.isRaw
-    stdin.setRawMode?.(true)
-    stdin.resume()
-    const done = value => {
-      stdin.removeListener('keypress', listener)
-      if (!wasRaw) stdin.setRawMode?.(false)
-      stdin.pause()
-      process.stdout.write(`${value ? 'y' : 'n'}\n`)
-      resolve(value)
-    }
-    const listener = (str, key) => {
-      if (key?.ctrl && key.name === 'c') {
-        stdin.removeListener('keypress', listener)
-        if (!wasRaw) stdin.setRawMode?.(false)
-        process.stdout.write(`\n${yellow('已取消')}\n`)
-        process.exit(130)
-      }
-      if (key?.name === 'return' || key?.name === 'enter' || key?.name === 'escape') return done(initial)
-      if (/^[yY]$/.test(str)) return done(true)
-      if (/^[nN]$/.test(str)) return done(false)
-    }
-    stdin.on('keypress', listener)
+  // 方向键选，不用手打 y/n：一是少一次「想一下我在问什么」，二是和 select 的操作一致。
+  // （仍然接受 y / n 直选：肌肉记忆不该被破坏。）
+  let cursor = initial ? 0 : 1
+  const labels = ['是', '否']
+  const render = () => {
+    const choices = labels
+      .map((label, index) => (index === cursor ? cyan(`❯ ${label}`) : dim(`  ${label}`)))
+      .join('  ')
+    return [
+      `${cyan('?')} ${message}  ${choices}`,
+      `  ${dim('←/→ 选择，回车确认（也可以直接按 y / n）')}`,
+    ]
+  }
+  const value = await keyLoop({
+    cleanupLines: clearLines,
+    render,
+    onKey: (str, key, finish) => {
+      if (key?.name === 'left' || key?.name === 'up') { cursor = 0; return false }
+      if (key?.name === 'right' || key?.name === 'down') { cursor = 1; return false }
+      if (key?.name === 'tab') { cursor = cursor === 0 ? 1 : 0; return false }
+      if (/^[yY]$/.test(str ?? '')) { finish(true); return true }
+      if (/^[nN]$/.test(str ?? '')) { finish(false); return true }
+      if (key?.name === 'return' || key?.name === 'enter') { finish(cursor === 0); return true }
+      if (key?.name === 'escape') { finish(initial); return true }
+      return false
+    },
   })
+  note(`${green('✔')} ${message} ${bold(value ? '是' : '否')}`)
+  return value
 }
 
 /** 文本输入；`validate` 返回字符串表示不合法（作为提示重新问）。 */
