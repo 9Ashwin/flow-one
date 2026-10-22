@@ -99,7 +99,7 @@ export const USAGE = `flow-one —— 让 Claude Code CLI 用上 WorkBuddy（国
   --json                   错误以一行 JSON 信封输出到 stderr（脚本用）
   --service / --no-service 后台常驻：显式表态（覆盖上次记住的选择）
   --clients <列表>         要帮你配哪些客户端：claude,dsh / claude / dsh / none
-                           （默认问一次并记住；none = 只配反代，不动任何客户端文件）
+                           （默认分开问两次、记住答案；none = 只配反代，不动任何客户端文件）
                            旧写法 --client / --no-client 仍可用，等价 claude / none
   --version, -v            显示版本号
   --max-tokens <N>         下发前的 max_tokens 上限，0 表示不限制

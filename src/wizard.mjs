@@ -329,44 +329,50 @@ export async function decideService({ service, state = serviceState(), choice = 
 
 const CLIENT_LABELS = { claude: 'Claude Code', dsh: 'DSH' }
 
+/** 两个独立的是非问句（不问「要配哪些」——那是把两个开关塞进一个单选）。 */
+const CLIENT_QUESTIONS = {
+  claude: '帮你也写 Claude Code 的配置（~/.claude/settings.json）？',
+  dsh: '帮你也写 DSH 的配置（llm-pi-ai provider）？',
+}
+
 function labelOfClients(ids) {
   return ids.map(id => CLIENT_LABELS[id] ?? id).join(' / ')
 }
 
 /**
- * 「要帮你配哪些客户端」这一问。
+ * 「要不要帮你写客户端配置」这一问 —— Claude Code、DSH 各问一次（两个独立开关）。
  *
  * 本工具的本分是**提供反代**；改客户端的配置只是顺手帮忙 —— Windows 上动别人家配置还
  * 可能撞权限（2026-10-19 真机 EPERM）。
  *
  * ⚠️ 这一问**每次都问**（与「要不要开机自启」不同）：它问的是「这次要动谁的文件」，
  * 用户随时可能只想配反代、或只改 DSH。问过一次就再也不问，等于把口径锁死了、想改都没
- * 机会改（2026-10-22 用户反馈）。账本里记的答案只当**默认选项**用：一路回车就是上次的
- * 选择，两下方向键就能改。显式 `--clients` 才跳过提问。
+ * 机会改（2026-10-22 用户反馈）。账本里记的答案只当**默认值**用：一路回车就是上次的
+ * 选择。显式 `--clients` 才跳过提问。
  *
  * 「已经归我们管的配置」必须继续更新（换密钥、不写就是 401），所以 `ours` 会被无条件
  * 并进来 —— 一致性不是可选项。
  */
-export async function decideClientTargets({ clients, ours = [], choice = clientChoice(), ask = select } = {}) {
+export async function decideClientTargets({ clients, ours = [], choice = clientChoice(), ask = confirm } = {}) {
   if (Array.isArray(clients)) return clients.filter(id => CLIENT_TARGETS.includes(id))
   const keep = [...new Set(ours.filter(id => CLIENT_TARGETS.includes(id)))]
   if (keep.length > 0) {
-    note(dim(`  ${labelOfClients(keep)} 的配置本来就指向本桥：密钥与模型会一起更新`))
+    note(dim(`  ${labelOfClients(keep)} 的配置本来就指向本桥：会继续更新`))
   }
-  // 上次的选择只当默认项 —— 每次都问，是为了让用户能改口径
-  const remember = choice.asked ? choice.clients : []
-  const options = [
-    { label: 'Claude Code', hint: '写 ~/.claude/settings.json', value: ['claude'] },
-    { label: 'DSH（DeepSeek Harness）', hint: '写 llm-pi-ai provider + 凭据引用', value: ['dsh'] },
-    { label: '两个都写', hint: 'Claude Code 与 DSH', value: ['claude', 'dsh'] },
-    { label: '都不写', hint: '只配反代，用地址 / 令牌 / 模型 ID 自己填', value: [] },
-  ]
-  // 默认选项 = 上次的选择（并上已经归我们管的）
-  const preferred = [...new Set([...remember, ...keep])]
-  const current = options.findIndex(option => option.value.length === preferred.length && option.value.every(id => preferred.includes(id)))
-  const picked = await ask({ message: '要帮你配哪些客户端？（这次）', initial: Math.max(0, current), options })
+  const remembered = new Set(choice.asked ? choice.clients : [])
+  const picked = []
+  // 两个独立开关，一个问题一个 —— 不做「两个都写」那种组合选项：组合是 UI 的事，
+  // 答案本来就是两个布尔值（zcf 也是这么问的：要配什么就问什么，不搞多选）。
+  for (const id of CLIENT_TARGETS) {
+    const forced = keep.includes(id)
+    const wants = await ask({
+      message: CLIENT_QUESTIONS[id],
+      initial: forced || remembered.has(id),
+    })
+    if (wants || forced) picked.push(id)
+  }
   recordClientChoice(picked)
-  return [...new Set([...picked, ...keep])]
+  return picked
 }
 
 /**
