@@ -25,7 +25,7 @@ import { HEALTH_SERVICE_NAMES } from './install.mjs'
 import { login, credentialStatus } from './auth.mjs'
 import { createDirectUpstream, createGatewayUpstream } from './upstreams.mjs'
 import { credentialFile } from './config.mjs'
-import { installClaudeSettings, installService, uninstallClaudeSettings, uninstallService, serviceState, serviceChoice, recordServiceChoice, claudeSettingsPath, readInstallState, serviceCliPath, currentCliPath, LEGACY_SERVICE_LABEL, clientChoice, recordClientChoice, bridgeRecord, recordBridge, sizedModelId } from './install.mjs'
+import { installClaudeSettings, installService, uninstallClaudeSettings, uninstallService, serviceState, serviceChoice, recordServiceChoice, claudeSettingsPath, readInstallState, serviceCliPath, currentCliPath, LEGACY_SERVICE_LABEL, clientChoice, recordClientChoice, bridgeRecord, recordBridge, sizedModelId, clientConfigIsOurs } from './install.mjs'
 import { HOME_DIR, LEGACY_HOME_DIR, legacyHomeInUse } from './home.mjs'
 import {
   banner, blank, box, confirm, gray, green, heading, info, input, menu, note,
@@ -309,8 +309,15 @@ export async function decideService({ service, state = serviceState(), choice = 
  * Windows 上动别人家配置还可能撞权限（2026-10-19 真机 EPERM）。所以问一次，答案记在
  * 账本里；`--client` / `--no-client` 是「这一次」的显式表态，不落账本。
  */
-export async function decideClientConfig({ client, choice = clientChoice(), ask = confirm } = {}) {
+export async function decideClientConfig({ client, ours = false, choice = clientChoice(), ask = confirm } = {}) {
+  // `--no-client` / `--client` 永远最优先：显式说了不动，就连「本桥的配置」也不动
   if (client !== undefined) return client
+  // 配置本来就是我们写的（或指向本桥）：**必须**回写，否则换了模型/密钥之后客户端
+  // 会拿着旧令牌 401（2026-10-22 真机就踩了）。这不是「帮不帮忙」，是保持一致。
+  if (ours) {
+    note(dim('  Claude Code 配置本来就指向本桥：密钥与模型一起更新（不想动：fo setup --no-client）'))
+    return true
+  }
   if (choice.asked) {
     if (choice.writeClient) {
       note(dim('  按你上次的选择，继续帮你写 Claude Code 配置（想改：fo setup --no-client）'))
@@ -468,7 +475,10 @@ export async function setupWizard(options = {}) {
   // 端口不给选项：优先复用已在跑的本工具实例，否则取第一个空闲端口。
   const port = await choosePort()
   const apiKey = crypto.randomBytes(24).toString('base64url')
-  const wantsClient = await decideClientConfig({ client: options.client })
+  const wantsClient = await decideClientConfig({
+    client: options.client,
+    ours: clientConfigIsOurs({ port }),
+  })
   // 接入参数与「写不写客户端配置」无关：账本里总要有一份，`fo client` 与前台跑桥都靠它
   recordBridge({ port, apiKey, model, contextWindow: picked.contextWindow })
   const applied = applyClientConfig({
@@ -587,8 +597,9 @@ export async function switchModel() {
   const contextWindow = shown.find(row => row.id === chosen)?.contextWindow
 
   recordBridge({ port, apiKey, model, contextWindow })
-  // 没写过客户端配置的（选了 --no-client）：不改就是不改，别顺手给人建一个
-  if (installed.claudeSettings !== undefined) {
+  // 配置指向本桥就必须回写：换了密钥/模型却不写，客户端会拿着旧令牌 401。
+  // 只对「不属于本桥」的配置保持不动（那是用户自己的东西）。
+  if (clientConfigIsOurs({ port })) {
     installClaudeSettings({ file: claudeSettingsPath(), baseUrl: `http://127.0.0.1:${port}`, apiKey, model, contextWindow })
     success(`配置已更新：${sizedModelId(model, contextWindow)}`)
   } else {

@@ -172,6 +172,29 @@ function readJson(file) {
 }
 
 /**
+ * 这份客户端配置是不是「本桥的」：账本记过我们写过，或它本来就指向本桥的端口。
+ *
+ * 为什么需要这个判断：`setup` 每次都会**换一把新密钥**并换模型。如果配置指向本桥却
+ * 因为「用户上次选了不写」而不回写，客户端就会拿着旧密钥请求 → 401，模型也停在上一个
+ * （2026-10-22 真机：`cn/…` + 旧令牌留在 settings.json 里，桥已经是 `ocg/…` + 新令牌）。
+ * 那种「不写」不是尊重用户，是把一份本来能用的配置留成坏的。
+ *
+ * 所以 opt-out 只负责「别去接管不是我们的配置」；已经是我们的，密钥/模型必须跟着走。
+ * 真不想让本工具碰，用 `--no-client` 显式表态。
+ */
+export function clientConfigIsOurs({ port, file = claudeSettingsPath(), state = readInstallState() } = {}) {
+  if (state?.claudeSettings !== undefined) return true
+  let target
+  try {
+    target = new URL(readJson(file).env?.ANTHROPIC_BASE_URL)
+  } catch {
+    return false
+  }
+  const loopback = target.hostname === '127.0.0.1' || target.hostname === 'localhost' || target.hostname === '::1'
+  return loopback && Number(target.port) === Number(port)
+}
+
+/**
  * 账本与 `settings.json` 都走这里落盘。
  *
  * 「临时文件 + rename」的跨平台代价（Windows 上目标被占用就 EPERM）收在

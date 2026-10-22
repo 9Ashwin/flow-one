@@ -489,3 +489,43 @@ test('接入参数记在账本 bridge 段：不写客户端配置也能拿到令
   assert.deepEqual(bridgeRecord(), {})
   assert.deepEqual(clientChoice(), { asked: false, writeClient: false })
 })
+
+test('配置指向本桥时 opt-out 不许把旧密钥/旧模型留着（2026-10-22 真机 401 的回归）', async () => {
+  const home = scratch()
+  const { clientConfigIsOurs, installClaudeSettings, recordClientChoice } = await import('../src/install.mjs')
+  const { decideClientConfig } = await import('../src/wizard.mjs')
+  const file = path.join(home, 'claude', 'settings.json')
+  fs.mkdirSync(path.dirname(file), { recursive: true })
+  const write = value => fs.writeFileSync(file, JSON.stringify(value))
+
+  // 指向本桥 = 我们的配置
+  write({ env: { ANTHROPIC_BASE_URL: 'http://127.0.0.1:8788' } })
+  assert.equal(clientConfigIsOurs({ port: 8788, file }), true)
+  write({ env: { ANTHROPIC_BASE_URL: 'http://localhost:8788' } })
+  assert.equal(clientConfigIsOurs({ port: 8788, file }), true)
+  // 别人的配置不接管
+  write({ env: { ANTHROPIC_BASE_URL: 'https://api.anthropic.com' } })
+  assert.equal(clientConfigIsOurs({ port: 8788, file }), false)
+  write({ env: { ANTHROPIC_BASE_URL: 'http://127.0.0.1:8789' } })
+  assert.equal(clientConfigIsOurs({ port: 8788, file }), false, '端口不同就不是本桥')
+  write({})
+  assert.equal(clientConfigIsOurs({ port: 8788, file }), false)
+  fs.writeFileSync(file, '{坏 JSON')
+  assert.equal(clientConfigIsOurs({ port: 8788, file }), false, '读不懂就当作不是我们的')
+  // 账本记过我们写过 → 就算我们的（端口换了也认：那份配置是我们留下的）
+  installClaudeSettings({ file, baseUrl: 'http://127.0.0.1:9999', apiKey: 'k', model: 'cn/x' })
+  assert.equal(clientConfigIsOurs({ port: 8788, file }), true)
+
+  // 用户上次选了「不写」：配置是我们的时仍然回写，且不再问
+  recordClientChoice(false)
+  let asked = 0
+  const ask = async () => { asked += 1; return false }
+  assert.equal(await decideClientConfig({ ours: true, ask }), true, '换了密钥/模型不回写会让客户端 401')
+  assert.equal(asked, 0, '这种情况不该再问 —— 一致性不是可选项')
+  // 但显式 --no-client 永远优先
+  assert.equal(await decideClientConfig({ client: false, ours: true, ask }), false)
+  assert.equal(asked, 0)
+  // 不属于本桥时仍按记忆来：不写、也不问
+  assert.equal(await decideClientConfig({ ours: false, ask }), false)
+  assert.equal(asked, 0)
+})
