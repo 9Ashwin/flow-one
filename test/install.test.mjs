@@ -423,31 +423,35 @@ test('配反代是本分，写 Claude Code 配置是可选的：选了不写就�
   assert.equal(parsed.env.ANTHROPIC_MODEL, 'cn/x[1m]', '1M 窗口才加后缀')
 })
 
-test('「要不要写客户端配置」问一次记住；--client/--no-client 是这一次的表态，不落账本', async () => {
-  const home = scratch()
-  const { decideClientConfig } = await import('../src/wizard.mjs')
-  const { clientChoice, recordClientChoice } = await import('../src/install.mjs')
+test('「要帮哪些客户端」每次都问，默认项是上次的选择（选过的口径也要能改）', async () => {
+  scratch()
+  const { decideClientTargets } = await import('../src/wizard.mjs')
+  const { clientChoice } = await import('../src/install.mjs')
 
   let asked = 0
-  const ask = async () => { asked += 1; return false }
-  // 第一次问 → 记下「不写」
-  assert.equal(await decideClientConfig({ ask }), false)
+  let answer = ['dsh']
+  let lastPrompt
+  const ask = async prompt => { asked += 1; lastPrompt = prompt; return answer }
+  assert.deepEqual(await decideClientTargets({ ask }), ['dsh'])
   assert.equal(asked, 1)
-  assert.deepEqual(clientChoice(), { asked: true, writeClient: false })
-  // 第二次不再问
-  assert.equal(await decideClientConfig({ ask }), false)
-  assert.equal(asked, 1, '问过就别再问（AGENTS.md「别重复问同一件事」）')
-  // 显式 flag 最优先，而且不落账本
-  assert.equal(await decideClientConfig({ client: true, ask }), true)
-  assert.equal(asked, 1)
-  assert.deepEqual(clientChoice(), { asked: true, writeClient: false }, 'flag 是「这一次」的表态')
+  assert.deepEqual(clientChoice(), { asked: true, clients: ['dsh'] })
+  assert.equal(lastPrompt.options.length, 4, '四个选项：Claude Code / DSH / 两个都 / 都不写')
 
-  // 反过来：记住「写」就不再问，且返回 true
-  recordClientChoice(true)
-  assert.deepEqual(clientChoice(), { asked: true, writeClient: true })
-  assert.equal(await decideClientConfig({ ask }), true)
-  assert.equal(asked, 1)
-  assert.equal(fs.existsSync(path.join(home, 'install.json')), true, '选择要落在账本里')
+  // 第二次仍然问（这正是「选过也能改口径」），默认项停在上次的选择
+  answer = ['claude']
+  assert.deepEqual(await decideClientTargets({ ask }), ['claude'])
+  assert.equal(asked, 2, '每次都问')
+  assert.equal(lastPrompt.initial, 1, '默认项 = 上次的选择（DSH）')
+  assert.deepEqual(clientChoice(), { asked: true, clients: ['claude'] })
+
+  // 显式 --clients 跳过提问，且不落账本
+  assert.deepEqual(await decideClientTargets({ clients: [], ask }), [])
+  assert.equal(asked, 2)
+  assert.deepEqual(clientChoice(), { asked: true, clients: ['claude'] }, 'flag 是「这一次」的表态')
+
+  // 已经归我们管的客户端会被并进来（换密钥不回写会让客户端 401）
+  assert.deepEqual(await decideClientTargets({ ours: ['claude'], ask }), ['claude'])
+  assert.equal(asked, 3)
 })
 
 test('接入信息：只打印地址/令牌/模型 ID，1M 窗口才带 [1m] 后缀', async () => {
@@ -472,7 +476,7 @@ test('接入参数记在账本 bridge 段：不写客户端配置也能拿到令
   assert.equal(bridgeRecord().apiKey, 'k-1')
   assert.equal(bridgeRecord().model, 'cn/x')
 
-  recordClientChoice(false)
+  recordClientChoice([])
   // 卸载（服务那块走「本来就没装过」的路径）也要把这两问的答案忘掉
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'fo-install-home-'))
   const previousHome = process.env.HOME
@@ -485,9 +489,9 @@ test('接入参数记在账本 bridge 段：不写客户端配置也能拿到令
   }
   const ledger = JSON.parse(fs.readFileSync(path.join(home, 'install.json'), 'utf8'))
   assert.equal('bridge' in ledger, false, '卸载后账本不该留桥的令牌')
-  assert.equal('clientConfig' in ledger, false, '「写不写客户端配置」也该重新问')
+  assert.equal('clients' in ledger, false, '「帮哪些客户端」也该重新问')
   assert.deepEqual(bridgeRecord(), {})
-  assert.deepEqual(clientChoice(), { asked: false, writeClient: false })
+  assert.deepEqual(clientChoice(), { asked: false, clients: [] })
 })
 
 test('配置指向本桥时 opt-out 不许把旧密钥/旧模型留着（2026-10-22 真机 401 的回归）', async () => {
@@ -516,18 +520,19 @@ test('配置指向本桥时 opt-out 不许把旧密钥/旧模型留着（2026-10
   installClaudeSettings({ file, baseUrl: 'http://127.0.0.1:9999', apiKey: 'k', model: 'cn/x' })
   assert.equal(clientConfigIsOurs({ port: 8788, file }), true)
 
-  // 用户上次选了「不写」：配置是我们的时仍然回写，且不再问
-  recordClientChoice(false)
+  // 用户上次选了「都不写」：配置是我们的时仍然回写，且不再问
+  recordClientChoice([])
   let asked = 0
-  const ask = async () => { asked += 1; return false }
-  assert.equal(await decideClientConfig({ ours: true, ask }), true, '换了密钥/模型不回写会让客户端 401')
-  assert.equal(asked, 0, '这种情况不该再问 —— 一致性不是可选项')
-  // 但显式 --no-client 永远优先
-  assert.equal(await decideClientConfig({ client: false, ours: true, ask }), false)
-  assert.equal(asked, 0)
-  // 不属于本桥时仍按记忆来：不写、也不问
-  assert.equal(await decideClientConfig({ ours: false, ask }), false)
-  assert.equal(asked, 0)
+  const ask = async () => { asked += 1; return [] }
+  const { decideClientTargets } = await import('../src/wizard.mjs')
+  assert.deepEqual(await decideClientTargets({ ours: ['claude'], ask }), ['claude'], '换了密钥/模型不回写会让客户端 401')
+  assert.equal(asked, 1, '仍然会问（口径可改），但「已经归我们管」的被无条件并进来')
+  // 但显式 --clients none 永远优先，且不触发提问
+  assert.deepEqual(await decideClientTargets({ clients: [], ours: ['claude'], ask }), [])
+  assert.equal(asked, 1)
+  // 不属于本桥时按问出来的答案执行（这次问的是「都不写」）
+  assert.deepEqual(await decideClientTargets({ ours: [], ask }), [])
+  assert.equal(asked, 2)
 })
 
 test('桥的口令必须稳定：复用已有的，第一次装落固定默认值（不再每次 setup 换钥匙）', async () => {

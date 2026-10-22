@@ -192,7 +192,7 @@ async function main() {
   }
   const log = makeLogger(config.quiet)
   const out = makeDataWriter(config.quiet)
-  if (command === 'setup') return await setupWizard({ service: config.service, client: config.client })
+  if (command === 'setup') return await setupWizard({ service: config.service, clients: config.clients })
   if (command === 'uninstall') return await uninstallFlow()
   if (command === 'switch') return await switchModel()
   if (command === 'doctor') return await doctorFlow()

@@ -25,8 +25,9 @@ import { HEALTH_SERVICE_NAMES } from './install.mjs'
 import { login, credentialStatus } from './auth.mjs'
 import { createDirectUpstream, createGatewayUpstream } from './upstreams.mjs'
 import { credentialFile, DEFAULT_LOCAL_API_KEY } from './config.mjs'
-import { installClaudeSettings, installService, uninstallClaudeSettings, uninstallService, serviceState, serviceChoice, recordServiceChoice, claudeSettingsPath, readInstallState, serviceCliPath, currentCliPath, LEGACY_SERVICE_LABEL, clientChoice, recordClientChoice, bridgeRecord, recordBridge, sizedModelId, clientConfigIsOurs } from './install.mjs'
+import { installClaudeSettings, installService, uninstallClaudeSettings, uninstallService, serviceState, serviceChoice, recordServiceChoice, claudeSettingsPath, readInstallState, serviceCliPath, currentCliPath, LEGACY_SERVICE_LABEL, CLIENT_TARGETS, clientChoice, recordClientChoice, bridgeRecord, recordBridge, sizedModelId, clientConfigIsOurs } from './install.mjs'
 import { HOME_DIR, LEGACY_HOME_DIR, legacyHomeInUse } from './home.mjs'
+import { applyDshConfig, dshCurrentlyManaged, removeDshConfig } from './dsh.mjs'
 import {
   banner, blank, box, confirm, gray, green, heading, info, input, menu, note,
   section, select, password, spinner, style, success, warn, fail, dim, yellow,
@@ -302,33 +303,46 @@ export async function decideService({ service, state = serviceState(), choice = 
   return wants
 }
 
+const CLIENT_LABELS = { claude: 'Claude Code', dsh: 'DSH' }
+
+function labelOfClients(ids) {
+  return ids.map(id => CLIENT_LABELS[id] ?? id).join(' / ')
+}
+
 /**
- * 「要不要帮你也写 Claude Code 的配置」这一问。
+ * 「要帮你配哪些客户端」这一问。
  *
- * 本工具的本分是**提供反代**；改用户的 `~/.claude/settings.json` 只是顺手帮忙 ——
- * Windows 上动别人家配置还可能撞权限（2026-10-19 真机 EPERM）。所以问一次，答案记在
- * 账本里；`--client` / `--no-client` 是「这一次」的显式表态，不落账本。
+ * 本工具的本分是**提供反代**；改客户端的配置只是顺手帮忙 —— Windows 上动别人家配置还
+ * 可能撞权限（2026-10-19 真机 EPERM）。
+ *
+ * ⚠️ 这一问**每次都问**（与「要不要开机自启」不同）：它问的是「这次要动谁的文件」，
+ * 用户随时可能只想配反代、或只改 DSH。问过一次就再也不问，等于把口径锁死了、想改都没
+ * 机会改（2026-10-22 用户反馈）。账本里记的答案只当**默认选项**用：一路回车就是上次的
+ * 选择，两下方向键就能改。显式 `--clients` 才跳过提问。
+ *
+ * 「已经归我们管的配置」必须继续更新（换密钥、不写就是 401），所以 `ours` 会被无条件
+ * 并进来 —— 一致性不是可选项。
  */
-export async function decideClientConfig({ client, ours = false, choice = clientChoice(), ask = confirm } = {}) {
-  // `--no-client` / `--client` 永远最优先：显式说了不动，就连「本桥的配置」也不动
-  if (client !== undefined) return client
-  // 配置本来就是我们写的（或指向本桥）：**必须**回写，否则换了模型/密钥之后客户端
-  // 会拿着旧令牌 401（2026-10-22 真机就踩了）。这不是「帮不帮忙」，是保持一致。
-  if (ours) {
-    note(dim('  Claude Code 配置本来就指向本桥：密钥与模型一起更新（不想动：fo setup --no-client）'))
-    return true
+export async function decideClientTargets({ clients, ours = [], choice = clientChoice(), ask = select } = {}) {
+  if (Array.isArray(clients)) return clients.filter(id => CLIENT_TARGETS.includes(id))
+  const keep = [...new Set(ours.filter(id => CLIENT_TARGETS.includes(id)))]
+  if (keep.length > 0) {
+    note(dim(`  ${labelOfClients(keep)} 的配置本来就指向本桥：密钥与模型会一起更新`))
   }
-  if (choice.asked) {
-    if (choice.writeClient) {
-      note(dim('  按你上次的选择，继续帮你写 Claude Code 配置（想改：fo setup --no-client）'))
-      return true
-    }
-    note(dim('  按你上次的选择只配反代，不动 Claude Code 配置；要写：fo setup --client'))
-    return false
-  }
-  const wants = await ask({ message: '帮你也写进 Claude Code 的 settings.json？', initial: true })
-  recordClientChoice(wants)
-  return wants
+  // 上次的选择只当默认项 —— 每次都问，是为了让用户能改口径
+  const remember = choice.asked ? choice.clients : []
+  const options = [
+    { label: 'Claude Code', hint: '写 ~/.claude/settings.json', value: ['claude'] },
+    { label: 'DSH（DeepSeek Harness）', hint: '写 llm-pi-ai provider + 凭据引用', value: ['dsh'] },
+    { label: '两个都写', hint: 'Claude Code 与 DSH', value: ['claude', 'dsh'] },
+    { label: '都不写', hint: '只配反代，用地址 / 令牌 / 模型 ID 自己填', value: [] },
+  ]
+  // 默认选项 = 上次的选择（并上已经归我们管的）
+  const preferred = [...new Set([...remember, ...keep])]
+  const current = options.findIndex(option => option.value.length === preferred.length && option.value.every(id => preferred.includes(id)))
+  const picked = await ask({ message: '要帮你配哪些客户端？（这次）', initial: Math.max(0, current), options })
+  recordClientChoice(picked)
+  return [...new Set([...picked, ...keep])]
 }
 
 /**
@@ -389,11 +403,19 @@ export async function clientFlow() {
   const apiKey = record.apiKey ?? settings.env?.ANTHROPIC_AUTH_TOKEN
   const model = record.model ?? String(settings.env?.ANTHROPIC_MODEL ?? '').replace(/\[[^\]]*\]$/, '')
   if (typeof apiKey !== 'string' || apiKey === '' || model === '') {
-    fail('还没有配置过：先跑 fo setup（只想配反代就加 --no-client）')
+    fail('还没有配置过：先跑 fo setup（只想配反代就加 --clients none）')
     blank()
     return 1
   }
   printConnectionInfo(connectionInfo({ port, apiKey, model, contextWindow: record.contextWindow }))
+  blank()
+  // 顺手说清「哪些客户端是我们帮你配的」，免得用户以为没配
+  const managed = []
+  if (clientConfigIsOurs({ port })) managed.push('Claude Code（settings.json）')
+  if (dshCurrentlyManaged()) managed.push('DSH（llm-pi-ai provider）')
+  note(dim(managed.length === 0
+    ? '  两个客户端都没配（按你的选择）；上面的信息可以直接填'
+    : `  已帮你配：${managed.join('、')}`))
   blank()
   info(`前台把桥跑起来：${serveCommand(port, apiKey)}`)
   blank()
@@ -488,14 +510,15 @@ export async function setupWizard(options = {}) {
   const port = await choosePort()
   // 口令必须稳定：客户端配置会长期引用它（随机换会让 Claude Code 401、DSH 报「密钥无效」）
   const apiKey = bridgeApiKey()
-  const wantsClient = await decideClientConfig({
-    client: options.client,
-    ours: clientConfigIsOurs({ port }),
-  })
+  const ours = []
+  if (clientConfigIsOurs({ port })) ours.push('claude')
+  if (dshCurrentlyManaged()) ours.push('dsh')
+  const targets = await decideClientTargets({ clients: options.clients, ours })
   // 接入参数与「写不写客户端配置」无关：账本里总要有一份，`fo client` 与前台跑桥都靠它
   recordBridge({ port, apiKey, model, contextWindow: picked.contextWindow })
+
   const applied = applyClientConfig({
-    wantsClient,
+    wantsClient: targets.includes('claude'),
     file: claudeSettingsPath(),
     baseUrl: `http://127.0.0.1:${port}`,
     apiKey,
@@ -503,10 +526,24 @@ export async function setupWizard(options = {}) {
     contextWindow: picked.contextWindow,
   })
   if (applied.written) {
-    success(`已写入 ${applied.file}`)
+    success(`Claude Code 配置已写入 ${applied.file}`)
     if (applied.backup !== undefined) note(`  ${gray(`原文件已备份：${applied.backup}`)}`)
-  } else {
-    note(dim('  只配反代，没动 Claude Code 的配置；接入信息在最后，随时可用 fo client 再看'))
+  }
+
+  // DSH：写 llm-pi-ai provider + 凭据 seam（只写腾讯两条线，oc/ocg 在 DSH 里本来就有）
+  let dsh = { ok: true, skipped: true }
+  if (targets.includes('dsh')) {
+    dsh = applyDshConfig({ port, apiKey, rows })
+    if (dsh.ok) {
+      success(`DSH provider 已写入 ${dsh.file}（${dsh.models} 个模型）`)
+      note(dim('  重启 DSH 后，模型选择器里会出现 WorkBuddy 国内版 / 国际版'))
+      if (dsh.backup !== undefined) note(`  ${gray(`原文件已备份：${dsh.backup}`)}`)
+    } else {
+      warn(`DSH 没配上：${dsh.reason}`)
+    }
+  }
+  if (targets.length === 0) {
+    note(dim('  只配反代，没动任何客户端配置；接入信息在最后，随时可用 fo client 再看'))
   }
 
   const running = await probeBridge(port)
@@ -550,9 +587,9 @@ export async function setupWizard(options = {}) {
     `${gray('已挂')}  ${mounted.join('、')}`,
     `${gray('监听')}  http://127.0.0.1:${port}`,
     `${gray('服务')}  ${wantsService ? (health === undefined ? '已安装' : '运行中') : running === undefined ? '未常驻' : '复用已有实例'}`,
-    `${gray('客户端')}  ${applied.written ? 'Claude Code 已写好' : '没动你的配置（自己填下面三项）'}`,
+    `${gray('客户端')}  ${targets.length === 0 ? '都没动（自己填接入信息）' : [applied.written ? 'Claude Code' : '', dsh.ok === true && targets.includes('dsh') ? 'DSH' : ''].filter(Boolean).join(' + ')}`,
   ], { color: green })
-  if (!applied.written) {
+  if (targets.length === 0) {
     blank()
     note(style.bold('  把下面三项填到你自己的客户端里（本工具没有改任何配置文件）'))
     printConnectionInfo(connectionInfo({ port, apiKey, model, contextWindow: picked.contextWindow }))
@@ -699,6 +736,9 @@ export async function uninstallFlow() {
   const service = uninstallService()
   if (service.skipped === true) note(`  后台服务：${service.reason}`)
   else success(`已卸载后台服务（${service.kind}）`)
+  const dsh = removeDshConfig()
+  if (dsh.removed) success('已清掉 DSH 里的 flow-one provider 与凭据引用')
+  else note('  DSH：没有本工具写入的记录')
   blank()
   return 0
 }

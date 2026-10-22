@@ -450,22 +450,36 @@ export function recordServiceChoice(autoStart) {
 }
 
 /**
- * 账本里记的「要不要帮你写客户端配置」这一问的答案。
+ * 能帮用户配的客户端。`claude` = 写 `~/.claude/settings.json`；
+ * `dsh` = 写 DSH profile 的 `llm-pi-ai` provider（见 src/dsh.mjs）。
+ */
+export const CLIENT_TARGETS = ['claude', 'dsh']
+
+/**
+ * 账本里记的「要帮哪些客户端写配置」这一问的答案。
  *
- * 这个工具的本分是**提供反代**；改用户的 `~/.claude/settings.json` 只是顺手帮忙。
- * 帮不帮，答案记在这儿：问过的就不再问，选过「不写」的也别再碰人家的文件
- * （Windows 上还可能撞权限，见 2026-10-19 那次 EPERM）。
+ * 这个工具的本分是**提供反代**；改客户端的配置只是顺手帮忙。帮不帮、帮哪个，答案记在
+ * 这儿：问过的就不再问（AGENTS.md「别重复问同一件事」）。
+ *
+ * 旧账本里只有 boolean 的 `clientConfig`（那时只问 Claude Code 写不写）。问题从「写不写」
+ * 变成「写给谁」是语义变化，替用户猜不如重问一次 —— 所以旧值一律当作**没问过**。
  */
 export function clientChoice() {
   const state = readInstallState()
-  return { asked: state.clientConfigAsked === true, writeClient: state.clientConfig === true }
+  if (Array.isArray(state.clients)) {
+    return { asked: state.clientsAsked === true, clients: state.clients.filter(id => CLIENT_TARGETS.includes(id)) }
+  }
+  return { asked: false, clients: [] }
 }
 
 /** 记下这一问的答案：下次配置据此不再问。 */
-export function recordClientChoice(writeClient) {
+export function recordClientChoice(clients) {
   const state = readInstallState()
-  state.clientConfig = writeClient === true
-  state.clientConfigAsked = true
+  state.clients = (Array.isArray(clients) ? clients : []).filter(id => CLIENT_TARGETS.includes(id))
+  state.clientsAsked = true
+  // 旧字段清掉：留着会让下次读到两份互相矛盾的答案
+  delete state.clientConfig
+  delete state.clientConfigAsked
   writeInstallState(state)
 }
 
@@ -624,10 +638,13 @@ export function uninstallService() {
   // 「要不要写客户端配置」同理：卸载之后是一张白纸。
   const state = readInstallState()
   const remembered = 'service' in state || 'autoStart' in state || 'autoStartAsked' in state
-    || 'clientConfig' in state || 'clientConfigAsked' in state || 'bridge' in state
+    || 'clients' in state || 'clientsAsked' in state || 'clientConfig' in state
+    || 'clientConfigAsked' in state || 'bridge' in state
   delete state.service
   delete state.autoStart
   delete state.autoStartAsked
+  delete state.clients
+  delete state.clientsAsked
   delete state.clientConfig
   delete state.clientConfigAsked
   delete state.bridge

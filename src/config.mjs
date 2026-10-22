@@ -83,7 +83,7 @@ export const USAGE = `flow-one —— 让 Claude Code CLI 用上 WorkBuddy（国
   flow-one models             列出可用模型 ID
   flow-one switch             交互式换模型（改配置并重启服务）
   flow-one doctor             自检：配置 / 登录 / 两条门禁（会真发请求）
-  flow-one setup              交互式一键配置（登录 → 选模型 → 配反代 → 可选帮你写客户端配置）
+  flow-one setup              交互式一键配置（登录 → 选模型 → 配反代 → 可选帮你配客户端）
   flow-one client             打印接入信息（地址 / 令牌 / 模型 ID），自己填到客户端里
   flow-one uninstall          还原本工具写过的配置并卸载后台服务
 
@@ -98,8 +98,9 @@ export const USAGE = `flow-one —— 让 Claude Code CLI 用上 WorkBuddy（国
                            setup 首次落固定默认值 flow-one-local，之后一直复用（不换钥匙）
   --json                   错误以一行 JSON 信封输出到 stderr（脚本用）
   --service / --no-service 后台常驻：显式表态（覆盖上次记住的选择）
-  --client / --no-client   要不要帮你也写 Claude Code 的配置：显式表态
-                           （默认问一次并记住；--no-client 只配反代，不动你的文件）
+  --clients <列表>         要帮你配哪些客户端：claude,dsh / claude / dsh / none
+                           （默认问一次并记住；none = 只配反代，不动任何客户端文件）
+                           旧写法 --client / --no-client 仍可用，等价 claude / none
   --version, -v            显示版本号
   --max-tokens <N>         下发前的 max_tokens 上限，0 表示不限制
   --heartbeat <毫秒>       思考期间的心跳间隔，0 关闭（默认 ${DEFAULTS.heartbeatMs}）
@@ -118,6 +119,20 @@ BRIDGE_API_KEY / BRIDGE_MODEL_MAP / BRIDGE_MAX_TOKENS_CAP / BRIDGE_SHOW_THINKING
 BRIDGE_HEARTBEAT_MS / BRIDGE_FINGERPRINT_REWRITE / BRIDGE_HOME / UPSTREAM_BASE_URL /
 UPSTREAM_API_KEY
 `
+
+/** `--clients claude,dsh` / `none` → 目标集合。 */
+function parseClients(raw) {
+  const text = String(raw).trim().toLowerCase()
+  if (text === '' || text === 'none') return []
+  const out = []
+  for (const item of text.split(',')) {
+    const id = item.trim()
+    if (id === '' || id === 'none') continue
+    if (id !== 'claude' && id !== 'dsh') throw new Error(`未知的客户端：${id}（可选 claude / dsh / none）`)
+    if (!out.includes(id)) out.push(id)
+  }
+  return out
+}
 
 function parseModelMap(raw) {
   const map = {}
@@ -205,10 +220,17 @@ export function resolveConfig({ env = process.env, argv = [], home = os.homedir(
     if (flag === '--json') { config.json = true; continue }
     if (flag === '--service') { config.service = true; continue }
     if (flag === '--no-service') { config.service = false; continue }
-    // 写客户端配置只是顺手帮忙，不改也照样能跑反代：显式表态优先，且不落账本
+    // 帮哪些客户端写配置：只是顺手帮忙，不写也照样能跑反代。显式表态优先，不落账本
     // （落账本的是向导问的那一次，见 install.mjs 的 clientChoice）
-    if (flag === '--client') { config.client = true; continue }
-    if (flag === '--no-client') { config.client = false; continue }
+    if (flag === '--clients') {
+      const value = argv[++index]
+      if (value === undefined || value.startsWith('--')) throw new Error('--clients 缺少参数（claude,dsh / claude / dsh / none）')
+      config.clients = parseClients(value)
+      continue
+    }
+    // 兼容旧写法：--client 等价 --clients claude，--no-client 等价 --clients none
+    if (flag === '--client') { config.clients = ['claude']; continue }
+    if (flag === '--no-client') { config.clients = []; continue }
     if (!flag.startsWith('--')) { rest.push(flag); continue }
     const field = FLAGS[flag]
     if (field === undefined) throw new Error(`未知选项：${flag}（--help 查看用法）`)

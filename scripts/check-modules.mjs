@@ -50,6 +50,7 @@ const LAYERS = new Map([
   ['src/config.mjs', 2],
   // 3 装配层：把来源拼成一套
   ['src/install.mjs', 3],
+  ['src/dsh.mjs', 3],
   ['src/upstreams.mjs', 3],
   ['src/server.mjs', 3],
   // 4 检查
