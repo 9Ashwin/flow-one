@@ -554,3 +554,26 @@ test('桥的口令必须稳定：复用已有的，第一次装落固定默认�
   // 空串当没有：回落到默认
   assert.equal(bridgeApiKey({ record: { apiKey: '' }, settings: {} }), DEFAULT_LOCAL_API_KEY)
 })
+
+test('DSH 的 provider 必须覆盖所有挂着来源：配了 cn 和 intl 就两个都在', async () => {
+  scratch()
+  const { recordBridge, installStatePath } = await import('../src/install.mjs')
+  const { CN, INTL } = await import('../src/products.mjs')
+  const { dshProducts } = await import('../src/wizard.mjs')
+
+  // 账本记着「cn、intl 都挂」：无论这次选哪一家，DSH 都要拿到两条线
+  recordBridge({ port: 8788, apiKey: 'k', model: 'cn/x' })
+  const state = JSON.parse(fs.readFileSync(installStatePath(), 'utf8'))
+  state.service = { env: { BRIDGE_PRODUCTS: 'cn,intl,oc,ocg' } }
+  fs.writeFileSync(installStatePath(), JSON.stringify(state))
+
+  assert.deepEqual(dshProducts(CN).map(s => s.id), ['cn', 'intl'])
+  assert.deepEqual(dshProducts(INTL).map(s => s.id), ['cn', 'intl'], '选 intl 也要带上 cn，反之亦然')
+  assert.deepEqual(dshProducts(undefined).map(s => s.id), ['cn', 'intl'])
+
+  // 这次接的是网关也无所谓：DSH 里挂着的腾讯两条线照样要写
+  const GATEWAY = { id: 'gateway', label: '网关' }
+  assert.deepEqual(dshProducts(GATEWAY).map(s => s.id), ['cn', 'intl'])
+  // 只挂 oc/ocg 时没有腾讯来源：DSH 侧就没东西可写（不该硬造一个空 provider）
+  assert.deepEqual(dshProducts(CN, []), [])
+})

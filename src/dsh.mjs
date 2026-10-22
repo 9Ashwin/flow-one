@@ -47,6 +47,9 @@ export const CREDENTIAL_REF = 'FLOW_ONE_BRIDGE_KEY'
 export const BLOCK_BEGIN = '# >>> flow-one 托管：DSH provider（由 `fo setup` 维护，手改会被覆盖）>>>'
 export const BLOCK_END = '# <<< flow-one 托管：DSH provider <<<'
 
+/** DSH 侧只接腾讯两条线（oc/ocg 在 DSH 里本来就有自己的 provider）。 */
+export const DSH_SOURCE_IDS = ['cn', 'intl']
+
 const ROUTES = { cn: 'workbuddy-cn', intl: 'workbuddy-intl' }
 const LABELS = { cn: 'WorkBuddy 国内版（CodeBuddy）', intl: 'WorkBuddy 国际版' }
 

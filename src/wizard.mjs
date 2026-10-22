@@ -27,7 +27,7 @@ import { createDirectUpstream, createGatewayUpstream } from './upstreams.mjs'
 import { credentialFile, DEFAULT_LOCAL_API_KEY } from './config.mjs'
 import { installClaudeSettings, installService, uninstallClaudeSettings, uninstallService, serviceState, serviceChoice, recordServiceChoice, claudeSettingsPath, readInstallState, serviceCliPath, currentCliPath, LEGACY_SERVICE_LABEL, CLIENT_TARGETS, clientChoice, recordClientChoice, bridgeRecord, recordBridge, sizedModelId, clientConfigIsOurs } from './install.mjs'
 import { HOME_DIR, LEGACY_HOME_DIR, legacyHomeInUse } from './home.mjs'
-import { applyDshConfig, dshCurrentlyManaged, removeDshConfig } from './dsh.mjs'
+import { DSH_SOURCE_IDS, applyDshConfig, dshCurrentlyManaged, removeDshConfig } from './dsh.mjs'
 import {
   banner, blank, box, confirm, gray, green, heading, info, input, menu, note,
   section, select, password, spinner, style, success, warn, fail, dim, yellow,
@@ -268,6 +268,30 @@ function mountedSources(chosen) {
     : [...SOURCES]
   if (chosen === undefined) return current.length > 0 ? current : [...SOURCES]
   return current.includes(chosen) ? current : [...current, chosen]
+}
+
+/**
+ * DSH 的 provider 要覆盖**所有挂着的来源**，而不是这次才选中的那一家。
+ *
+ * 踩过：`setup` 里 `loadModels` 只加载 `[chosen]` 一家的模型，于是 DSH 的托管段每次都被
+ * 重写成「只有刚选的那个版本」—— 先配 intl 再配 cn，intl 的 provider 就没了
+ * （2026-10-22 用户反馈「国际版和国内版没有同时存在」）。这里按挂载清单重新取一次。
+ *
+ * 取不到就退回本次的清单：DSH 少一个 provider 也不该把整个 setup 搞挂。
+ */
+export function dshProducts(chosen, mounted = mountedSources(chosen)) {
+  // 只给腾讯两条线：`GATEWAY` 是伪来源、oc/ocg 在 DSH 里本来就有自己的 provider
+  return mounted.filter(source => SOURCES.includes(source) && DSH_SOURCE_IDS.includes(source.id))
+}
+
+async function dshModelRows(chosen, fallback) {
+  const sources = dshProducts(chosen)
+  if (sources.length === 0) return fallback
+  try {
+    return await loadModels(createDirectUpstream({ products: sources, credentialFile: credentialFile() }, { log: () => {} }))
+  } catch {
+    return fallback
+  }
 }
 
 /**
@@ -533,7 +557,7 @@ export async function setupWizard(options = {}) {
   // DSH：写 llm-pi-ai provider + 凭据 seam（只写腾讯两条线，oc/ocg 在 DSH 里本来就有）
   let dsh = { ok: true, skipped: true }
   if (targets.includes('dsh')) {
-    dsh = applyDshConfig({ port, apiKey, rows })
+    dsh = applyDshConfig({ port, apiKey, rows: await dshModelRows(chosen, rows) })
     if (dsh.ok) {
       success(`DSH provider 已写入 ${dsh.file}（${dsh.models} 个模型）`)
       note(dim('  重启 DSH 后，模型选择器里会出现 WorkBuddy 国内版 / 国际版'))
