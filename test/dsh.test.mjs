@@ -222,3 +222,25 @@ test('DSH provider：sample 的元数据解析（input / efforts）按保守规�
   assert.deepEqual(effortLevelsOf({ efforts: ['max', 'off', 'low', 'high', 'low'] }), ['low', 'high', 'max'])
   assert.deepEqual(effortLevelsOf({}), [])
 })
+
+test('DSH provider：默认写 provider 级 reasoning: high，可以用 none 关掉', async () => {
+  const { DEFAULT_DSH_REASONING } = await import('../src/dsh.mjs')
+  assert.equal(DEFAULT_DSH_REASONING, 'high', '默认档固定 high，别让 DSH 停在 Default')
+
+  const first = scratch()
+  applyDshProviders({ file: first.file, port: 8788, sources: SOURCES })
+  const text = fs.readFileSync(first.file, 'utf8')
+  assert.match(text, /^ {8}reasoning: high$/m, 'provider 级 reasoning 要写进托管段')
+  assert.equal(text.split('reasoning: high').length - 1, 2, '两个 provider 都要有')
+
+  // --dsh-reasoning none：不写这个字段，DSH 显示 Default
+  const second = scratch()
+  applyDshProviders({ file: second.file, port: 8788, sources: SOURCES, reasoning: 'none' })
+  assert.doesNotMatch(fs.readFileSync(second.file, 'utf8'), /^\s*reasoning:/m)
+
+  // 换档位重跑要能覆盖（不是叠一份）
+  applyDshProviders({ file: first.file, port: 8788, sources: SOURCES, reasoning: 'max' })
+  const changed = fs.readFileSync(first.file, 'utf8')
+  assert.match(changed, /^ {8}reasoning: max$/m)
+  assert.doesNotMatch(changed, /reasoning: high/)
+})

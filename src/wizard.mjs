@@ -27,7 +27,7 @@ import { createDirectUpstream, createGatewayUpstream } from './upstreams.mjs'
 import { credentialFile, DEFAULT_LOCAL_API_KEY } from './config.mjs'
 import { installClaudeSettings, installService, uninstallClaudeSettings, uninstallService, serviceState, serviceChoice, recordServiceChoice, claudeSettingsPath, readInstallState, serviceCliPath, currentCliPath, LEGACY_SERVICE_LABEL, CLIENT_TARGETS, clientChoice, recordClientChoice, bridgeRecord, recordBridge, sizedModelId, clientConfigIsOurs } from './install.mjs'
 import { HOME_DIR, LEGACY_HOME_DIR, legacyHomeInUse } from './home.mjs'
-import { DSH_SOURCE_IDS, applyDshConfig, dshCurrentlyManaged, removeDshConfig } from './dsh.mjs'
+import { DEFAULT_DSH_REASONING, DSH_SOURCE_IDS, applyDshConfig, dshCurrentlyManaged, removeDshConfig } from './dsh.mjs'
 import {
   banner, blank, box, confirm, gray, green, heading, info, input, isInteractive, menu, note,
   section, select, password, spinner, style, success, warn, fail, dim, yellow,
@@ -575,7 +575,13 @@ export async function setupWizard(options = {}) {
   // DSH：写 llm-pi-ai provider + 凭据 seam（只写腾讯两条线，oc/ocg 在 DSH 里本来就有）
   let dsh = { ok: true, skipped: true }
   if (targets.includes('dsh')) {
-    dsh = applyDshConfig({ port, apiKey, rows: await dshModelRows(chosen, rows) })
+    dsh = applyDshConfig({
+      port,
+      apiKey,
+      rows: await dshModelRows(chosen, rows),
+      // 默认档位固定 high（与 DSH 自己的 provider 一致）；--dsh-reasoning none 才留 Default
+      reasoning: options.dshReasoning ?? DEFAULT_DSH_REASONING,
+    })
     if (dsh.ok) {
       success(`DSH provider 已写入 ${dsh.file}（${dsh.models} 个模型）`)
       note(dim('  重启 DSH 后，模型选择器里会出现 WorkBuddy 国内版 / 国际版'))

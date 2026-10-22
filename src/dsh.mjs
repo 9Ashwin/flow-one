@@ -40,6 +40,16 @@ export function dshCredentialFile({ env = process.env, home = os.homedir() } = {
   return path.join(dshHome(env, home), '.credentials.yaml')
 }
 
+/**
+ * provider 级默认推理档（DSH schema 的 `reasoning` 字段，取值同 THINKING_LEVELS）。
+ *
+ * 不写这个字段时 DSH 的模型选择器显示 `Default`，由上游自己决定 —— 实测同一句话在
+ * Default 与 high 下都能通，但「默认」意味着行为随上游漂移。这里固定成 high：
+ * 与 DSH 自己的 `opencode-go` provider 一致（那边写的也是 `reasoning: high`）。
+ * 想改：`fo setup --dsh-reasoning max`，或 `FO_DSH_REASONING=medium`；`none` = 不写。
+ */
+export const DEFAULT_DSH_REASONING = 'high'
+
 /** provider 里的 `apiKeyEnv` 指向这个引用名。 */
 export const CREDENTIAL_REF = 'FLOW_ONE_BRIDGE_KEY'
 
@@ -117,7 +127,7 @@ export function effortLevelsOf(model) {
 }
 
 /** 生成托管段（含标记）；`indent` 是 sibling provider 的缩进。 */
-export function dshProviderBlock({ port, sources, indent = 6 }) {
+export function dshProviderBlock({ port, sources, indent = 6, reasoning = DEFAULT_DSH_REASONING }) {
   const pad = offset => ' '.repeat(indent + offset)
   const lines = [pad(0) + BLOCK_BEGIN]
   for (const source of sources) {
@@ -126,6 +136,7 @@ export function dshProviderBlock({ port, sources, indent = 6 }) {
     lines.push(`${pad(2)}apiKeyEnv: ${CREDENTIAL_REF}`)
     lines.push(`${pad(2)}api: anthropic-messages`)
     lines.push(`${pad(2)}baseURL: http://127.0.0.1:${port}`)
+    if (reasoning !== '' && reasoning !== 'none') lines.push(`${pad(2)}reasoning: ${reasoning}`)
     lines.push(`${pad(2)}models:`)
     for (const model of source.models) {
       lines.push(`${pad(4)}- id: ${model.id}`)
@@ -238,7 +249,7 @@ export function dshManagedIn(text) {
  *
  * @returns {{ok: true, file: string, changed: boolean, backup?: string} | {ok: false, reason: string}}
  */
-export function applyDshProviders({ file, port, sources, backupFile = backup }) {
+export function applyDshProviders({ file, port, sources, reasoning = DEFAULT_DSH_REASONING, backupFile = backup }) {
   if (!fs.existsSync(file)) return { ok: false, reason: `没找到 DSH 的 profile 配置：${file}` }
   const original = fs.readFileSync(file, 'utf8')
   let text = stripManagedBlock(stripLooseProviders(original))
@@ -252,7 +263,7 @@ export function applyDshProviders({ file, port, sources, backupFile = backup }) 
   const lines = text.split('\n')
   // CRLF 文件里，插入的每一行也要带 \r，否则整份文件变成混合换行
   const cr = newlineOf(original) === '\r\n' ? '\r' : ''
-  const block = dshProviderBlock({ port, sources, indent: anchor.indent })
+  const block = dshProviderBlock({ port, sources, indent: anchor.indent, reasoning })
     .split('\n').map(line => line + cr)
   lines.splice(anchor.line + 1, 0, ...block)
   text = lines.join('\n')
@@ -319,7 +330,7 @@ export function removeDshCredential({ file, backupFile = backup }) {
  *
  * @returns {{ok: boolean, file?: string, credential?: string, changed?: boolean, backup?: string, reason?: string}}
  */
-export function applyDshConfig({ port, apiKey, rows, env = process.env, home = os.homedir() }) {
+export function applyDshConfig({ port, apiKey, rows, reasoning = DEFAULT_DSH_REASONING, env = process.env, home = os.homedir() }) {
   const target = dshProfileFile({ env, home })
   if (target === undefined) {
     return { ok: false, reason: `这台机器上没有 ~/.dsh/profiles 下的 profile 配置，DSH 配不了；先装 DSH 再用 fo setup --clients dsh` }
@@ -328,7 +339,7 @@ export function applyDshConfig({ port, apiKey, rows, env = process.env, home = o
   if (sources.length === 0) {
     return { ok: false, reason: '这次没有挂 WorkBuddy 的 cn/intl 模型，DSH 侧没东西可配（先 fo setup 选一条腾讯来源）' }
   }
-  const providers = applyDshProviders({ file: target.file, port, sources })
+  const providers = applyDshProviders({ file: target.file, port, sources, reasoning })
   if (providers.ok !== true) return providers
   const credential = setDshCredential({ file: dshCredentialFile({ env, home }), apiKey })
   if (credential.ok !== true) return credential

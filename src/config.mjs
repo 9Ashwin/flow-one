@@ -31,6 +31,8 @@ export const DEFAULTS = {
   maxTokensCap: 0,
   showThinking: false,
   heartbeatMs: 15000,
+  /** 写 DSH provider 时的默认推理档；`none` = 不写（DSH 显示 Default）。 */
+  dshReasoning: undefined,
   /** 是否对腾讯后端做已知内容指纹的窄改写（详见 src/fingerprint.mjs）。 */
   fingerprintRewrite: true,
   /** 同时挂载的来源，顺序决定「没有前缀的模型 ID」落到谁身上。 */
@@ -98,6 +100,8 @@ export const USAGE = `flow-one —— 让 Claude Code CLI 用上 WorkBuddy（国
                            setup 首次落固定默认值 flow-one-local，之后一直复用（不换钥匙）
   --json                   错误以一行 JSON 信封输出到 stderr（脚本用）
   --service / --no-service 后台常驻：显式表态（覆盖上次记住的选择）
+  --dsh-reasoning <档位>  写 DSH provider 时的默认推理档（off/minimal/low/medium/high/
+                           xhigh/max，none = 不写、让 DSH 显示 Default；默认 high）
   --clients <列表>         要帮你配哪些客户端：claude,dsh / claude / dsh / none
                            （默认分开问两次、记住答案；none = 只配反代，不动任何客户端文件）
                            旧写法 --client / --no-client 仍可用，等价 claude / none
@@ -202,6 +206,7 @@ export function resolveConfig({ env = process.env, argv = [], home = os.homedir(
   if (String(env.BRIDGE_MODEL_MAP ?? '').trim() !== '') config.modelMap = parseModelMap(env.BRIDGE_MODEL_MAP)
   if (String(env.BRIDGE_MAX_TOKENS_CAP ?? '').trim() !== '') config.maxTokensCap = Number(env.BRIDGE_MAX_TOKENS_CAP)
   if (env.BRIDGE_SHOW_THINKING !== undefined) config.showThinking = truthy(env.BRIDGE_SHOW_THINKING)
+  if (String(env.FO_DSH_REASONING ?? '').trim() !== '') config.dshReasoning = String(env.FO_DSH_REASONING).trim()
   if (env.BRIDGE_FINGERPRINT_REWRITE !== undefined) config.fingerprintRewrite = truthy(env.BRIDGE_FINGERPRINT_REWRITE)
   if (String(env.BRIDGE_PRODUCTS ?? '').trim() !== '') productNames.push(...String(env.BRIDGE_PRODUCTS).split(','))
 
@@ -229,6 +234,12 @@ export function resolveConfig({ env = process.env, argv = [], home = os.homedir(
       continue
     }
     // 兼容旧写法：--client 等价 --clients claude，--no-client 等价 --clients none
+    if (flag === '--dsh-reasoning') {
+      const value = argv[++index]
+      if (value === undefined || value.startsWith('--')) throw new Error('--dsh-reasoning 缺少参数（off/minimal/low/medium/high/xhigh/max/none）')
+      config.dshReasoning = value.trim().toLowerCase()
+      continue
+    }
     if (flag === '--client') { config.clients = ['claude']; continue }
     if (flag === '--no-client') { config.clients = []; continue }
     if (!flag.startsWith('--')) { rest.push(flag); continue }
@@ -257,6 +268,12 @@ export function resolveConfig({ env = process.env, argv = [], home = os.homedir(
   const commandArgs = rest.slice(1)
   if (command !== 'serve' && !SUBCOMMANDS.has(command)) {
     throw new Error(`未知子命令：${command}（可选 ${[...SUBCOMMANDS].join(' / ')}）`)
+  }
+  if (config.dshReasoning !== undefined) {
+    const allowed = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'none']
+    if (!allowed.includes(config.dshReasoning)) {
+      throw new Error(`--dsh-reasoning 只能是 ${allowed.join(' / ')}，收到：${config.dshReasoning}`)
+    }
   }
   if (config.mode !== 'direct' && config.mode !== 'gateway') {
     throw new Error(`--mode 只能是 direct 或 gateway，收到：${config.mode}`)
