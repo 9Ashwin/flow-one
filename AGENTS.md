@@ -107,7 +107,7 @@
   这类「连不上 bus」要单独识别并给出两条路（`loginctl enable-linger` 后重进登录壳，或前台跑）。
 - 路径一律 `path.join` + `os.homedir()`，不写死平台路径。
 - 平台专有断言分文件或用 `process.platform` 跳过；公共用例不得真去动本机的 launchd/systemd。
-- CI 跑 ubuntu 与 macos 两边 × Node 18/20/22（只测一边等于没测）。
+- macOS 与 Linux 两边都要亲手验（没有 CI 代跑；只测一边等于没测）。
 
 ## 6. 别重复问同一件事
 
@@ -123,7 +123,8 @@
 - **每个行为变更都要有回归测试**，用例名说清「什么坏了会红」。
 - 用例**不得碰真实家目录**：一律把 `BRIDGE_HOME`（必要时还有 `HOME` / `CLAUDE_CONFIG_DIR`）
   指到 `fs.mkdtempSync` 出来的临时目录；不得真去调用 launchd/systemd。
-- 提交前跑 `make verify`（= `make check` + `make test`）。CI 跑的是同一套。
+- 提交前跑 `make verify`（= `make check` + `make test`）。**没有 CI 兜底**（仓库不带
+  `.github/workflows`），门禁只能自己跑。
 - 别只信自述：验收要给出**命令与输出**（真机端到端：真 Claude Code 分别走通腾讯一条线与
   OpenCode 一条线）。
 

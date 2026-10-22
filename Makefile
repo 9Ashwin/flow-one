@@ -1,7 +1,7 @@
-# flow-one —— 门禁都在这儿，CI 与本地跑的是同一套。
+# flow-one —— 门禁都在这儿，一条命令跑完。
 #
-# 为什么用一个 Makefile 收口：规范写在文档里只能靠自觉，写成命令才能进 CI。
-# 本地 `make verify` 过了，CI 就不会红。
+# 为什么用一个 Makefile 收口：规范写在文档里只能靠自觉，写成命令才能一键复核。
+# 提交前跑 `make verify`：语法检查 + 模块规约 + 全部单测。
 
 NODE   ?= node
 SOURCES := $(wildcard cli.mjs src/*.mjs scripts/*.mjs test/*.mjs)
