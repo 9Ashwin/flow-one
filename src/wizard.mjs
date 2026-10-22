@@ -25,7 +25,7 @@ import { HEALTH_SERVICE_NAMES } from './install.mjs'
 import { login, credentialStatus } from './auth.mjs'
 import { createDirectUpstream, createGatewayUpstream } from './upstreams.mjs'
 import { credentialFile } from './config.mjs'
-import { installClaudeSettings, installService, uninstallClaudeSettings, uninstallService, serviceState, serviceChoice, recordServiceChoice, claudeSettingsPath, readInstallState, serviceCliPath, currentCliPath, LEGACY_SERVICE_LABEL } from './install.mjs'
+import { installClaudeSettings, installService, uninstallClaudeSettings, uninstallService, serviceState, serviceChoice, recordServiceChoice, claudeSettingsPath, readInstallState, serviceCliPath, currentCliPath, LEGACY_SERVICE_LABEL, clientChoice, recordClientChoice, bridgeRecord, recordBridge, sizedModelId } from './install.mjs'
 import { HOME_DIR, LEGACY_HOME_DIR, legacyHomeInUse } from './home.mjs'
 import {
   banner, blank, box, confirm, gray, green, heading, info, input, menu, note,
@@ -303,6 +303,85 @@ export async function decideService({ service, state = serviceState(), choice = 
 }
 
 /**
+ * 「要不要帮你也写 Claude Code 的配置」这一问。
+ *
+ * 本工具的本分是**提供反代**；改用户的 `~/.claude/settings.json` 只是顺手帮忙 ——
+ * Windows 上动别人家配置还可能撞权限（2026-10-19 真机 EPERM）。所以问一次，答案记在
+ * 账本里；`--client` / `--no-client` 是「这一次」的显式表态，不落账本。
+ */
+export async function decideClientConfig({ client, choice = clientChoice(), ask = confirm } = {}) {
+  if (client !== undefined) return client
+  if (choice.asked) {
+    if (choice.writeClient) {
+      note(dim('  按你上次的选择，继续帮你写 Claude Code 配置（想改：fo setup --no-client）'))
+      return true
+    }
+    note(dim('  按你上次的选择只配反代，不动 Claude Code 配置；要写：fo setup --client'))
+    return false
+  }
+  const wants = await ask({ message: '帮你也写进 Claude Code 的 settings.json？', initial: true })
+  recordClientChoice(wants)
+  return wants
+}
+
+/**
+ * 第 4 步里「写不写客户端配置」这一半。
+ *
+ * 单独成函数是为了能离线断言：用户说「不写」时，**一个字节都不能碰**他的文件。
+ */
+export function applyClientConfig({ wantsClient, file, baseUrl, apiKey, model, contextWindow }) {
+  if (wantsClient !== true) return { written: false }
+  return { written: true, ...installClaudeSettings({ file, baseUrl, apiKey, model, contextWindow }) }
+}
+
+/**
+ * 「自己配」要的那三项：地址 / 令牌 / 模型 ID。
+ *
+ * 只返回文本、**不写任何文件** —— 这就是「不帮你改配置」那条路的意义。
+ */
+export function connectionInfo({ port, apiKey, model, contextWindow }) {
+  const baseUrl = `http://127.0.0.1:${port}`
+  const sized = sizedModelId(model, contextWindow)
+  return [
+    `接入地址  ${baseUrl}`,
+    `令牌      ${apiKey}`,
+    `模型 ID   ${sized}`,
+    'Claude Code：把上面三项填进 settings.json 的 env —— ANTHROPIC_BASE_URL / ANTHROPIC_AUTH_TOKEN / ANTHROPIC_MODEL',
+    'DSH：llm-pi-ai 的 provider 填 api: anthropic-messages、baseURL 同上、models 里填模型 ID；令牌存进凭据 seam 后用 apiKeyEnv 引用',
+  ].join('\n')
+}
+
+/** 把接入信息按「每行缩进两格」打出来（空行不缩进）。 */
+function printConnectionInfo(info) {
+  for (const line of info.split('\n')) note(line === '' ? '' : `  ${line}`)
+}
+
+/**
+ * `fo client`：随时打印接入信息。
+ *
+ * 选了「不写客户端配置」的人（尤其 Windows 上不想被动 `~/.claude`）靠它拿端口/令牌/
+ * 模型 ID；配置过的人也可以用它在别的客户端里抄一份。
+ */
+export async function clientFlow() {
+  heading('接入信息')
+  const record = bridgeRecord()
+  const settings = currentSettings()
+  const port = record.port ?? Number(new URL(settings.env?.ANTHROPIC_BASE_URL ?? `http://127.0.0.1:${DEFAULT_PORT}`).port)
+  const apiKey = record.apiKey ?? settings.env?.ANTHROPIC_AUTH_TOKEN
+  const model = record.model ?? String(settings.env?.ANTHROPIC_MODEL ?? '').replace(/\[[^\]]*\]$/, '')
+  if (typeof apiKey !== 'string' || apiKey === '' || model === '') {
+    fail('还没有配置过：先跑 fo setup（只想配反代就加 --no-client）')
+    blank()
+    return 1
+  }
+  printConnectionInfo(connectionInfo({ port, apiKey, model, contextWindow: record.contextWindow }))
+  blank()
+  info(`前台把桥跑起来：${serveCommand(port, apiKey)}`)
+  blank()
+  return 0
+}
+
+/**
  * 「自己把桥跑起来」要照抄的那条命令。
  *
  * 不写成 `BRIDGE_PORT=8788 BRIDGE_API_KEY=… node cli.mjs`：那是 POSIX 的赋值前缀，
@@ -318,11 +397,12 @@ export function serveCommand(port, apiKey) {
  * 一键配置。
  *
  * `options.service` 是调用方给的显式表态（`--service` / `--no-service`）；
- * 不给（`undefined`）时按账本与现状自动决定，见 `decideService`。
+ * `options.client` 是「要不要帮你写 Claude Code 配置」（`--client` / `--no-client`）。
+ * 不给（`undefined`）时都按账本与现状自动决定，见 `decideService` / `decideClientConfig`。
  */
 export async function setupWizard(options = {}) {
   heading('一键配置')
-  note(dim('  一次配一家：接哪一家 → 登录 → 选模型 → 写配置并常驻'))
+  note(dim('  一次配一家：接哪一家 → 登录 → 选模型 → 配反代（客户端配置可选）→ 常驻'))
   note(dim('  想再挂一家，配完回菜单再选一次「一键配置」即可（不会顶掉先前的）'))
 
   blank()
@@ -388,13 +468,23 @@ export async function setupWizard(options = {}) {
   // 端口不给选项：优先复用已在跑的本工具实例，否则取第一个空闲端口。
   const port = await choosePort()
   const apiKey = crypto.randomBytes(24).toString('base64url')
-  const settingsFile = claudeSettingsPath()
-  const applied = installClaudeSettings({
-    file: settingsFile, baseUrl: `http://127.0.0.1:${port}`, apiKey, model,
+  const wantsClient = await decideClientConfig({ client: options.client })
+  // 接入参数与「写不写客户端配置」无关：账本里总要有一份，`fo client` 与前台跑桥都靠它
+  recordBridge({ port, apiKey, model, contextWindow: picked.contextWindow })
+  const applied = applyClientConfig({
+    wantsClient,
+    file: claudeSettingsPath(),
+    baseUrl: `http://127.0.0.1:${port}`,
+    apiKey,
+    model,
     contextWindow: picked.contextWindow,
   })
-  success(`已写入 ${settingsFile}`)
-  if (applied.backup !== undefined) note(`  ${gray(`原文件已备份：${applied.backup}`)}`)
+  if (applied.written) {
+    success(`已写入 ${applied.file}`)
+    if (applied.backup !== undefined) note(`  ${gray(`原文件已备份：${applied.backup}`)}`)
+  } else {
+    note(dim('  只配反代，没动 Claude Code 的配置；接入信息在最后，随时可用 fo client 再看'))
+  }
 
   const running = await probeBridge(port)
   const wantsService = await decideService({ service: options.service })
@@ -437,7 +527,14 @@ export async function setupWizard(options = {}) {
     `${gray('已挂')}  ${mounted.join('、')}`,
     `${gray('监听')}  http://127.0.0.1:${port}`,
     `${gray('服务')}  ${wantsService ? (health === undefined ? '已安装' : '运行中') : running === undefined ? '未常驻' : '复用已有实例'}`,
+    `${gray('客户端')}  ${applied.written ? 'Claude Code 已写好' : '没动你的配置（自己填下面三项）'}`,
   ], { color: green })
+  if (!applied.written) {
+    blank()
+    note(style.bold('  把下面三项填到你自己的客户端里（本工具没有改任何配置文件）'))
+    printConnectionInfo(connectionInfo({ port, apiKey, model, contextWindow: picked.contextWindow }))
+    note(dim('  随时再看一眼：fo client'))
+  }
   blank()
   info(`现在直接在任意目录运行 ${style.bold('claude')} 即可`)
   note(dim('  再挂一家：菜单里再选一次「一键配置」   改模型：「切换模型」   还原：「还原配置」'))
@@ -456,8 +553,10 @@ export async function switchModel() {
   heading('切换模型')
   const installed = readInstallState()
   const settings = currentSettings()
-  const port = Number(new URL(settings.env?.ANTHROPIC_BASE_URL ?? `http://127.0.0.1:${DEFAULT_PORT}`).port)
-  const apiKey = settings.env?.ANTHROPIC_AUTH_TOKEN ?? crypto.randomBytes(24).toString('base64url')
+  // 接入参数优先读账本的 bridge 段：选了「不写客户端配置」的人，settings.json 里没有我们的键
+  const record = bridgeRecord()
+  const port = record.port ?? Number(new URL(settings.env?.ANTHROPIC_BASE_URL ?? `http://127.0.0.1:${DEFAULT_PORT}`).port)
+  const apiKey = record.apiKey ?? settings.env?.ANTHROPIC_AUTH_TOKEN ?? crypto.randomBytes(24).toString('base64url')
   const env = installed.service?.env ?? {}
   const upstream = env.BRIDGE_MODE === 'gateway'
     ? createGatewayUpstream({ upstream: env.UPSTREAM_BASE_URL ?? 'http://127.0.0.1:8326', upstreamKey: env.UPSTREAM_API_KEY ?? '' })
@@ -475,7 +574,7 @@ export async function switchModel() {
     fail('没有可用模型；先跑一次一键配置把登录或上游修好。')
     return 1
   }
-  const current = (settings.env?.ANTHROPIC_MODEL ?? '').replace(/\[[^\]]*\]$/, '')
+  const current = String(record.model ?? settings.env?.ANTHROPIC_MODEL ?? '').replace(/\[[^\]]*\]$/, '')
   const ranked = [...rows].sort((a, b) => rank(a.id) - rank(b.id))
   // 只展示前 12 个，所以「当前模型」的下标要在**截断之后**的列表里算。
   const shown = ranked.slice(0, 12)
@@ -487,8 +586,14 @@ export async function switchModel() {
   const model = chosen
   const contextWindow = shown.find(row => row.id === chosen)?.contextWindow
 
-  installClaudeSettings({ file: claudeSettingsPath(), baseUrl: `http://127.0.0.1:${port}`, apiKey, model, contextWindow })
-  success(`配置已更新：${model}${contextWindow !== undefined && contextWindow > 200_000 ? '[1m]' : ''}`)
+  recordBridge({ port, apiKey, model, contextWindow })
+  // 没写过客户端配置的（选了 --no-client）：不改就是不改，别顺手给人建一个
+  if (installed.claudeSettings !== undefined) {
+    installClaudeSettings({ file: claudeSettingsPath(), baseUrl: `http://127.0.0.1:${port}`, apiKey, model, contextWindow })
+    success(`配置已更新：${sizedModelId(model, contextWindow)}`)
+  } else {
+    note(dim(`  没动 Claude Code 的配置（按你上次的选择）；新模型 ID：${sizedModelId(model, contextWindow)}（fo client 可再看）`))
+  }
 
   if (installed.service?.path !== undefined && fs.existsSync(installed.service.path)) {
     const service = await installService({ port, apiKey, env: { ...env, BRIDGE_MODEL: model } })

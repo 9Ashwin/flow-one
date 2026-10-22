@@ -192,26 +192,36 @@ function backup(file) {
 // ── Claude Code 配置 ────────────────────────────────────────────────────────
 
 /**
- * 把反代的接入参数写进 Claude Code 的 settings.json。
- *
  * `[1m]` 后缀按**模型真实窗口**决定：超过 200k 才加。那是 Claude Code 自己的
  * 「按 1M 上下文登记」标记；给一个 200k 的模型加它，会让 Claude Code 到 1M 才压缩
  * 上下文，然后撞上模型真实上限（OpenCode 免费档的 deepseek-v4.1-flash-free 就是
  * 200k）。窗口未知时按不加处理 —— Claude Code 对未识别 ID 的默认假设正是 200k。
+ *
+ * 单独导出是因为「不写客户端配置」那条路也要把这个**裸/带后缀**的 ID 打给用户
+ * （让他自己填），两边必须是同一个算法。
+ */
+export function sizedModelId(model, contextWindow) {
+  const base = String(model ?? '').replace(/\[1m\]$/, '')
+  const wants1M = String(model ?? '').endsWith('[1m]')
+    || (Number.isFinite(contextWindow) && contextWindow > 200_000)
+  return wants1M ? `${base}[1m]` : base
+}
+
+/**
+ * 把反代的接入参数写进 Claude Code 的 settings.json。
+ *
  * 顺带说明为什么**不**写 `modelOverrides`：官方给的消诊断办法是把键写成
  * Claude 的模型 ID（等于让 Claude Code 以为自己在跑 Opus），代价是它随之套用
  * 那个模型的窗口与行为，不值得为一行 stderr 噪声付。
  *
- * @param {{file?: string, baseUrl: string, apiKey: string, model: string}} options
+ * @param {{file?: string, baseUrl: string, apiKey: string, model: string, contextWindow?: number}} options
  */
 export function installClaudeSettings(options) {
   const file = options.file ?? claudeSettingsPath()
   const settings = readJson(file)
   const backupPath = backup(file)
-  const model = options.model
-  // 窗口超过 200k 才登记 `[1m]`：它发请求前会把后缀剥掉，上游收到的永远是裸 ID。
-  const wants1M = model.endsWith('[1m]') || (Number.isFinite(options.contextWindow) && options.contextWindow > 200_000)
-  const sized = wants1M ? `${model.replace(/\[1m\]$/, '')}[1m]` : model.replace(/\[1m\]$/, '')
+  // 它发请求前会把后缀剥掉，上游收到的永远是裸 ID。
+  const sized = sizedModelId(options.model, options.contextWindow)
   const env = {
     ANTHROPIC_BASE_URL: options.baseUrl,
     ANTHROPIC_AUTH_TOKEN: options.apiKey,
@@ -417,6 +427,43 @@ export function recordServiceChoice(autoStart) {
 }
 
 /**
+ * 账本里记的「要不要帮你写客户端配置」这一问的答案。
+ *
+ * 这个工具的本分是**提供反代**；改用户的 `~/.claude/settings.json` 只是顺手帮忙。
+ * 帮不帮，答案记在这儿：问过的就不再问，选过「不写」的也别再碰人家的文件
+ * （Windows 上还可能撞权限，见 2026-10-19 那次 EPERM）。
+ */
+export function clientChoice() {
+  const state = readInstallState()
+  return { asked: state.clientConfigAsked === true, writeClient: state.clientConfig === true }
+}
+
+/** 记下这一问的答案：下次配置据此不再问。 */
+export function recordClientChoice(writeClient) {
+  const state = readInstallState()
+  state.clientConfig = writeClient === true
+  state.clientConfigAsked = true
+  writeInstallState(state)
+}
+
+/**
+ * 本次配置的接入参数（端口 / 令牌 / 模型）。
+ *
+ * 与「写不写客户端配置」无关：选了不写的人也要有地方拿到令牌（`fo client` 打印它，
+ * 前台跑桥也要用它）。写进账本的 `bridge` 段。
+ */
+export function bridgeRecord() {
+  const record = readInstallState().bridge
+  return record !== null && typeof record === 'object' ? record : {}
+}
+
+export function recordBridge({ port, apiKey, model }) {
+  const state = readInstallState()
+  state.bridge = { port, apiKey, model, savedAt: new Date().toISOString() }
+  writeInstallState(state)
+}
+
+/**
  * 清掉改名前的旧服务：先让它从 launchd / systemd 里退出来，再删服务文件。
  *
  * 卸载失败也照样删文件：留下一个「还在跑、却已经没有服务文件」的进程，
@@ -551,11 +598,16 @@ export function uninstallService() {
   // 「装成开机自启」那一问也跟着忘掉：用户既然来卸载，下次配置就该重新问一遍。
   // 这在「没装过服务」的提前返回**之前**做 —— 上次在向导里选了「不装」的用户
   // 同样答过这一问，卸载之后不该还留着他的答案。
+  // 「要不要写客户端配置」同理：卸载之后是一张白纸。
   const state = readInstallState()
   const remembered = 'service' in state || 'autoStart' in state || 'autoStartAsked' in state
+    || 'clientConfig' in state || 'clientConfigAsked' in state || 'bridge' in state
   delete state.service
   delete state.autoStart
   delete state.autoStartAsked
+  delete state.clientConfig
+  delete state.clientConfigAsked
+  delete state.bridge
   // 什么都没记过就别写：不为了「没删到东西」凭空造一个 install.json
   if (remembered) writeInstallState(state)
   if (file === '' || !fs.existsSync(file)) {

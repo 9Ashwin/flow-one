@@ -20,7 +20,7 @@ import { hasGoCredential } from './src/opencode.mjs'
 import { createDirectUpstream, createGatewayUpstream } from './src/upstreams.mjs'
 import { createBridgeServer } from './src/server.mjs'
 import { isInteractive, note, style } from './src/prompt.mjs'
-import { doctorFlow, mainMenu, setupWizard, statusFlow, switchModel, uninstallFlow } from './src/wizard.mjs'
+import { clientFlow, doctorFlow, mainMenu, setupWizard, statusFlow, switchModel, uninstallFlow } from './src/wizard.mjs'
 
 /**
  * 进度、告警一律走 stderr —— stdout 只放成功数据（AGENTS.md「输出分工」）。
@@ -192,12 +192,13 @@ async function main() {
   }
   const log = makeLogger(config.quiet)
   const out = makeDataWriter(config.quiet)
-  if (command === 'setup') return await setupWizard({ service: config.service })
+  if (command === 'setup') return await setupWizard({ service: config.service, client: config.client })
   if (command === 'uninstall') return await uninstallFlow()
   if (command === 'switch') return await switchModel()
   if (command === 'doctor') return await doctorFlow()
   if (command === 'login') return await commandLogin(config, commandArgs, log)
   if (command === 'status') return await commandStatus(config, out)
+  if (command === 'client') return await clientFlow()
   if (command === 'models') return await commandModels(config, log, out)
 
   // 裸跑且在终端里 → 进菜单。不带参数又没有 TTY（systemd、launchd、管道）时

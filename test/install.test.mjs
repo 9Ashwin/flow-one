@@ -398,3 +398,94 @@ test('Windows：settings.json 被占用（rename EPERM）时，向导第 4 步�
     '退让路径也不能把临时文件留在人家的配置目录里',
   )
 })
+
+test('配反代是本分，写 Claude Code 配置是可选的：选了不写就一个字节都不碰', async () => {
+  const home = scratch()
+  const { applyClientConfig } = await import('../src/wizard.mjs')
+  const file = path.join(home, 'claude', 'settings.json')
+  fs.mkdirSync(path.dirname(file), { recursive: true })
+  const original = '{"env":{"KEEP":"me"},"model":"opus"}'
+  fs.writeFileSync(file, original)
+
+  const skipped = applyClientConfig({
+    wantsClient: false, file, baseUrl: 'http://127.0.0.1:8788', apiKey: 'k', model: 'cn/x', contextWindow: 1_000_000,
+  })
+  assert.deepEqual(skipped, { written: false })
+  assert.equal(fs.readFileSync(file, 'utf8'), original, '不写就是逐字节不变（Windows 上也就不会撞权限）')
+
+  const written = applyClientConfig({
+    wantsClient: true, file, baseUrl: 'http://127.0.0.1:8788', apiKey: 'k', model: 'cn/x', contextWindow: 1_000_000,
+  })
+  assert.equal(written.written, true)
+  const parsed = JSON.parse(fs.readFileSync(file, 'utf8'))
+  assert.equal(parsed.env.KEEP, 'me', '帮忙写也要合并，不能覆盖别人的键')
+  assert.equal(parsed.env.ANTHROPIC_BASE_URL, 'http://127.0.0.1:8788')
+  assert.equal(parsed.env.ANTHROPIC_MODEL, 'cn/x[1m]', '1M 窗口才加后缀')
+})
+
+test('「要不要写客户端配置」问一次记住；--client/--no-client 是这一次的表态，不落账本', async () => {
+  const home = scratch()
+  const { decideClientConfig } = await import('../src/wizard.mjs')
+  const { clientChoice, recordClientChoice } = await import('../src/install.mjs')
+
+  let asked = 0
+  const ask = async () => { asked += 1; return false }
+  // 第一次问 → 记下「不写」
+  assert.equal(await decideClientConfig({ ask }), false)
+  assert.equal(asked, 1)
+  assert.deepEqual(clientChoice(), { asked: true, writeClient: false })
+  // 第二次不再问
+  assert.equal(await decideClientConfig({ ask }), false)
+  assert.equal(asked, 1, '问过就别再问（AGENTS.md「别重复问同一件事」）')
+  // 显式 flag 最优先，而且不落账本
+  assert.equal(await decideClientConfig({ client: true, ask }), true)
+  assert.equal(asked, 1)
+  assert.deepEqual(clientChoice(), { asked: true, writeClient: false }, 'flag 是「这一次」的表态')
+
+  // 反过来：记住「写」就不再问，且返回 true
+  recordClientChoice(true)
+  assert.deepEqual(clientChoice(), { asked: true, writeClient: true })
+  assert.equal(await decideClientConfig({ ask }), true)
+  assert.equal(asked, 1)
+  assert.equal(fs.existsSync(path.join(home, 'install.json')), true, '选择要落在账本里')
+})
+
+test('接入信息：只打印地址/令牌/模型 ID，1M 窗口才带 [1m] 后缀', async () => {
+  const { connectionInfo } = await import('../src/wizard.mjs')
+  const { sizedModelId } = await import('../src/install.mjs')
+  const text = connectionInfo({ port: 8788, apiKey: 'k-1', model: 'cn/deepseek-v4.1-flash', contextWindow: 1_000_000 })
+  assert.match(text, /http:\/\/127\.0\.0\.1:8788/)
+  assert.match(text, /k-1/)
+  assert.match(text, /cn\/deepseek-v4\.1-flash\[1m\]/)
+  // 200k 的模型不能带后缀（会把上下文压缩拖到 1M，撞模型真实上限）
+  assert.doesNotMatch(connectionInfo({ port: 8788, apiKey: 'k', model: 'cn/hy3', contextWindow: 192_000 }), /\[1m\]/)
+  assert.equal(sizedModelId('cn/x', 200_000), 'cn/x')
+  assert.equal(sizedModelId('cn/x', 200_001), 'cn/x[1m]')
+  assert.equal(sizedModelId('cn/x[1m]', undefined), 'cn/x[1m]')
+})
+
+test('接入参数记在账本 bridge 段：不写客户端配置也能拿到令牌，卸载后一起忘掉', async () => {
+  const home = scratch()
+  const { bridgeRecord, recordBridge, clientChoice, recordClientChoice } = await import('../src/install.mjs')
+  recordBridge({ port: 8788, apiKey: 'k-1', model: 'cn/x', contextWindow: 1_000_000 })
+  assert.equal(bridgeRecord().port, 8788)
+  assert.equal(bridgeRecord().apiKey, 'k-1')
+  assert.equal(bridgeRecord().model, 'cn/x')
+
+  recordClientChoice(false)
+  // 卸载（服务那块走「本来就没装过」的路径）也要把这两问的答案忘掉
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'fo-install-home-'))
+  const previousHome = process.env.HOME
+  process.env.HOME = dir
+  try {
+    const { uninstallService } = await import('../src/install.mjs')
+    uninstallService()
+  } finally {
+    process.env.HOME = previousHome
+  }
+  const ledger = JSON.parse(fs.readFileSync(path.join(home, 'install.json'), 'utf8'))
+  assert.equal('bridge' in ledger, false, '卸载后账本不该留桥的令牌')
+  assert.equal('clientConfig' in ledger, false, '「写不写客户端配置」也该重新问')
+  assert.deepEqual(bridgeRecord(), {})
+  assert.deepEqual(clientChoice(), { asked: false, writeClient: false })
+})

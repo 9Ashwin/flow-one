@@ -173,7 +173,8 @@ OpenCode Go 订阅，走了会报 `AuthError`。
 | `fo` | 终端里跑进菜单；无 TTY（systemd / 管道）直接起服务 |
 | `switch` | 只换模型（菜单里的「切换模型」） |
 | `doctor` | 自检：配置 / 登录 / 两条门禁（会真发几个请求） |
-| `setup` / `--setup` | 交互式一键配置 |
+| `setup` / `--setup` | 交互式一键配置（会问要不要帮你写 Claude Code 配置） |
+| `client` | 打印接入信息（地址 / 令牌 / 模型 ID），自己填到客户端里 |
 | `uninstall` / `--uninstall` | 还原 Claude Code 配置并卸载后台服务 |
 | `login [cn\|intl]` | 登录；不带参数两条产品线都登 |
 | `status` | 登录状态、令牌有效期、服务与配置文件位置 |
@@ -205,9 +206,14 @@ node cli.mjs --mode gateway --upstream http://127.0.0.1:8326 \
 
 ## 它到底改了什么
 
-向导只碰三处，且都可还原：
+**本工具的本分是提供反代，改你的客户端配置只是选项。** 向导第 4 步会问一次
+「要不要帮你写 Claude Code 的 settings.json」，选「不」就一个字节都不碰（`--no-client`
+可直接表态，答案会记住）；之后随时 `fo client` 打印接入地址、令牌与模型 ID，自己填到
+Claude Code / DSH / 任何 Anthropic 兼容客户端里。
 
-1. **`~/.claude/settings.json`**（先备份成 `settings.json.bak-<时间戳>`）
+选了「写」的话，向导只碰三处，且都可还原：
+
+1. **`~/.claude/settings.json`**（仅当你选了「写」；先备份成 `settings.json.bak-<时间戳>`）
    —— 只合并 `env` 下的 6 个 `ANTHROPIC_*` 键；原来就在的 `permissions`、`hooks`、
    `statusLine`、`ANTHROPIC_CUSTOM_HEADERS` 等一律原样保留。
    如果你的 `model` 是 `sonnet` 这类别名，会一起钉成我们的模型，免得 Claude Code
