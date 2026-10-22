@@ -3,6 +3,7 @@ import assert from 'node:assert/strict'
 import http from 'node:http'
 import fs from 'node:fs'
 import os from 'node:os'
+import path from 'node:path'
 
 const tempHome = prefix => fs.mkdtempSync(`${os.tmpdir()}/${prefix}`)
 
@@ -245,7 +246,7 @@ test('本地体检：密钥不一致 / 模型不一致 / 服务跑着别的代�
 
 test('Go 套餐探针：会话头必填这条事实会被重推出来', async t => {
   const fs = await import('node:fs')
-  process.env.BRIDGE_HOME = fs.mkdtempSync('/tmp/fo-goprobe-')
+  process.env.BRIDGE_HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'fo-goprobe-'))
   const { saveGoKey, OPENCODE_GO } = await import('../src/opencode.mjs')
   const { probeOpencodeGo } = await import('../src/doctor.mjs')
   // 假上游：只认「带 key + 带会话头」，缺会话头就回 MissingSessionID（真上游的行为）
@@ -284,7 +285,7 @@ test('Go 套餐探针：限流与连不上都判「判不出来」，不报成�
   // 这个探针原先两个分支都返回 'fail' —— 429 会被报成「这条路有问题」，
   // 把人带去查会话头，而真正的原因是限流。
   const fs = await import('node:fs')
-  process.env.BRIDGE_HOME = fs.mkdtempSync('/tmp/fo-goprobe-quota-')
+  process.env.BRIDGE_HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'fo-goprobe-quota-'))
   const { saveGoKey, OPENCODE_GO } = await import('../src/opencode.mjs')
   const { probeOpencodeGo } = await import('../src/doctor.mjs')
 

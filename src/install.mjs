@@ -397,6 +397,8 @@ function servicePaths() {
  */
 function assertScratchServicePath(paths) {
   if (process.env.NODE_TEST_CONTEXT === undefined) return
+  // 不支持的平台上没有服务文件，也就没有「按 label 操作的全机器共享资源」可误伤 ——
+  // 这里放行是如实的，不是漏判。POSIX 上必须拦。
   if (paths.path === '') return
   // 用**字符串前缀**比较，不去 realpath 父目录：父目录通常还不存在，
   // realpathSync 会抛，而我第一版把那个异常当成「安全」直接放行了 —— 守卫于是形同虚设。

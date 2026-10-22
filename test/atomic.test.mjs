@@ -6,6 +6,7 @@ import path from 'node:path'
 
 import { writeFileAtomic } from '../src/atomic.mjs'
 import { asBridgeError } from '../src/errors.mjs'
+import { assertMode, POSIX_MODES } from './platform.mjs'
 
 function scratch() {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'fo-atomic-'))
@@ -44,7 +45,7 @@ test('正常路径：内容与权限位一次写对，不留临时文件', () =>
   const file = path.join(dir, 'settings.json')
   writeFileAtomic(file, '{"model":"a"}\n', 0o600)
   assert.equal(fs.readFileSync(file, 'utf8'), '{"model":"a"}\n')
-  assert.equal(fs.statSync(file).mode & 0o777, 0o600)
+  assertMode(file, 0o600)
   assert.deepEqual(fs.readdirSync(dir), ['settings.json'])
 })
 
@@ -56,7 +57,7 @@ test('Windows：rename 一直被占用（EPERM）时退让到原地覆盖，内�
   withWindowsRename(() => eperm(), attempts => {
     writeFileAtomic(file, '{"model":"new"}\n', 0o644)
     assert.equal(fs.readFileSync(file, 'utf8'), '{"model":"new"}\n', '被占用不是「配置写不进去」的理由')
-    assert.equal(fs.statSync(file).mode & 0o777, 0o644, '就地覆盖后要恢复成目标权限位')
+    assertMode(file, 0o644, '就地覆盖后要恢复成目标权限位')
     assert.deepEqual(fs.readdirSync(dir), ['settings.json'], '临时文件必须清掉')
     assert.ok(attempts() > 1, '不能一次失败就放弃：占用通常几十毫秒内自己就放开了')
   })
@@ -84,11 +85,11 @@ test('Windows：目标是只读文件 → 清掉只读位后照样写得进去',
   withWindowsRename(() => eperm(), () => {
     writeFileAtomic(file, '{"model":"new"}\n', 0o644)
     assert.equal(fs.readFileSync(file, 'utf8'), '{"model":"new"}\n')
-    assert.equal(fs.statSync(file).mode & 0o777, 0o644, '写回去之后不能还留着只读位')
+    assertMode(file, 0o644, '写回去之后不能还留着只读位')
   })
 })
 
-test('POSIX：rename 被拒**不退让**（那一定是真问题），抛类型化错误并保住原文件', () => {
+test('POSIX：rename 被拒**不退让**（那一定是真问题），抛类型化错误并保住原文件', { skip: !POSIX_MODES && 'POSIX 专属语义：Windows 上 rename 失败要退让' }, () => {
   const dir = scratch()
   const file = path.join(dir, 'settings.json')
   fs.writeFileSync(file, '{"model":"old"}')

@@ -29,9 +29,10 @@ import { installClaudeSettings, installService, uninstallClaudeSettings, uninsta
 import { HOME_DIR, LEGACY_HOME_DIR, legacyHomeInUse } from './home.mjs'
 import { DSH_SOURCE_IDS, applyDshConfig, dshCurrentlyManaged, removeDshConfig } from './dsh.mjs'
 import {
-  banner, blank, box, confirm, gray, green, heading, info, input, menu, note,
+  banner, blank, box, confirm, gray, green, heading, info, input, isInteractive, menu, note,
   section, select, password, spinner, style, success, warn, fail, dim, yellow,
 } from './prompt.mjs'
+import { SUBTYPES, validationError } from './errors.mjs'
 
 const DEFAULT_PORT = 8788
 /** 面向 Claude Code 的推荐模型：这几个在本机实测跑通过。 */
@@ -472,6 +473,17 @@ export function serveCommand(port, apiKey) {
  * 不给（`undefined`）时都按账本与现状自动决定，见 `decideService` / `decideClientConfig`。
  */
 export async function setupWizard(options = {}) {
+  // 一键配置全程是菜单交互：没有 TTY 时（systemd、launchd、管道、被 agent 调用）
+  // 以前会照常打印菜单、拿到 undefined、然后**退出码 0** —— 调用方以为配好了，
+  // 实际一个字节都没写（2026-10-22 真机：`fo setup --clients dsh …` 静默成功）。
+  // 这类失败必须当场说清楚，而不是留一个假的成功。
+  if (!isInteractive()) {
+    throw validationError(
+      SUBTYPES.INVALID_REQUEST,
+      '一键配置需要交互式终端（当前 stdin/stdout 不是 TTY）',
+    ).withHint('非交互场景改用：`flow-one` 前台起反代，然后手动写客户端配置；'
+      + '接入信息用 `flow-one client` 打印（地址 / 令牌 / 模型 ID）')
+  }
   heading('一键配置')
   note(dim('  一次配一家：接哪一家 → 登录 → 选模型 → 配反代（客户端配置可选）→ 常驻'))
   note(dim('  想再挂一家，配完回菜单再选一次「一键配置」即可（不会顶掉先前的）'))

@@ -8,6 +8,7 @@ import { CN } from '../src/products.mjs'
 import { login } from '../src/auth.mjs'
 import { createDirectUpstream, createGatewayUpstream } from '../src/upstreams.mjs'
 import { createBridgeServer } from '../src/server.mjs'
+import { assertMode } from './platform.mjs'
 
 const listen = server => new Promise(resolve => server.listen(0, '127.0.0.1', () => resolve(`http://127.0.0.1:${server.address().port}`)))
 
@@ -216,7 +217,7 @@ test('直连模式：自己登录腾讯产品，再把这条链路接到 Claude 
   const credential = await login(product, { file: credentialFile, log: () => {}, openBrowser: () => {} })
   assert.equal(credential.accessToken, 'at-1')
   assert.equal(credential.account.nickname, '替身账号')
-  assert.equal(fs.statSync(credentialFile).mode & 0o777, 0o600, '凭据必须是 0600')
+  assertMode(credentialFile, 0o600, '凭据必须是 0600')
   assert.equal(calls.token, 2, '11217 之后应当继续轮询')
 
   const upstream = createDirectUpstream({ products: [product], credentialFile }, { log: () => {} })

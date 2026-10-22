@@ -15,6 +15,9 @@ function scratchHome() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'fo-migration-'))
   const previous = {
     HOME: process.env.HOME,
+    // Windows 上 `os.homedir()` 读的是 USERPROFILE，不认 HOME —— 只隔离 HOME 的话，
+    // 用例会落到真实家目录（`C:\Users\<user>\.flow-one`），既是假绿也会污染本机。
+    USERPROFILE: process.env.USERPROFILE,
     BRIDGE_HOME: process.env.BRIDGE_HOME,
     // XDG_CONFIG_HOME 也要一起隔离：Linux 上 systemd 的服务文件路径是
     // `${XDG_CONFIG_HOME}/systemd/user/...`，只看 HOME 是拦不住它的
@@ -22,6 +25,7 @@ function scratchHome() {
     XDG_CONFIG_HOME: process.env.XDG_CONFIG_HOME,
   }
   process.env.HOME = dir
+  process.env.USERPROFILE = dir
   process.env.XDG_CONFIG_HOME = path.join(dir, 'config')
   delete process.env.BRIDGE_HOME
   return {
@@ -152,7 +156,7 @@ test('健康探测：改名过渡期里，老名字的服务也要认出来', as
   assert.equal(await probeBridge(port), undefined, '别的程序不能被当成本工具的桥')
 })
 
-test('守卫：测试进程里碰真实服务文件必须直接拒绝', async () => {
+test('守卫：测试进程里碰真实服务文件必须直接拒绝', { skip: process.platform === 'win32' && 'Windows 上没有 launchd/systemd 服务文件，守卫无从触发' }, async () => {
   // 结构上防止「忘了隔离 HOME，把用户真实服务删了」这类事故重演。
   const { SERVICE_LABEL, uninstallService } = await import('../src/install.mjs')
   const previous = process.env.HOME

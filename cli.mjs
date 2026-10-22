@@ -10,7 +10,7 @@
 import process from 'node:process'
 import { createRequire } from 'node:module'
 import {
-  SUBTYPES, authError, exitCodeFor, renderError, toBridgeError, upstreamError, validationError,
+  SUBTYPES, authError, configError, exitCodeFor, renderError, toBridgeError, upstreamError, validationError,
 } from './src/errors.mjs'
 import { USAGE, resolveConfig } from './src/config.mjs'
 import { credentialStatus, login } from './src/auth.mjs'
@@ -20,6 +20,7 @@ import { hasGoCredential } from './src/opencode.mjs'
 import { createDirectUpstream, createGatewayUpstream } from './src/upstreams.mjs'
 import { createBridgeServer } from './src/server.mjs'
 import { isInteractive, note, style } from './src/prompt.mjs'
+import { installService, serviceState } from './src/install.mjs'
 import { clientFlow, doctorFlow, mainMenu, setupWizard, statusFlow, switchModel, uninstallFlow } from './src/wizard.mjs'
 
 /**
@@ -137,6 +138,40 @@ async function commandModels(config, log, out) {
 }
 
 async function commandServe(config, log) {
+  // `--service` 是「装成常驻」的显式表态：装上了就该退出，让后台服务占着端口；
+  // 装不上则必须如实报错。之前这里无视这个 flag，一路打印「flow-one 已启动」然后
+  // 前台阻塞 —— Windows 上没有 launchd/systemd，进程随启动它的终端消失，
+  // 客户端只看到 ECONNREFUSED，而终端上那句话像是成功了（2026-10-22 真机）。
+  if (config.service === true) {
+    const state = serviceState()
+    if (!state.supported) {
+      throw configError(
+        SUBTYPES.SERVICE_UNSUPPORTED,
+        `${process.platform} 上还不支持装成后台常驻（只实现了 launchd / systemd）`,
+      ).withHint('前台跑起来：`flow-one`（保持终端开着）；或把它放进开机启动项，'
+        + '例如 Windows 的 shell:startup 里放一个执行 `flow-one` 的快捷方式')
+    }
+    const installed = await installService({
+      port: config.port,
+      apiKey: config.apiKey,
+      env: {
+        BRIDGE_MODE: config.mode,
+        ...(config.mode === 'gateway'
+          ? { UPSTREAM_BASE_URL: config.upstream, ...(config.upstreamKey === '' ? {} : { UPSTREAM_API_KEY: config.upstreamKey }) }
+          : { BRIDGE_PRODUCTS: config.products.map(product => product.id).join(',') }),
+        ...(config.model === '' ? {} : { BRIDGE_MODEL: config.model }),
+      },
+    })
+    if (!installed.ok) {
+      throw configError(SUBTYPES.SERVICE_UNSUPPORTED, `后台服务没装上：${installed.reason}`)
+        .withHint('先前台跑起来确认能通：`flow-one`')
+    }
+    log(`后台服务已装（${installed.kind}）：${installed.path}`)
+    for (const line of installed.notes ?? []) log(`  ${line}`)
+    log(`  监听：http://${config.host}:${config.port}`)
+    return
+  }
+
   const upstream = makeUpstream(config, log)
   const bridge = createBridgeServer({ config, upstream, log })
   const address = await bridge.listen()
