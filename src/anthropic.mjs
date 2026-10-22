@@ -108,13 +108,20 @@ function toolCallsOf(blocks) {
  *
  * 上游（例如 dsh-our-free-model 的渠道网关）会把档位就近归一化到模型真正声明
  * 的那一档，所以这里给大中小三档就够，不必先知道模型支持什么。
+ *
+ * 边界取的是常见客户端「档位 → 预算表」相邻两档的中点（2026-10-22 对齐实测）：
+ * DSH 的 pi-ai 适配器发的是 minimal 1024 / low 2048 / medium 8192 / high 16384
+ * （xhigh 与 max 由它自己 clamp 成 high，Anthropic 协议只有预算、没有扩展档）。
+ * 之前写成 `≥8192 → high`、`≥2048 → medium`，结果 DSH 选 low 得到 medium、
+ * 选 medium 得到 high —— 整体升一档。中点边界让 low/medium/high 一一对应，
+ * 也仍然覆盖 Claude Code 那种 4096/8192/16384 的预算。
  */
 function effortFor(thinking) {
   if (!isObject(thinking) || thinking.type !== 'enabled') return undefined
   const budget = Number(thinking.budget_tokens)
   if (!Number.isFinite(budget) || budget <= 0) return undefined
-  if (budget >= 8192) return 'high'
-  if (budget >= 2048) return 'medium'
+  if (budget >= 12288) return 'high' // mid(8192, 16384)
+  if (budget >= 4096) return 'medium' // mid(2048, 8192)
   return 'low'
 }
 

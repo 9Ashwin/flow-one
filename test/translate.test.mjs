@@ -63,10 +63,21 @@ test('tool_choice:none 时连工具一起摘掉（上游不接受这个组合）
 })
 
 test('thinking 预算映射到档位，max_tokens 会上限截断', () => {
+  const effortOf = budget => toOpenAiRequest(
+    { messages: [{ role: 'user', content: 'hi' }], thinking: { type: 'enabled', budget_tokens: budget } },
+    { model: 'm' },
+  ).body.reasoning_effort
   const big = toOpenAiRequest({ messages: [{ role: 'user', content: 'hi' }], thinking: { type: 'enabled', budget_tokens: 20000 } }, { model: 'm' })
   assert.equal(big.body.reasoning_effort, 'high')
   const small = toOpenAiRequest({ messages: [{ role: 'user', content: 'hi' }], thinking: { type: 'enabled', budget_tokens: 1024 } }, { model: 'm' })
   assert.equal(small.body.reasoning_effort, 'low')
+  // 档位必须和客户端的预算表一一对应（DSH：minimal 1024 / low 2048 / medium 8192 / high 16384）
+  // 以前 ≥8192 就算 high，DSH 选 low/medium 会被整体升一档（2026-10-22 真机对齐）
+  assert.equal(effortOf(1024), 'low', 'DSH minimal')
+  assert.equal(effortOf(2048), 'low', 'DSH low 不能变成 medium')
+  assert.equal(effortOf(8192), 'medium', 'DSH medium 不能变成 high')
+  assert.equal(effortOf(16384), 'high', 'DSH high')
+  assert.equal(effortOf(4096), 'medium', 'Claude Code 常见的 4096 预算')
   const capped = toOpenAiRequest({ messages: [{ role: 'user', content: 'hi' }], max_tokens: 99999 }, { model: 'm', maxTokensCap: 32000 })
   assert.equal(capped.body.max_tokens, 32000)
 })

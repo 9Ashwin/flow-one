@@ -112,3 +112,15 @@ test('国际版会话身份头：缺了就被渠道校验拦（2026-10-21 起的
   assert.notEqual(seen[0]['x-conversation-request-id'], seen[1]['x-conversation-request-id'])
   assert.notEqual(seen[0]['x-conversation-message-id'], seen[1]['x-conversation-message-id'])
 })
+
+test('推理档位：客户端要的档位不在模型表里时就近归一化，不能静默丢掉', async () => {
+  const { nearestEffort } = await import('../src/buddy.mjs')
+  // 模型只声明 low/high/max（cn/deepseek-v4.1-flash 就是这组）
+  assert.equal(nearestEffort('medium', ['low', 'high', 'max']), 'low', '打平取更低一档')
+  assert.equal(nearestEffort('xhigh', ['low', 'high', 'max']), 'high')
+  assert.equal(nearestEffort('minimal', ['low', 'high', 'max']), 'low')
+  assert.equal(nearestEffort('high', ['low', 'high', 'max']), 'high', '支持的档位原样保留')
+  // 模型没声明档位：原样传下去，交给上游归一化
+  assert.equal(nearestEffort('medium', []), 'medium')
+  assert.equal(nearestEffort('medium', undefined), 'medium')
+})

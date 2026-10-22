@@ -91,6 +91,33 @@ function isChatModel(id, meta) {
   return true
 }
 
+const EFFORT_ORDER = ['minimal', 'low', 'medium', 'high', 'xhigh', 'max']
+
+/**
+ * 把要的档位落到模型真正支持的那一档。
+ *
+ * `efforts` 为空表示模型没声明档位：原样传下去（上游会就近归一化），不要替它猜。
+ * 打平时取**更低**一档：要 medium 的模型只支持 low/high 时，给 low 比给 high 更贴近原意。
+ */
+export function nearestEffort(wanted, efforts) {
+  if (!Array.isArray(efforts) || efforts.length === 0) return wanted
+  if (efforts.includes(wanted)) return wanted
+  const target = EFFORT_ORDER.indexOf(wanted)
+  if (target === -1) return efforts[0]
+  let best = efforts[0]
+  let bestDistance = Number.POSITIVE_INFINITY
+  for (const effort of efforts) {
+    const at = EFFORT_ORDER.indexOf(effort)
+    if (at === -1) continue
+    const distance = Math.abs(at - target)
+    if (distance < bestDistance || (distance === bestDistance && at < EFFORT_ORDER.indexOf(best))) {
+      best = effort
+      bestDistance = distance
+    }
+  }
+  return best
+}
+
 function metaOf(record) {
   if (record === null || typeof record !== 'object') return {}
   const meta = {}
@@ -243,7 +270,13 @@ export function toBuddyBody(openAiBody, { meta, model }) {
 
   const deepseek = /deepseek/i.test(model)
   const wanted = typeof openAiBody.reasoning_effort === 'string' ? openAiBody.reasoning_effort : undefined
-  if (wanted !== undefined && efforts.includes(wanted)) body.reasoning_effort = wanted
+  if (wanted !== undefined) {
+    // 客户端要的档位不一定在模型的档位表里（例如 DSH 的 medium 8192 落到只支持
+    // low/high/max 的模型上）。以前是**静默丢掉**，于是 deepseek 系回落到默认高档 ——
+    // 用户选了 medium 却跑成 high（2026-10-22 对齐 DSH 预算表时发现）。就近归一化。
+    const picked = nearestEffort(wanted, efforts)
+    if (picked !== undefined) body.reasoning_effort = picked
+  }
   if (deepseek) {
     // 实测：这一族模型只有 `reasoning_effort` 能打开思考，`thinking` 单独不生效，
     // 两个都带才稳定返回 reasoning_content。
