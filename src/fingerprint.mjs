@@ -68,6 +68,21 @@ const RULES = [
     replace: 'Main branch (PRs usually go here)',
     note: '2026-10-16 实测：整句 400 + 11128，改写后 200（intl/deepseek-v4.1-flash、cn/hy4-preview、cn/deepseek-v4.1-flash、intl/hy4-preview-f）',
   },
+  {
+    // DSH（DeepSeek Harness）的 persona 首句。2026-10-22 起 cn 侧把它也当成了
+    // 「非官方客户端」判据：整句逐字符匹配，拆成「DeepSeek Harness」「You are an AI agent」
+    // 都不拦，连句号去掉也照拦。
+    find: 'You are an AI agent powered by DeepSeek Harness',
+    replace: 'You are an AI agent powered by a DeepSeek harness',
+    note: '2026-10-22 实测：原句 400 + 11128，改写后 200（cn/deepseek-v4.1-flash）；intl 不受影响',
+  },
+  {
+    // 同一份 system 里的这两句**同现**才拦（单句各自 200）。取前半句里的片段改写，
+    // 保留「通过某个 harness 的 Web GUI 交互」这个语义 —— 它只是客户端自述，模型用不到字面品牌。
+    find: 'through the DeepSeek Harness Web GUI',
+    replace: 'through the harness Web GUI',
+    note: '2026-10-22 实测：与下一句同现 → 400 + 11128，只改这一处 → 200（cn/deepseek-v4.1-flash）',
+  },
 ]
 
 /**

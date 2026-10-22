@@ -224,3 +224,35 @@ test('腾讯内容指纹：gitStatus 的主分支整句被改写，仓库上下�
   assert.match(rewriteTencentFingerprints('MAIN BRANCH (YOU WILL USUALLY USE THIS FOR PRS): main'), /PRs usually go here/)
   assert.match(rewriteTencentFingerprints('main branch (you will usually use this for prs): main'), /PRs usually go here/)
 })
+
+test('腾讯内容指纹：DSH 的 persona 与 Web GUI 两处也要改写（2026-10-22 起 cn 侧拦）', async () => {
+  const { rewriteTencentFingerprints } = await import('../src/fingerprint.mjs')
+  // DSH（DeepSeek Harness）会话里真实的 system 片段（2026-10-22 从会话记录里取的原文）
+  const real = [
+    'You are an AI agent powered by DeepSeek Harness.',
+    '',
+    'You are a coding agent powered by the deepseek-flash model.',
+    '',
+    'You are interacting with the user through the DeepSeek Harness Web GUI whose URL the runtime context names.',
+    'When the user refers to "this page", "this GUI", or "this app" without naming another target, they mean this GUI.',
+  ].join('\n')
+
+  const out = rewriteTencentFingerprints(real)
+  assert.doesNotMatch(out, /powered by DeepSeek Harness/, 'persona 整句是判据')
+  assert.match(out, /powered by a DeepSeek harness/)
+  assert.doesNotMatch(out, /through the DeepSeek Harness Web GUI/, '与下一句同现才是判据')
+  assert.match(out, /through the harness Web GUI/)
+  // 无关行必须逐字符不变（腾讯侧按前缀缓存，无谓改动会让每轮都算新前缀）
+  for (const line of [
+    'You are a coding agent powered by the deepseek-flash model.',
+    'When the user refers to "this page", "this GUI", or "this app" without naming another target, they mean this GUI.',
+  ]) assert.ok(out.includes(line), `应原样保留：${line}`)
+
+  // 判据是整句：拆开的片段实测都不拦，所以不该被改写
+  for (const untouched of [
+    'DeepSeek Harness',
+    'You are an AI agent powered by DeepSeek.',
+    'You are an AI agent powered by a DeepSeek harness.',
+    'through the harness Web GUI',
+  ]) assert.equal(rewriteTencentFingerprints(untouched), untouched)
+})

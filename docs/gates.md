@@ -34,6 +34,8 @@ doctor 会先发一次完整形状确认能过，再**逐项去掉一个要件**
 | 1 | `x-anthropic-billing-header:` 开头的**整行** | 整行删除 | 2026-10-16：任意值都拦（键名是判据，值无关），删掉后 200 |
 | 2 | `You are Claude Code, Anthropic's official CLI for Claude` | 改成 `…, an official CLI for Claude` | 2026-10-16：两个片段**同现**才拦；改写后仍保留身份句 |
 | 3 | `Main branch (you will usually use this for PRs)` | 改成 `Main branch (PRs usually go here)` | 2026-10-16：Claude Code **只在 git 仓库里**注入该句，整句拦；改写后 200（`intl/deepseek-v4.1-flash`、`cn/hy4-preview` 等四个模型实测） |
+| 4 | `You are an AI agent powered by DeepSeek Harness`（DSH 的 persona 首句） | 改成 `…powered by a DeepSeek harness` | 2026-10-22：整句逐字符拦（拆成 `DeepSeek Harness` / `You are an AI agent`、或去掉句号都不拦）；改写后 200（`cn/deepseek-v4.1-flash`；`intl` 不受影响） |
+| 5 | `through the DeepSeek Harness Web GUI` **与**紧随的「this page / this GUI / this app」句**同现** | 改成 `through the harness Web GUI` | 2026-10-22：两句单独各自 200、同现才拦；只改这一处 → 200（`cn/deepseek-v4.1-flash`） |
 
 补充事实：
 
@@ -41,8 +43,10 @@ doctor 会先发一次完整形状确认能过，再**逐项去掉一个要件**
 - **只对腾讯系模型生效**：`cn/…`、`intl/…`（前缀判别见 `src/fingerprint.mjs` 的 `isTencentModel`）；
 - 非 git 目录不注入第 3 条，所以同一条命令在 `/tmp` 正常、在项目目录里 400 —— 这个
   差异本身就说明问题出在 Claude Code 注入的上下文里。
+- 判据是**按客户端**的：Claude Code 撞的是第 1–3 条，DSH（DeepSeek Harness）撞的是
+  第 4–5 条 —— 客户端的身份句就是它自己的 system 提示词，所以换客户端要重推一遍。
 
-**复验**：`fo doctor` 会把这三条字面量拼进一次最小请求真发出去。额度/频率受限会单独
+**复验**：`fo doctor` 会把这几条字面量拼进一次最小请求真发出去。额度/频率受限会单独
 报出来（那不是门禁问题）。
 
 ### 变体：会话身份头（2026-10-21 起，与内容无关）
