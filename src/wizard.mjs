@@ -904,6 +904,7 @@ export async function mainMenu() {
     if (choice === '3') await statusFlow()
     if (choice === '4') await loginFlow()
     if (choice === '0') await uninstallFlow()
-    await input({ message: '按回车返回菜单' })
+    // 不再要「按回车返回菜单」：这里从不清屏，动作的输出留在上面，
+    // 下一轮 banner 只是往下追加 —— 那个停顿只是白按一次回车。
   }
 }
