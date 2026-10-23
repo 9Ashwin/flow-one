@@ -45,12 +45,11 @@ function textOf(content) {
 
 /** `system` 在 Anthropic 里是一等公民，OpenAI 里只是第一条消息。 */
 export function flattenSystem(system) {
-  if (typeof system === 'string') return system.trim()
+  if (typeof system === 'string') return system
   return blocksOf(system)
     .map(block => (typeof block.text === 'string' ? block.text : ''))
     .filter(Boolean)
     .join('\n\n')
-    .trim()
 }
 
 /** 图片块 → OpenAI 的 `image_url`；无法识别的图片块返回 undefined（丢弃而非报错）。 */
@@ -293,7 +292,7 @@ export function anthropicMessage(outcome, { model, id, inputTokens = 0, showThin
   const content = []
   if (showThinking && outcome.thinking !== '') content.push({ type: 'thinking', thinking: outcome.thinking })
   if (outcome.text !== '') content.push({ type: 'text', text: outcome.text })
-  for (const call of outcome.toolCalls) {
+  for (const call of outcome.toolCalls.filter(Boolean)) {
     let input = {}
     try { input = call.arguments === '' ? {} : JSON.parse(call.arguments) } catch { input = {} }
     content.push({ type: 'tool_use', id: call.id || 'toolu_0', name: call.name, input })

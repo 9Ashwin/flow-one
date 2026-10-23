@@ -267,3 +267,10 @@ test('腾讯内容指纹：DSH 的 persona 与 Web GUI 两处也要改写（2026
     'through the harness Web GUI',
   ]) assert.equal(rewriteTencentFingerprints(untouched), untouched)
 })
+
+test('非腾讯 system 保留首尾空白，字符串与块数组都不 trim', () => {
+  for (const system of ['  keep\n', [{ type: 'text', text: '  keep\n' }]]) {
+    const result = toOpenAiRequest({ system, messages: [{ role: 'user', content: 'hi' }] }, { model: 'oc/model' })
+    assert.equal(result.body.messages[0].content, '  keep\n')
+  }
+})

@@ -180,7 +180,7 @@ async function commandServe(config, log) {
   log(`flow-one 已启动`)
   log(`  上游：${upstream.describe()}`)
   log(`  监听：${base}`)
-  if (config.apiKey === '') log('  门禁：未设置（仅监听回环；如需跨机使用请加 --api-key）')
+  if (config.apiKey === '') log('  门禁：未设置（回环地址；非回环监听必须配置自定义 --api-key）')
   else log('  门禁：已启用 --api-key / ANTHROPIC_AUTH_TOKEN')
 
   const rows = await upstream.loadModels().catch(() => [])

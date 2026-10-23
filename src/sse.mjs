@@ -7,30 +7,48 @@
  * @module src/sse.mjs
  */
 
-/** 逐行解析 SSE；`[DONE]` 与注释行跳过，坏帧丢掉而不是打断整轮。 */
+/** 按空行切 SSE 事件；data 多行拼接，DONE 立即结束并释放上游连接。 */
 export async function* readSse(body) {
   const reader = body.getReader()
   const decoder = new TextDecoder()
   let buffer = ''
+  let data = []
+  let skipLf = false
   try {
     for (;;) {
       const { value, done } = await reader.read()
       if (done) break
       buffer += decoder.decode(value, { stream: true })
+      if (skipLf && buffer !== '') {
+        if (buffer.startsWith('\n')) buffer = buffer.slice(1)
+        skipLf = false
+      }
       let at
-      while ((at = buffer.indexOf('\n')) >= 0) {
-        const line = buffer.slice(0, at).replace(/\r$/, '')
+      while ((at = buffer.search(/[\r\n]/)) >= 0) {
+        const line = buffer.slice(0, at)
+        const cr = buffer[at] === '\r'
         buffer = buffer.slice(at + 1)
-        if (!line.startsWith('data:')) continue
-        const payload = line.slice(5).trim()
-        if (payload === '' || payload === '[DONE]') continue
-        try {
-          yield JSON.parse(payload)
-        } catch { /* 坏帧丢掉比打断整轮更划算 */ }
+        if (cr) {
+          if (buffer.startsWith('\n')) buffer = buffer.slice(1)
+          else if (buffer === '') skipLf = true
+        }
+        if (line === '') {
+          const payload = data.join('\n')
+          data = []
+          if (payload.trim() === '[DONE]') return
+          if (payload === '') continue
+          let chunk
+          try { chunk = JSON.parse(payload) } catch { continue }
+          yield chunk
+        } else if (line === 'data' || line.startsWith('data:')) {
+          data.push(line.slice(5).replace(/^ /, ''))
+        }
       }
     }
+    // SSE 只有空行才派发事件，EOF 的未完成事件不能冒充完整回答。
   } finally {
-    reader.cancel?.().catch(() => {})
+    try { await reader.cancel() } catch { /* 保留原来的读流错误 */ }
+    reader.releaseLock()
   }
 }
 

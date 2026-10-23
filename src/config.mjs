@@ -9,6 +9,8 @@
  */
 
 import fs from 'node:fs'
+import { isIP } from 'node:net'
+import { SUBTYPES, validationError } from './errors.mjs'
 import os from 'node:os'
 import path from 'node:path'
 import { SOURCE_NAMES, sourceByName, defaultSources } from './sources.mjs'
@@ -51,6 +53,20 @@ export const DEFAULTS = {
  * 想换：`--api-key <x>` / `BRIDGE_API_KEY`；想彻底不要门禁：设成空（只监听回环）。
  */
 export const DEFAULT_LOCAL_API_KEY = 'flow-one-local'
+
+/** 只信字面量回环地址，主机名的解析结果可能随环境变化。 */
+export function validateListenAuth({ host, apiKey }) {
+  const ipVersion = isIP(String(host ?? ''))
+  const loopback = ipVersion === 4 ? host.startsWith('127.')
+    : ipVersion === 6 && new URL(`http://[${host}]`).hostname === '[::1]'
+  const key = typeof apiKey === 'string' ? apiKey.trim() : ''
+  if (!loopback && (key === '' || key === DEFAULT_LOCAL_API_KEY)) {
+    throw validationError(SUBTYPES.INVALID_REQUEST, '非回环监听不能使用空密钥或公开默认密钥')
+      .withParam('--api-key')
+      .withHint('设置自定义 --api-key / BRIDGE_API_KEY，或使用 --host 127.0.0.1 / ::1。')
+  }
+}
+
 
 /** 网关模式下的默认模型：DSH 渠道网关里 WorkBuddy 国际版的常用模型。 */
 const GATEWAY_DEFAULT_MODEL = 'workbuddy/deepseek-v4.1-flash'
@@ -303,5 +319,6 @@ export function resolveConfig({ env = process.env, argv = [], home = os.homedir(
   if (!Number.isInteger(config.port) || config.port < 0 || config.port > 65535) {
     throw new Error('端口必须是 0 到 65535 之间的整数')
   }
+  validateListenAuth(config)
   return { help: false, command, commandArgs, config }
 }
