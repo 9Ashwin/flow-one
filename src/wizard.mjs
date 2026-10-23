@@ -351,26 +351,25 @@ function labelOfClients(ids) {
  * 机会改（2026-10-22 用户反馈）。账本里记的答案只当**默认值**用：一路回车就是上次的
  * 选择。显式 `--clients` 才跳过提问。
  *
- * 「已经归我们管的配置」必须继续更新（换密钥、不写就是 401），所以 `ours` 会被无条件
- * 并进来 —— 一致性不是可选项。
+ * 已托管配置只影响默认值；用户这次明确拒绝时必须保留文件原样。
  */
 export async function decideClientTargets({ clients, ours = [], choice = clientChoice(), ask = confirm } = {}) {
   if (Array.isArray(clients)) return clients.filter(id => CLIENT_TARGETS.includes(id))
   const keep = [...new Set(ours.filter(id => CLIENT_TARGETS.includes(id)))]
   if (keep.length > 0) {
-    note(dim(`  ${labelOfClients(keep)} 的配置本来就指向本桥：会继续更新`))
+    note(dim(`  ${labelOfClients(keep)} 的配置本来就指向本桥：默认更新，选择不写则保留原样`))
   }
   const remembered = new Set(choice.asked ? choice.clients : [])
   const picked = []
   // 两个独立开关，一个问题一个 —— 不做「两个都写」那种组合选项：组合是 UI 的事，
   // 答案本来就是两个布尔值（zcf 也是这么问的：要配什么就问什么，不搞多选）。
   for (const id of CLIENT_TARGETS) {
-    const forced = keep.includes(id)
+    const managed = keep.includes(id)
     const wants = await ask({
       message: CLIENT_QUESTIONS[id],
-      initial: forced || remembered.has(id),
+      initial: managed || remembered.has(id),
     })
-    if (wants || forced) picked.push(id)
+    if (wants) picked.push(id)
   }
   recordClientChoice(picked)
   return picked

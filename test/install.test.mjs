@@ -456,9 +456,9 @@ test('客户端配置：Claude Code 与 DSH 各问一次（不做「两个都」
   assert.deepEqual(await decideClientTargets({ ask }), [])
   assert.deepEqual(prompts.map(p => p.initial), [true, false])
 
-  // 已经归我们管的配置：默认 y 且即使答 n 也会被并进来（换密钥不回写就是 401）
+  // 已经归我们管的配置：默认 y，但明确答 n 时必须尊重
   reset(); answers = [false, false]
-  assert.deepEqual(await decideClientTargets({ ours: ['dsh'], ask }), ['dsh'])
+  assert.deepEqual(await decideClientTargets({ ours: ['dsh'], ask }), [])
   assert.equal(prompts[1].initial, true)
 
   // 显式 --clients 跳过提问、不落账本
@@ -507,7 +507,7 @@ test('接入参数记在账本 bridge 段：不写客户端配置也能拿到令
   assert.deepEqual(clientChoice(), { asked: false, clients: [] })
 })
 
-test('配置指向本桥时 opt-out 不许把旧密钥/旧模型留着（2026-10-22 真机 401 的回归）', async () => {
+test('配置指向本桥时显式拒绝仍然优先，文件保持原样', async () => {
   const home = scratch()
   const { clientConfigIsOurs, installClaudeSettings, recordClientChoice } = await import('../src/install.mjs')
   const { decideClientConfig } = await import('../src/wizard.mjs')
@@ -533,13 +533,13 @@ test('配置指向本桥时 opt-out 不许把旧密钥/旧模型留着（2026-10
   installClaudeSettings({ file, baseUrl: 'http://127.0.0.1:9999', apiKey: 'k', model: 'cn/x' })
   assert.equal(clientConfigIsOurs({ port: 8788, file }), true)
 
-  // 用户上次选了「都不写」：配置是我们的时仍然回写（两问都答 n 也盖不过一致性）
+  // 用户上次选了「都不写」：配置是我们的时也不能覆盖本次明确拒绝
   recordClientChoice([])
   let asked = 0
   const ask = async () => { asked += 1; return false }
   const { decideClientTargets } = await import('../src/wizard.mjs')
-  assert.deepEqual(await decideClientTargets({ ours: ['claude'], ask }), ['claude'], '换了密钥/模型不回写会让客户端 401')
-  assert.equal(asked, 2, '两个独立问题都问了（口径可改），但「已经归我们管」的被无条件并进来')
+  assert.deepEqual(await decideClientTargets({ ours: ['claude'], ask }), [], '明确拒绝不能被已托管状态覆盖')
+  assert.equal(asked, 2, '两个独立问题都必须尊重答案')
   // 但显式 --clients none 永远优先，且不触发提问
   assert.deepEqual(await decideClientTargets({ clients: [], ours: ['claude'], ask }), [])
   assert.equal(asked, 2)
@@ -589,4 +589,49 @@ test('DSH 的 provider 必须覆盖所有挂着来源：配了 cn 和 intl 就�
   assert.deepEqual(dshProducts(GATEWAY).map(s => s.id), ['cn', 'intl'])
   // 只挂 oc/ocg 时没有腾讯来源：DSH 侧就没东西可写（不该硬造一个空 provider）
   assert.deepEqual(dshProducts(CN, []), [])
+})
+
+test('重复 setup/switch 卸载后恢复最初模型，并保留中途用户修改的恢复点', async () => {
+  const home = scratch()
+  const { installClaudeSettings, uninstallClaudeSettings } = await import('../src/install.mjs')
+  const file = path.join(home, 'settings.json')
+  for (const original of ['opus', undefined]) {
+    fs.writeFileSync(file, JSON.stringify(original === undefined ? {} : { model: original }))
+    const options = { file, baseUrl: 'http://127.0.0.1:8788', apiKey: 'test' }
+    installClaudeSettings({ ...options, model: 'cn/first' })
+    installClaudeSettings({ ...options, model: 'oc/second' })
+    uninstallClaudeSettings()
+    assert.equal(JSON.parse(fs.readFileSync(file)).model, original)
+    installClaudeSettings({ ...options, model: 'cn/third' })
+    const edited = JSON.parse(fs.readFileSync(file))
+    edited.model = 'user-picked'
+    fs.writeFileSync(file, JSON.stringify(edited))
+    installClaudeSettings({ ...options, model: 'oc/fourth' })
+    uninstallClaudeSettings()
+    assert.equal(JSON.parse(fs.readFileSync(file)).model, 'user-picked')
+  }
+})
+
+test('Linux 服务首次安装与重配都 reload、enable、restart，不能让 active 进程保留旧环境', { skip: process.platform !== 'linux' }, async () => {
+  const home = scratch()
+  const previous = { HOME: process.env.HOME, XDG_CONFIG_HOME: process.env.XDG_CONFIG_HOME }
+  process.env.HOME = home
+  process.env.XDG_CONFIG_HOME = path.join(home, 'config')
+  try {
+    const { installService, serviceCalls, SERVICE_LABEL } = await import('../src/install.mjs')
+    for (const port of [8788, 8789]) {
+      serviceCalls.length = 0
+      const result = await installService({ port, apiKey: 'test', env: { BRIDGE_MODEL: `model-${port}` } })
+      assert.equal(result.ok, true)
+      assert.deepEqual(serviceCalls.filter(call => call.command === 'systemctl').map(call => call.args), [
+        ['--user', 'daemon-reload'], ['--user', 'enable', `${SERVICE_LABEL}.service`], ['--user', 'restart', `${SERVICE_LABEL}.service`],
+      ])
+      assert.match(fs.readFileSync(result.path, 'utf8'), new RegExp(`model-${port}`))
+    }
+  } finally {
+    for (const [key, value] of Object.entries(previous)) {
+      if (value === undefined) delete process.env[key]
+      else process.env[key] = value
+    }
+  }
 })

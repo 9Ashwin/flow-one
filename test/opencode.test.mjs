@@ -5,6 +5,18 @@ import os from 'node:os'
 import path from 'node:path'
 import http from 'node:http'
 
+// 能力表是外部元数据；本机替身用例不能悄悄请求 models.dev。
+test.beforeEach(t => {
+  const fetch = globalThis.fetch
+  t.mock.method(globalThis, 'fetch', (url, options) => {
+    if (String(url) === 'https://models.dev/api.json') {
+      return Promise.resolve(Response.json({ opencode: { models: {} } }))
+    }
+    assert.match(String(url), /^http:\/\/127\.0\.0\.1:/, '测试只允许本机替身请求')
+    return fetch(url, options)
+  })
+})
+
 /** 隔离的 BRIDGE_HOME：项目 id 会落到那里，不碰真实家目录。 */
 function scratch() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'fo-oc-'))
@@ -184,7 +196,7 @@ test('Go 套餐：必须带 key 与会话头，且不需要免费档那套形状
   // 没配 key：清单要报错，对话要返回可读失败（而不是发一个必然 401 的请求）
   assert.equal(goCredential(), undefined)
   await assert.rejects(() => listModels(source), /还没配置 API key/)
-  assert.equal((await chat(source, 'x', { messages: [] })).ok, false)
+  assert.equal((await chat(source, 'x', { messages: [] })).status, 401)
 
   const first = saveGoKey('oc_sk_test_0000000000000000000000000000', { file: `${home}/credentials.json` })
   assert.equal(first.session.length > 8, true)
@@ -209,4 +221,35 @@ test('Go 套餐：必须带 key 与会话头，且不需要免费档那套形状
   assert.equal(call.body.stream, true)
   assert.equal(call.body.tools, undefined, '认证通道不需要补门禁工具')
   assert.equal(call.body.model, 'deepseek-v4.1-flash')
+})
+
+test('过滤桩工具后的稀疏/反序索引在非流式和流式都保留所有真实工具', async () => {
+  const { restoreToolCalls } = await import('../src/opencode.mjs')
+  const { createOutcome, foldChunk, anthropicMessage, createStreamTranslator } = await import('../src/anthropic.mjs')
+  for (const indices of [[1], [3, 1], [0, 2]]) {
+    const calls = indices.map(index => ({ index, id: `real-${index}`, function: { name: 'bash', arguments: '{"command":' } }))
+    const stubIndex = indices.includes(0) ? 1 : 0
+    const chunks = (async function* () {
+      yield { choices: [{ delta: { tool_calls: [{ index: stubIndex, id: 'stub', function: { name: 'grep', arguments: '{}' } }, ...calls] } }] }
+      yield { choices: [{ delta: { tool_calls: indices.map(index => ({ index, function: { arguments: '"ls"}' } })) }, finish_reason: 'tool_calls' }] }
+    })()
+    const outcome = createOutcome()
+    const frames = []
+    const translator = createStreamTranslator({ model: 'oc/test', id: 'test', write: frame => frames.push(JSON.parse(frame.split('\ndata: ')[1])) })
+    for await (const chunk of restoreToolCalls(chunks, { rename: new Map([['bash', 'Bash']]), stubs: new Set(['grep']) })) {
+      foldChunk(outcome, chunk)
+      translator.push(chunk)
+    }
+    translator.end()
+    const message = anthropicMessage(outcome, { model: 'oc/test', id: 'test' })
+    assert.deepEqual(message.content.map(call => call.id).sort(), indices.map(index => `real-${index}`).sort())
+    for (const call of message.content) {
+      assert.equal(call.name, 'Bash')
+      assert.deepEqual(call.input, { command: 'ls' })
+    }
+    const starts = frames.filter(frame => frame.type === 'content_block_start')
+    assert.equal(starts.length, indices.length)
+    assert.ok(starts.every(frame => frame.content_block.name === 'Bash'))
+    assert.ok(!JSON.stringify(frames).includes('stub'))
+  }
 })

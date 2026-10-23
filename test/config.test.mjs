@@ -32,3 +32,22 @@ test('不认识的开关仍然明确报错（别把打错的 flag 静默忽略�
   const { resolveConfig } = await import('../src/config.mjs')
   assert.throws(() => resolveConfig({ env: {}, argv: ['serve', '--nope'] }), /未知选项/)
 })
+
+test('非回环监听拒绝空/空白/公开默认 key，回环与自定义 key 保持兼容', async () => {
+  const { validateListenAuth, DEFAULT_LOCAL_API_KEY, resolveConfig } = await import('../src/config.mjs')
+  for (const host of ['0.0.0.0', '::', '192.168.1.2', 'localhost', 'example.invalid', undefined, '::ffff:127.0.0.1']) {
+    for (const apiKey of ['', '  ', undefined, DEFAULT_LOCAL_API_KEY, ` ${DEFAULT_LOCAL_API_KEY} `]) {
+      assert.throws(() => validateListenAuth({ host, apiKey }), error => {
+        assert.equal(error.category, 'validation')
+        assert.equal(error.param, '--api-key')
+        return true
+      })
+    }
+    assert.doesNotThrow(() => validateListenAuth({ host, apiKey: 'custom-test-key' }))
+  }
+  for (const host of ['127.0.0.1', '127.12.34.56', '::1', '0:0:0:0:0:0:0:1']) {
+    for (const apiKey of ['', DEFAULT_LOCAL_API_KEY]) assert.doesNotThrow(() => validateListenAuth({ host, apiKey }))
+  }
+  assert.throws(() => resolveConfig({ env: {}, argv: ['--host', '0.0.0.0'] }), /非回环/)
+  assert.throws(() => resolveConfig({ env: { BRIDGE_HOST: '::', BRIDGE_API_KEY: DEFAULT_LOCAL_API_KEY }, argv: [] }), /非回环/)
+})

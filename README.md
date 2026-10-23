@@ -204,12 +204,16 @@ node cli.mjs --mode gateway --upstream http://127.0.0.1:8326 \
 | `--upstream-key` | `UPSTREAM_API_KEY` | 读 DSH 网关密钥 | 上游密钥 |
 | — | `BRIDGE_HOME` | `~/.flow-one` | 凭据与安装状态目录 |
 
+非回环监听必须设置自定义 `--api-key` / `BRIDGE_API_KEY`，空密钥和公开默认值
+`flow-one-local` 会被拒绝。免鉴权仅允许字面量回环 IP（IPv4 `127.0.0.0/8` 或 IPv6 `::1`）；
+主机名即使当前解析到回环也需要自定义密钥，避免解析变化扩大访问范围。
+
 ## 它到底改了什么
 
 **本工具的本分是提供反代，改你的客户端配置只是选项。** 向导第 4 步会**分开问两次**：
 要不要写 Claude Code（`~/.claude/settings.json`）、要不要写 DSH（`llm-pi-ai` provider +
 凭据引用）—— 两个独立开关，都答 y 就是两个都写。**每次 setup 都会问**（上次的选择作为
-默认值），两个都答 n 就一个字节都不碰；`--clients claude,dsh|claude|dsh|none` 可直接表态、跳过提问。
+默认值），两个都答 n 就不写客户端配置（包括之前已托管的配置）；变更桥端口等参数后，未更新的客户端需自行同步。`--clients claude,dsh|claude|dsh|none` 可直接表态、跳过提问。
 之后随时 `fo client` 打印接入地址、令牌与模型 ID，自己填到任何 Anthropic 兼容客户端里。
 
 选了「写」的话，向导只碰三处，且都可还原：
@@ -222,7 +226,7 @@ node cli.mjs --mode gateway --upstream http://127.0.0.1:8326 \
    还原时**只删值仍等于本工具写入的那份**的键 —— 你自己改过的会被保留。
 2. **后台服务**：macOS 写 `~/Library/LaunchAgents/dev.flow-one.plist`
    并 `launchctl bootstrap`；Linux 写 `~/.config/systemd/user/` 下的 unit 并
-   `systemctl --user enable --now`。模式、上游、模型都写进服务环境，
+   `systemctl --user enable` + `restart`。模式、上游、模型都写进服务环境，
    所以服务不带参数启动也能拿到同一份配置。
 3. **`~/.flow-one/`**：登录凭据（0600）、`install.json`（记着
    写了哪些键、装了什么服务，供还原用）、服务日志。

@@ -258,10 +258,12 @@ export function installClaudeSettings(options) {
   // 自己的版本决定，两个字段说法不一致时就会静默跑成另一个模型（真实隐患：
   // 从网关模式切到直连后，这里还留着 `workbuddy/xxx`，而直连清单里没有这个 ID，
   // 请求会掉进兜底模型）。只留一个真相源：两个字段始终写成同一个值。
-  const previousModel = settings.model
+  const state = readInstallState()
+  const record = state.claudeSettings
+  const previousModel = record?.file === file && settings.model === record.env?.ANTHROPIC_MODEL
+    ? record.previousModel : settings.model
   settings.model = sized
   writeJsonAtomic(file, settings, 0o644)
-  const state = readInstallState()
   state.claudeSettings = {
     file, backup: backupPath ?? null, env,
     // 认账：还原时要把 `model` 恢复成我们改它之前的样子
@@ -620,8 +622,10 @@ export async function installService({ port, apiKey, env = {} }) {
       notes.push('launchctl bootstrap 已加载')
     } else {
       systemctl(['daemon-reload'])
-      systemctl(['enable', '--now', `${SERVICE_LABEL}.service`])
-      notes.push('systemctl --user enable --now 已完成')
+      systemctl(['enable', `${SERVICE_LABEL}.service`])
+      // enable --now 不会重启已 active 的进程；restart 同时覆盖首次安装和重配。
+      systemctl(['restart', `${SERVICE_LABEL}.service`])
+      notes.push('systemctl --user enable + restart 已完成')
     }
   } catch (error) {
     return { ok: false, kind, path: file, reason: serviceLoadReason(error?.message ?? error, file) }

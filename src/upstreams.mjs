@@ -90,7 +90,7 @@ export function createDirectUpstream(config, { log = () => {} } = {}) {
     if (at < 0) return { product: products[0], model: raw }
     // 先在本进程挂载的产品里找，再退回别名表：测试与自定义产品都用本机端点，
     // 直接拿别名表会解析成那两条内置产品常量，前缀也就剥不掉了。
-    const named = products.find(item => item.id === raw.slice(0, at)) ?? productByName(raw.slice(0, at))
+    const named = products.find(item => item.id === raw.slice(0, at)) ?? sourceByName(raw.slice(0, at))
     if (named === undefined || !products.includes(named)) return { product: products[0], model: raw }
     return { product: named, model: raw.slice(at + 1) }
   }

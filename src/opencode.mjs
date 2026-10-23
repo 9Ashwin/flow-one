@@ -378,7 +378,7 @@ export async function chat(source, model, body, { signal, log = () => {} } = {})
   // （实测裸 OpenAI 报文直接 200），所以这里不做工具名改写与打桩。
   if (source.auth === 'key') {
     const credential = goCredential()
-    if (credential === undefined) return { ok: false, status: 0, message: `${source.label}：还没配置 API key` }
+    if (credential === undefined) return { ok: false, status: 401, message: `${source.label}：还没配置 API key` }
     const response = await fetch(`${source.baseUrl}${source.chatPath}`, {
       method: 'POST',
       headers: {

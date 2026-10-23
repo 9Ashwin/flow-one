@@ -19,6 +19,7 @@
  */
 
 import http from 'node:http'
+import { validateListenAuth } from './config.mjs'
 import crypto from 'node:crypto'
 import {
   anthropicMessage, createOutcome, createStreamTranslator, errorBody, estimateInputTokens, foldChunk, toOpenAiRequest,
@@ -82,6 +83,7 @@ async function readBody(req) {
 }
 
 export function createBridgeServer({ config, upstream, log = () => {} }) {
+  validateListenAuth(config)
   const known = new Set()
   let modelsFetchedAt = 0
   let refreshing
@@ -105,7 +107,7 @@ export function createBridgeServer({ config, upstream, log = () => {} }) {
     // 但把它当成「上游模型名的一部分」去查表只会白掉一次兜底，索性在这里去掉。
     const raw = typeof requested === 'string' ? requested.trim().replace(/\[[^\]]*\]$/, '') : ''
     const wanted = raw
-    if (wanted !== '' && config.modelMap[wanted] !== undefined) return config.modelMap[wanted]
+    if (wanted !== '' && Object.hasOwn(config.modelMap, wanted)) return config.modelMap[wanted]
     if (wanted !== '' && known.has(wanted)) return wanted
     if (Date.now() - modelsFetchedAt > MODEL_TTL_MS || known.size === 0) await refreshModels()
     if (wanted !== '' && known.has(wanted)) return wanted
@@ -118,8 +120,12 @@ export function createBridgeServer({ config, upstream, log = () => {} }) {
 
   async function handleMessages(req, res, body) {
     const started = Date.now()
+    const controller = new AbortController()
+    res.once('close', () => controller.abort())
+    if (res.destroyed) return
     const inputTokens = estimateInputTokens(body)
     const model = await resolveModel(body?.model)
+    if (controller.signal.aborted) return
     const translated = toOpenAiRequest(body, {
       model,
       maxTokensCap: config.maxTokensCap,
@@ -132,9 +138,6 @@ export function createBridgeServer({ config, upstream, log = () => {} }) {
     }
     const wantsStream = body?.stream === true
     const id = `msg_${crypto.randomBytes(12).toString('hex')}`
-    const controller = new AbortController()
-    res.once('close', () => controller.abort())
-
     const result = await upstream.chat(translated.body, { signal: controller.signal })
     if (result.ok !== true) {
       anthropicError(res, result.status ?? 502, result.message)
@@ -143,7 +146,10 @@ export function createBridgeServer({ config, upstream, log = () => {} }) {
 
     if (!wantsStream) {
       const outcome = createOutcome()
-      for await (const chunk of result.chunks) foldChunk(outcome, chunk)
+      for await (const chunk of result.chunks) {
+        foldChunk(outcome, chunk)
+        if (outcome.error !== undefined) break
+      }
       if (outcome.error !== undefined) {
         anthropicError(res, 502, outcome.error)
         return
@@ -240,6 +246,7 @@ export function createBridgeServer({ config, upstream, log = () => {} }) {
     server,
     /** 默认只监听回环：这个口子花的是本机账号的额度。 */
     listen: () => new Promise((resolve, reject) => {
+      validateListenAuth(config)
       server.once('error', reject)
       server.listen(config.port, config.host, () => resolve(server.address()))
     }),
