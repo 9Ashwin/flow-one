@@ -1,41 +1,70 @@
-# flow-one —— 门禁都在这儿，一条命令跑完。
+# flow-one — every gate lives here, one command runs them all.
 #
-# 为什么用一个 Makefile 收口：规范写在文档里只能靠自觉，写成命令才能一键复核。
-# 提交前跑 `make verify`：语法检查 + 模块规约 + 全部单测。
+# Why a Makefile: a convention written in prose is enforced only by discipline,
+# but a convention written as a command can be re-checked on every change.
+# `make verify` before committing: syntax + module contracts + types + lint +
+# formatting + the whole test suite.
+#
+# Types, lint and formatting need devDependencies (typescript / eslint /
+# prettier). Without node_modules `make check` says so and fails. That is the
+# intended split: installing this package must not pull a build toolchain, so
+# `node cli.ts` and `make test` stay dependency-free.
+#
+# The source is TypeScript and is executed directly: Node 22.18+ strips the
+# types, so there is no build step and no dist/ directory. `tsc` only checks.
 
 NODE   ?= node
-SOURCES := $(wildcard cli.mjs src/*.mjs scripts/*.mjs test/*.mjs)
+SOURCES := $(wildcard cli.ts src/*.ts scripts/*.ts test/*.ts)
+NPX    ?= npx --no-install
 
-.PHONY: all verify check syntax modules test run clean help
+.PHONY: all verify check types lint modules test format-check format dev-deps run clean help
 
 all: verify
 
-## verify: 提交前跑这一条（语法 + 模块规约 + 全部单测）
+## verify: run before committing (static checks + the whole suite)
 verify: check test
 
-## check: 语法与模块规约（不打网络、不跑用例）
-check: syntax modules
+## check: static checks only (no network, no tests)
+check: types lint modules format-check
 
-## syntax: 每个文件都要能解析（拦下没被任何用例 import 到的语法错误）
-syntax:
-	@for file in $(SOURCES); do $(NODE) --check "$$file" || exit 1; done
-	@echo "语法检查通过：$(words $(SOURCES)) 个文件"
+## types: type-check the TypeScript sources (no emit)
+types: dev-deps
+	@$(NPX) tsc -p tsconfig.json
+	@echo "Type check passed"
 
-## modules: 无循环依赖、零第三方依赖、依赖方向正确
+## lint: ESLint (only rules that catch real defects)
+lint: dev-deps
+	@$(NPX) eslint .
+
+## modules: no cycles, no third-party imports, layer direction respected
 modules:
-	@$(NODE) scripts/check-modules.mjs
+	@$(NODE) scripts/check-modules.ts
 
-## test: 全部单测（node --test，零依赖）
+## test: the whole suite (node --test discovers *.test.ts natively)
 test:
 	@$(NODE) --test
 
-## run: 本地起一次（进交互菜单）
+## format-check: code style (Prettier)
+format-check: dev-deps
+	@$(NPX) prettier --check "src/**/*.ts" "test/**/*.ts" "scripts/**/*.ts" "cli.ts" eslint.config.mjs
+
+## format: rewrite files to the Prettier configuration
+format: dev-deps
+	@$(NPX) prettier --write "src/**/*.ts" "test/**/*.ts" "scripts/**/*.ts" "cli.ts" eslint.config.mjs
+
+## dev-deps: check that the dev toolchain is installed
+dev-deps:
+	@test -d node_modules/typescript || { \
+		echo "Missing dev dependencies (typescript / eslint / prettier). Run: npm install" >&2; \
+		exit 1; }
+
+## run: start the interactive menu locally
 run:
-	@$(NODE) cli.mjs
+	@$(NODE) cli.ts
 
 clean:
 	@rm -rf node_modules
 
-## help: 列出可用目标
+## help: list the available targets
 help:
 	@grep -E '^## ' $(MAKEFILE_LIST) | sed 's/^## /  make /'

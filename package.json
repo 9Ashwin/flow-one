@@ -4,21 +4,28 @@
   "private": false,
   "description": "把 WorkBuddy（国内版 CodeBuddy / 国际版）与 OpenCode 免费档接进 Claude Code CLI 的本地反代：Anthropic Messages ⇄ OpenAI Chat Completions，零依赖。",
   "type": "module",
-  "main": "./src/server.mjs",
+  "main": "./src/server.ts",
   "bin": {
-    "flow-one": "./cli.mjs",
-    "fo": "./cli.mjs"
+    "flow-one": "./cli.ts",
+    "fo": "./cli.ts"
   },
   "files": [
-    "cli.mjs",
-    "src"
+    "cli.ts",
+    "src",
+    "tsconfig.json"
   ],
   "scripts": {
-    "start": "node cli.mjs",
-    "test": "node --test"
+    "start": "node cli.ts",
+    "test": "node --test",
+    "check": "make check",
+    "verify": "make verify",
+    "types": "tsc -p tsconfig.json",
+    "lint": "eslint .",
+    "format": "prettier --write \"src/**/*.ts\" \"test/**/*.ts\" \"scripts/**/*.ts\" \"cli.ts\" eslint.config.mjs",
+    "format:check": "prettier --check \"src/**/*.ts\" \"test/**/*.ts\" \"scripts/**/*.ts\" \"cli.ts\" eslint.config.mjs"
   },
   "engines": {
-    "node": ">=18.17"
+    "node": ">=22.18"
   },
   "keywords": [
     "claude-code",
@@ -38,5 +45,14 @@
   "homepage": "https://github.com/9Ashwin/flow-one#readme",
   "bugs": {
     "url": "https://github.com/9Ashwin/flow-one/issues"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@types/node": "^26.6.5",
+    "eslint": "^10.13.0",
+    "globals": "^17.13.0",
+    "prettier": "^3.9.10",
+    "typescript": "^5.9.3",
+    "typescript-eslint": "^8.72.1"
   }
 }

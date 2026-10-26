@@ -3,3 +3,8 @@ node_modules/
 .DS_Store
 .idea/
 .vscode/
+
+# Local requirement workspace (dx). Per-requirement briefs, PRDs and progress
+# notes stay on this machine; they are working material, not repository content.
+tasks/
+.dotx/
