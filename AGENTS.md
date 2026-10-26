@@ -1,144 +1,220 @@
-# AGENTS.md — 这个仓库的章程
+# AGENTS.md — This repository's charter
 
-给**改这个仓库的人（和 agent）**看的。规范写在这里，门禁写成命令（`make verify`），
-两者对不上时以命令为准。
+For **people (and agents) changing this repository**. The conventions live here and the gates
+are written as commands (`make verify`); when the two disagree, the commands win.
 
-面向用户的输出一律中文；代码、命令、标识符、日志原文保持原样。
+Two language rules, and they do not overlap:
+
+- **Interactive UI stays Chinese.** Menus, prompts, wizard output, spinners — anything a person
+  reads on screen while using the tool.
+- **Everything else is English**: comments, JSDoc, error messages, log lines, script output,
+  README/AGENTS/docs. Code, commands and identifiers are never translated.
+
+The split is by **who consumes the string**, not by where it is printed:
+
+| String | Language | Why |
+| --- | --- | --- |
+| A `menu` / `select` / `confirm` label, a wizard heading, a spinner | Chinese | A person reads it while operating the tool |
+| `stdout` data (`fo status`, `fo models`) | **English** | It is data: scripts pipe it, and a machine is the consumer |
+| `stderr` progress lines (`log()`) | **English** | Diagnostics belong to logs, not to the UI |
+| `throw` messages and `hint` fields | **English** | The consumer is a script branching on the error contract |
+| Chinese input aliases (`fo login 国内版`) | Chinese | They are **user-supplied values**, not text this program prints |
+
+The source is TypeScript executed directly by Node (≥ 22.18 strips the types), so there is no
+build step and no `dist/`. `tsc --noEmit` is a checker, not a compiler — `make check` runs it.
 
 ---
 
-## 1. 先想清楚再动手
+## 1. Think before you touch anything
 
-- 不确定就问，别猜；有多种解释就摆出来，别默默选一个。
-- **最小实现**：能 50 行解决的不写 200 行。不加没要求的功能、不做「以后可能用得上」的抽象。
-- 只动该动的：不顺手改相邻代码、不重构没坏的东西；发现无关的死代码**指出来，不要删**。
-- 判据：**每一行改动都能追溯到用户的请求**。
+- If unsure, ask; do not guess. If there are several interpretations, present them rather than
+  silently picking one.
+- **Minimal implementation**: do not write 200 lines where 50 will do. Add no unrequested
+  features and no "might be useful later" abstractions.
+- Change only what must change: do not opportunistically edit neighboring code and do not
+  refactor what is not broken; if you find unrelated dead code, **point it out, do not delete
+  it**.
+- Criterion: **every changed line must trace back to the user's request**.
 
-## 2. 错误契约（`src/errors.mjs`）
+## 2. Error contract (`src/errors.ts`)
 
-命令边界的**任何**失败都必须是一个类型化错误。裸 `throw new Error('...')` 让调用方只能
-靠消息文本分支，那等于没有契约。
+**Any** failure at a command boundary must be a typed error. A bare
+`throw new Error('...')` forces callers to branch on message text, which means there is no
+contract at all.
 
-| 字段 | 含义 | 谁用 |
+| Field | Meaning | Used by |
 | --- | --- | --- |
-| `category` | **闭集**：`validation` / `auth` / `config` / `network` / `upstream` / `internal` | 脚本分支、退出码 |
-| `subtype` | 小写下划线，来自闭集；构造未声明的 subtype 直接抛 | 脚本分支、测试断言 |
-| `code` | **上游**的数字码（腾讯 `11128`、HTTP 状态码） | 排查上游问题 |
-| `param` | **只**说明哪一项用户输入不合法（`--port`、`BRIDGE_PORT`） | 提示改哪个参数 |
-| `hint` | **恢复动作**。修法写这里，**不要塞进 message** | 人读输出 |
-| `message` | 一句话说明发生了什么（可含上游原文） | 人读输出 |
+| `category` | **Closed set**: `validation` / `auth` / `config` / `network` / `upstream` / `internal` | Script branching, exit codes |
+| `subtype` | Lowercase with underscores, from a closed set; constructing an undeclared subtype throws | Script branching, test assertions |
+| `code` | The **upstream** numeric code (Tencent `11128`, HTTP status codes) | Diagnosing upstream problems |
+| `param` | Names **only** which user input is invalid (`--port`, `BRIDGE_PORT`) | Telling the user which argument to fix |
+| `hint` | The **recovery action**. Put the fix here, **not in message** | Human-readable output |
+| `message` | One sentence describing what happened (may include upstream text) | Human-readable output |
 
-**退出码只由 category 推导**，不看 subtype、不看 message：
+**Exit codes are derived from category alone**, not from subtype or message:
 
-| category | 退出码 | 什么时候用 |
+| category | Exit code | When to use it |
 | --- | --- | --- |
-| `validation` | 2 | 用户输入不合法（flag、参数、模型名） |
-| `auth` | 3 | 没登录、凭据失效、缺 key |
-| `config` | 4 | 配置缺失或自相矛盾（settings.json、服务文件、账本） |
-| `network` | 5 | 连不上、超时、读流出错 |
-| `upstream` | 6 | 上游明确拒绝：内容风控、门禁、额度、模型不可用 |
-| `internal` | 1 | 本程序自己的 bug（不该发生） |
+| `validation` | 2 | Invalid user input (flag, argument, model name) |
+| `auth` | 3 | Not logged in, expired credentials, missing key |
+| `config` | 4 | Missing or self-contradictory configuration (settings.json, service file, ledger) |
+| `network` | 5 | Cannot connect, timeout, read-stream error |
+| `upstream` | 6 | Explicit upstream rejection: content moderation, gate, quota, model unavailable |
+| `internal` | 1 | A bug in this program (should not happen) |
 
-`validation` 与 `config` 的分界是「谁给的」：命令行给的算 validation，文件里读出来的算 config。
-`network` 与 `upstream` 的分界是「有没有拿到应答」。
+The `validation`/`config` boundary is "who supplied it": values from the command line are
+validation, values read from files are config. The `network`/`upstream` boundary is "did we get
+a response".
 
-### 输出分工
+### Output split
 
-- **stdout 只放成功数据**（模型清单、`status --as-json`）；进度、告警、错误一律 stderr。
-  这样 `fo models --as-json | jq` 永远不会被日志污染。
-- 默认（人读，stderr）：`Error: <message>`，有 hint 时另起一行 `  → <hint>`。
-- `--json`（一行信封，stderr）：
+- **stdout carries success data only** (model lists, `status --as-json`); progress, warnings,
+  and errors always go to stderr. That way `fo models --as-json | jq` can never be polluted by
+  logs.
+- Default (human-readable, stderr): `Error: <message>`, with a second line `  → <hint>` when a
+  hint exists.
+- `--json` (one-line envelope, stderr):
   `{"ok":false,"error":{"type":<category>,"subtype":…,"code"?,"param"?,"hint"?,"message":…}}`
 
-## 3. 代码落点表
+## 3. Code placement table
 
-先找对文件，再动手。**依赖方向只能由下层指向上层**（数字小的可被数字大的依赖）：
+Find the right file before you act. **Dependencies may only point from lower layers to upper
+layers** (a lower number may be depended on by a higher number):
 
-| 层 | 文件 | 负责什么 |
+| Layer | File | Responsibility |
 | --- | --- | --- |
-| 0 | `src/home.mjs` | 数据目录与凭据路径。**故意什么都不 import** —— 它存在的意义就是打断循环依赖 |
-| 0 | `src/errors.mjs` | 错误契约、退出码、信封渲染 |
-| 0 | `src/sse.mjs` | SSE 切帧与「非 2xx → 类型化错误」 |
-| 0 | `src/products.mjs` | 两条腾讯产品线的常量与 UA 规则 |
-| 0 | `src/anthropic.mjs` | Anthropic ⇄ OpenAI 的请求翻译、流式翻译、非流式归并、token 估算 |
-| 0 | `src/fingerprint.mjs` | 内容风控改写（三条字面量规则） |
-| 0 | `src/prompt.mjs` | 终端交互：菜单、方向键选择、编号直选、密钥输入、转圈 |
-| 1 | `src/auth.mjs` | 腾讯两条线的登录、凭据读写、静默续期 |
-| 1 | `src/buddy.mjs` | 腾讯对话面的出站请求形状 |
-| 1 | `src/opencode.mjs` | OpenCode 免费档（形状门禁）与 Go 套餐（会话头） |
-| 2 | `src/sources.mjs` | 来源表：前缀、标签、默认模型、是否要登录 |
-| 2 | `src/config.mjs` | flag/env/默认值的解析与校验 |
-| 3 | `src/install.mjs` | 写/还原 Claude Code settings、launchd 与 systemd 服务、账本 `install.json` |
-| 3 | `src/upstreams.mjs` | 来源工厂与聊天入口（前缀解析、改写器选择） |
-| 3 | `src/server.mjs` | 本地反代：路由、鉴权、心跳、上游状态透传 |
-| 4 | `src/doctor.mjs` | 自检：本地体检 + **逐项重推两条门禁**的探针 |
-| 5 | `src/wizard.mjs` | 交互向导：一键配置、切换模型、状态、还原 |
-| 6 | `cli.mjs` | 命令入口：解析参数、在边界渲染类型化错误、推导退出码 |
+| 0 | `src/home.ts` | Data directory and credential paths. **Deliberately imports nothing** — its entire reason for existing is to break circular dependencies |
+| 0 | `src/errors.ts` | Error contract, exit codes, envelope rendering |
+| 0 | `src/sse.ts` | SSE framing and "non-2xx → typed error" |
+| 0 | `src/products.ts` | Constants and UA rules for the two Tencent product lines |
+| 0 | `src/anthropic.ts` | Anthropic ⇄ OpenAI request translation, streaming translation, non-streaming consolidation, token estimation |
+| 0 | `src/fingerprint.ts` | Content-moderation rewrites (four literal rules plus one whole-line removal) |
+| 0 | `src/prompt.ts` | Terminal interaction: menus, arrow-key selection, direct number selection, secret input, spinners |
+| 1 | `src/auth.ts` | Login for the two Tencent lines, credential read/write, silent renewal |
+| 1 | `src/buddy.ts` | Outbound request shape for the Tencent chat surface |
+| 1 | `src/opencode.ts` | OpenCode free tier (shape gate) and Go plan (session header) |
+| 2 | `src/sources.ts` | Source table: prefixes, labels, default models, whether login is required |
+| 2 | `src/config.ts` | Parsing and validation of flags/env/defaults |
+| 3 | `src/install.ts` | Writing/restoring Claude Code settings, launchd and systemd services, `install.json` ledger |
+| 3 | `src/upstreams.ts` | Source factories and the chat entry point (prefix resolution, rewriter selection) |
+| 3 | `src/server.ts` | Local reverse proxy: routing, authentication, heartbeat, upstream status passthrough |
+| 4 | `src/doctor.ts` | Self-check: local health checks + probes that **re-derive both gates item by item** |
+| 5 | `src/wizard.ts` | Interactive wizard: one-click setup, switch model, status, restore |
+| 6 | `cli.ts` | Command entry: parse arguments, render typed errors at the boundary, derive exit codes |
 
-### 模块规约（`make modules` 会检查）
+### Module conventions (checked by `make modules`)
 
-- **零第三方依赖**：只允许 `node:` 内置模块与相对路径。`dependencies` 必须为空 ——
-  这是安装体验的核心（一条 `npm i -g flow-one` 装完就能用，pnpm/bun 也不用放行脚本）。
-- **不允许循环依赖**：ESM 下的环路表现为 TDZ 报错（`Cannot access 'X' before initialization`），
-  报错点离成因很远。真需要互相引用时，抽出像 `home.mjs` 那样的第三个模块来打断。
-- **不靠分包解决规模问题**：单包是刻意的选择。文件超过 500 行（软上限）先拆函数或拆模块。
-- 新增模块要同时补进 `scripts/check-modules.mjs` 的 `LAYERS` 表。
+- **Zero third-party dependencies**: only `node:` built-ins and relative paths are allowed.
+  `dependencies` must be empty — this is the core of the installation experience (one
+  `npm i -g flow-one` and you are done, and pnpm/bun need no install-script allowlisting).
+- **Circular dependencies are not allowed**: an ESM cycle manifests as a TDZ error
+  (`Cannot access 'X' before initialization`) far from its cause. When two modules genuinely
+  need each other, extract a third module like `home.ts` to break the cycle.
+- **Do not solve scale by splitting packages**: a single package is a deliberate choice. For a
+  file over 500 lines (soft limit), split functions or split modules first.
+- New modules must also be added to the `LAYERS` table in `scripts/check-modules.ts`.
+- Relative imports carry the real `.ts` extension (`from './errors.ts'`). Node's type stripping
+  resolves the on-disk specifier, so there is no extension rewriting to hide it.
 
-## 4. 套餐分离（硬不变式）
+## 4. Plan separation (hard invariant)
 
-**判据是「这条来源是谁」，不是模型名前缀。**
+**The criterion is "which source this is", not the model name prefix.**
 
-| 前缀 | 来源 | 认证 | 内容风控改写 | 形状门禁 |
+| Prefix | Source | Authentication | Content-moderation rewrite | Shape gate |
 | --- | --- | --- | --- | --- |
-| `cn/` | WorkBuddy 国内版（CodeBuddy） | 浏览器授权 | **要** | 无 |
-| `intl/` | WorkBuddy 国际版 | 浏览器授权 | **要** | 无 |
-| `oc/` | OpenCode 免费档 | 匿名 `Bearer public` | 不要 | **要** |
-| `ocg/` | OpenCode Go 套餐 | `oc_sk_…` + 会话头 | 不要 | 不要 |
+| `cn/` | WorkBuddy China edition (CodeBuddy) | Browser authorization | **Required** | None |
+| `intl/` | WorkBuddy International edition | Browser authorization | **Required** | None |
+| `oc/` | OpenCode free tier | Anonymous `Bearer public` | Not required | **Required** |
+| `ocg/` | OpenCode Go plan | `oc_sk_…` + session header | Not required | Not required |
 
-改写器由来源自己给出（`systemRewriterFor` 只认那两条线）；拿不到改写器时，出站 system
-必须**逐字节不变**。改动这条路径必须配回归测试。
+The rewriter is supplied by the source itself (`systemRewriterFor` recognizes only those two
+lines); when no rewriter is available, the outbound system prompt must be **byte-for-byte
+unchanged**. Any change to this path must come with a regression test.
 
-## 5. 跨平台
+## 5. Cross-platform
 
-- **macOS 与 Linux 都是一等目标**：服务管理（launchd / systemd 用户级 unit）、打开浏览器
-  （`open` / `xdg-open`）、日志位置（文件 / `journalctl --user -u`）都必须两条都实现。
-- `systemctl --user` 之前必须补 `XDG_RUNTIME_DIR`（SSH / 非登录壳里它是空的，否则报
-  `Failed to connect to bus: No medium found`，而向导会误报「配置已写入」）。
-  这类「连不上 bus」要单独识别并给出两条路（`loginctl enable-linger` 后重进登录壳，或前台跑）。
-- 路径一律 `path.join` + `os.homedir()`，不写死平台路径。
-- 平台专有断言分文件或用 `process.platform` 跳过；公共用例不得真去动本机的 launchd/systemd。
-- macOS 与 Linux 两边都要亲手验（没有 CI 代跑；只测一边等于没测）。
+- **macOS and Linux are both first-class targets**: service management (launchd / systemd
+  user-level units), opening a browser (`open` / `xdg-open`), and log locations (files /
+  `journalctl --user -u`) must all be implemented for both.
+- `XDG_RUNTIME_DIR` must be set before `systemctl --user` (it is empty in SSH / non-login
+  shells, otherwise you get `Failed to connect to bus: No medium found`, and the wizard
+  falsely reports "configuration written").
+  Recognize this class of "cannot connect to bus" separately and offer both paths
+  (`loginctl enable-linger` followed by re-entering a login shell, or run in the foreground).
+- Always use `path.join` + `os.homedir()` for paths; never hard-code platform paths.
+- Platform-specific assertions go in separate files or are skipped via `process.platform`;
+  shared test cases must never actually touch the local launchd/systemd.
+- Verify by hand on both macOS and Linux (there is no CI to do it; testing one side is the same
+  as testing neither).
 
-## 6. 别重复问同一件事
+## 6. Never ask the same question twice
 
-问过并落盘的选择**不要再问**：已装后台服务就直接更新；用户拒绝过就只提示怎么开启
-（`fo setup --service`）。选择记在 `install.json` 的 `autoStart` / `autoStartAsked`；
-卸载时一并忘掉（下次配置该重新问）。显式 `--service` / `--no-service` 永远优先。
+**Do not ask again about choices that have been asked and recorded to disk**: if the background
+service is already installed, just update it; if the user declined, only tell them how to enable
+it (`fo setup --service`). The choice is recorded in `install.json` as `autoStart` /
+`autoStartAsked`; forget it on uninstall (the next configuration should ask again). An explicit
+`--service` / `--no-service` always wins.
 
-同理，`status` 与向导**不要为不需要登录的来源编造「未登录」的假线索**，也不要把
-「没装服务」与「改名前的旧服务还在跑」混为一谈。
+Likewise, `status` and the wizard **must not invent fake "not logged in" signals for sources
+that need no login**, and must not conflate "no service installed" with "an old service from
+before the rename is still running".
 
-## 7. 测试与验证门禁
+## 7. Testing and verification gates
 
-- **每个行为变更都要有回归测试**，用例名说清「什么坏了会红」。
-- 用例**不得碰真实家目录**：一律把 `BRIDGE_HOME`（必要时还有 `HOME` / `CLAUDE_CONFIG_DIR`）
-  指到 `fs.mkdtempSync` 出来的临时目录；不得真去调用 launchd/systemd。
-- 提交前跑 `make verify`（= `make check` + `make test`）。**没有 CI 兜底**（仓库不带
-  `.github/workflows`），门禁只能自己跑。
-- 别只信自述：验收要给出**命令与输出**（真机端到端：真 Claude Code 分别走通腾讯一条线与
-  OpenCode 一条线）。
+- **Every behavior change needs a regression test**, and the test name must state what breaks
+  and what turns red as a result.
+- Test cases **must not touch the real home directory**: always point `BRIDGE_HOME` (and
+  `HOME` / `CLAUDE_CONFIG_DIR` when necessary) at a temporary directory created by
+  `fs.mkdtempSync`; they must never actually invoke launchd/systemd.
+- Run `make verify` before committing (= `make check` + `make test`). **There is no CI
+  backstop** (the repository has no `.github/workflows`), so the gates can only be run by hand.
+- `make check` is types (`tsc --noEmit`) + lint (ESLint) + formatting (Prettier) + module
+  contracts. It needs `npm install` once for the dev toolchain; `make test` does not.
+- Lint findings are graded on purpose: dead bindings are **warnings** (see §1 — point out, do
+  not delete), while unbalanced-promise and literal-throw mistakes are **errors**.
+- Do not trust self-reports: acceptance must include **commands and output** (real-machine
+  end-to-end: a real Claude Code going through one Tencent line and one OpenCode line
+  respectively).
 
-## 8. 分发
+## 8. Distribution
 
-**发布渠道就是 GitHub 仓库本身**：`npm i -g github:9Ashwin/flow-one`。本项目**不发布到
-npm 仓库** —— 零依赖单包不需要仓库中介，而 npm 现在对新包要求维护者带 2FA 批准
-（`E_STAGE_REQUIRED`），多一个渠道只是多一处会坏的环节。
+**The release channel is the GitHub repository itself**: `npm i -g github:9Ashwin/flow-one`.
+This project **does not publish to the npm registry** — a zero-dependency single package needs
+no registry in the middle, and npm now requires maintainers to approve new packages with 2FA
+(`E_STAGE_REQUIRED`); an extra channel is just one more place to break.
 
-发版 = 打 tag（`vX.Y.Z`）+ 更新 `package.json` 的 `version`，两者必须一致；
-`v0.2.x` 是被弃用的 Go 实现的 tag，不要复用。
+Releasing = tagging (`vX.Y.Z`) + updating `version` in `package.json`, and the two must match;
+`v0.2.x` are tags of the deprecated Go implementation — do not reuse them.
 
-## 9. 提交与沟通
+TypeScript is executed, not compiled: `bin` points at `cli.ts`, and Node ≥ 22.18 strips the
+types on the fly. That is why `engines.node` is `>=22.18` — a lower floor would install cleanly
+and then fail on the first run with a syntax error instead of a clear message.
 
-- 提交信息用中文，讲清**为什么**这么改（是什么改了什么，为什么是这条路），别复述 diff。
-- 修 bug 的提交要写清「什么症状 → 根因 → 怎么修 → 哪条用例盯着它」。
-- 注释讲「为什么」，不复述代码；踩过的坑写进注释，别让下一个人再踩一次。
+## 9. Commits and communication
+
+- Commit messages are in Chinese and explain **why** the change was made (what changed and why
+  this approach), not a restatement of the diff.
+- Bug-fix commits must state "symptom → root cause → fix → which test guards it".
+- Comments explain "why", not a restatement of the code; record pitfalls in comments so the next
+  person does not hit them again.
+
+### Comment format
+
+The shape follows the sibling project `floway`. The distinction is by **audience**, not by taste:
+
+| Where | Form | Why |
+| --- | --- | --- |
+| Top of a file | `//` line comments | A module overview is prose, not an API contract; it stays plain text |
+| An exported function, type or constant | `/** … */` | This is what an editor shows on hover, so it must be attached to the symbol |
+| Inside a function body | `//` | Inline notes explain a decision at the point it was made |
+
+Rules that follow:
+
+- **No `@module` tags.** The file path is already the module name; a second copy drifts.
+- **No decorative separators** (`// ── Section ──`, `/* ===== */`). They add a line of noise per
+  section and silently go stale when the section moves. If a file needs sections to be readable,
+  that is a signal to split it, not to draw a line.
+- **Wrap at 100 columns** and write the reason first: what breaks, what was measured, what the
+  alternative cost was. A comment that restates the next line is deleted.
+- **Measured facts carry their date.** "Measured 2026-10-16: 400 + code 11128" is verifiable;
+  "the upstream seems to dislike this" is not.

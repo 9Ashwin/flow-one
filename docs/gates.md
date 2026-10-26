@@ -1,178 +1,205 @@
-# 两条门禁：事实、证据与复验方式
+# The two gates: facts, evidence, and how to re-verify
 
-这个项目的功能内核压在两条**别人家的规则**上：腾讯的内容风控和 OpenCode 免费档的
-报文形状门禁。它们都可能在没有任何预告的情况下改变。
+This project's functional core rests on two **other people's rules**: Tencent's content
+moderation and the OpenCode free tier's payload-shape gate. Both can change without notice.
 
-所以这份文档不写猜测，只写**可复验的事实**：每条规则是什么、我们是怎么知道的、
-失效时是什么症状、以及怎么当场复验。
+So this document contains no guesses, only **re-verifiable facts**: what each rule is, how we
+found out, what the symptoms look like when it breaks, and how to re-verify it on the spot.
 
 ```bash
-fo doctor          # 逐项重推两条门禁，并体检本地配置
+fo doctor          # re-derives both gates item by item and checks the local configuration
 ```
 
-doctor 会先发一次完整形状确认能过，再**逐项去掉一个要件**确认「这一条确实还是必填」。
-上游放松或收紧，都会在下一次 doctor 里显形：完整形状过不了 → 收紧；某个变体不再被拒
-→ 那一条已放松。
+doctor first sends one request with the full shape to confirm it passes, then **removes one
+requirement at a time** to confirm "this one is indeed still mandatory". If the upstream relaxes
+or tightens anything, the next doctor run shows it: the full shape fails → tightened; some
+variant is no longer rejected → that requirement has been relaxed.
 
 ---
 
-## 一、腾讯内容风控（`400` + `code 11128`）
+## 1. Tencent content moderation (`400` + `code 11128`)
 
-**症状**：整轮请求被拒，报文里是
+**Symptom**: the whole request is rejected. The upstream payload is reproduced verbatim below
+(the `msg` text is Chinese on the wire):
 
 ```
 {"code":11128,"msg":"请求被拦截，… Illegal API invocation from an unapproved channel"}
 ```
 
-客户端侧只看到一句「用不了」，很容易误判成「国际版挂了」或「额度用完了」。
+The client only sees "it doesn't work", which is easily misread as "the International edition is
+down" or "the quota is used up".
 
-**判据**：逐字符的**字面量**匹配，不是关键词。少一个词、多一个空格、换一个词都不拦
-（所以不要把这些规则「泛化」成正则关键词 —— 泛化会误伤无关内容，而真正的判据本来就是整句）。
+**Criterion**: a **literal** match, character for character — not a keyword match. One missing
+word, one extra space, or a different word means no block (so do not "generalize" these rules
+into regex keywords — generalization damages unrelated content, while the real criterion is the
+whole sentence to begin with).
 
-| # | 被拦的字面量 | 处理 | 证据 |
+| # | Blocked literal | Handling | Evidence |
 | --- | --- | --- | --- |
-| 1 | `x-anthropic-billing-header:` 开头的**整行** | 整行删除 | 2026-10-16：任意值都拦（键名是判据，值无关），删掉后 200 |
-| 2 | `You are Claude Code, Anthropic's official CLI for Claude` | 改成 `…, an official CLI for Claude` | 2026-10-16：两个片段**同现**才拦；改写后仍保留身份句 |
-| 3 | `Main branch (you will usually use this for PRs)` | 改成 `Main branch (PRs usually go here)` | 2026-10-16：Claude Code **只在 git 仓库里**注入该句，整句拦；改写后 200（`intl/deepseek-v4.1-flash`、`cn/hy4-preview` 等四个模型实测） |
-| 4 | `You are an AI agent powered by DeepSeek Harness`（DSH 的 persona 首句） | 改成 `…powered by a DeepSeek harness` | 2026-10-22：整句逐字符拦（拆成 `DeepSeek Harness` / `You are an AI agent`、或去掉句号都不拦）；改写后 200（`cn/deepseek-v4.1-flash`；`intl` 不受影响） |
-| 5 | `through the DeepSeek Harness Web GUI` **与**紧随的「this page / this GUI / this app」句**同现** | 改成 `through the harness Web GUI` | 2026-10-22：两句单独各自 200、同现才拦；只改这一处 → 200（`cn/deepseek-v4.1-flash`） |
+| 1 | The **entire line** starting with `x-anthropic-billing-header:` | Delete the whole line | 2026-10-16: any value is blocked (the key name is the criterion, the value is irrelevant); 200 after deletion |
+| 2 | `You are Claude Code, Anthropic's official CLI for Claude` | Changed to `…, an official CLI for Claude` | 2026-10-16: blocked only when **both fragments co-occur**; the identity sentence is retained after the rewrite |
+| 3 | `Main branch (you will usually use this for PRs)` | Changed to `Main branch (PRs usually go here)` | 2026-10-16: Claude Code injects this sentence **only in git repositories**; the whole sentence is blocked; 200 after the rewrite (measured on four models including `intl/deepseek-v4.1-flash` and `cn/hy4-preview`) |
+| 4 | `You are an AI agent powered by DeepSeek Harness` (DSH's persona first sentence) | Changed to `…powered by a DeepSeek harness` | 2026-10-22: the whole sentence is blocked character for character (splitting it into `DeepSeek Harness` / `You are an AI agent`, or removing the period, is not blocked); 200 after the rewrite (`cn/deepseek-v4.1-flash`; `intl` is unaffected) |
+| 5 | `through the DeepSeek Harness Web GUI` **co-occurring with** the immediately following "this page / this GUI / this app" sentence | Changed to `through the harness Web GUI` | 2026-10-22: each sentence alone yields 200, only co-occurrence is blocked; changing just this one spot → 200 (`cn/deepseek-v4.1-flash`) |
 
-补充事实：
+Additional facts:
 
-- **只改 system**：同一句出现在 user / tool 里实测不拦；
-- **只对腾讯系模型生效**：`cn/…`、`intl/…`（前缀判别见 `src/fingerprint.mjs` 的 `isTencentModel`）；
-- 非 git 目录不注入第 3 条，所以同一条命令在 `/tmp` 正常、在项目目录里 400 —— 这个
-  差异本身就说明问题出在 Claude Code 注入的上下文里。
-- 判据是**按客户端**的：Claude Code 撞的是第 1–3 条，DSH（DeepSeek Harness）撞的是
-  第 4–5 条 —— 客户端的身份句就是它自己的 system 提示词，所以换客户端要重推一遍。
+- **Only `system` is rewritten**: the same sentence in user / tool messages is measured not to be
+  blocked;
+- **Only Tencent-family models are affected**: `cn/…`, `intl/…` (prefix detection is
+  `isTencentModel` in `src/fingerprint.ts`);
+- Rule 3 is not injected in non-git directories, so the same command works in `/tmp` but returns
+  400 in a project directory — that difference itself shows the problem lies in the context
+  Claude Code injects.
+- The criteria are **per client**: Claude Code hits rules 1–3, DSH (DeepSeek Harness) hits rules
+  4–5 — a client's identity sentences are its own system prompt, so switching clients means
+  re-deriving these.
 
-**复验**：`fo doctor` 会把这几条字面量拼进一次最小请求真发出去。额度/频率受限会单独
-报出来（那不是门禁问题）。
+**Re-verification**: `fo doctor` puts these literals into a minimal request and actually sends
+it. Quota/rate limiting is reported separately (that is not a gate problem).
 
-### 变体：会话身份头（2026-10-21 起，与内容无关）
+### Variant: conversation identity headers (since 2026-10-21, unrelated to content)
 
-同是 `400` + `code 11128`，但判据**不是**上表那三条字面量 —— 平凡 system 也照拦。
+Also `400` + `code 11128`, but the criterion is **not** the literals in the table above — even a
+trivial system prompt is blocked.
 
-**根因与解法**：官方客户端每次对话都会带三个**会话身份头**，缺任一即 11128。
+**Root cause and fix**: the official client sends three **conversation identity headers** on
+every conversation; missing any one of them yields 11128.
 
-| 头 | 必需？ | 证据 |
+| Header | Required? | Evidence |
 | --- | --- | --- |
-| `X-Conversation-ID` | **必需** | 2026-10-22：去掉 → 11128；值不要求 UUID（`conv-1` 也行） |
-| `X-Conversation-Request-ID` | **必需** | 同上 |
-| `X-Conversation-Message-ID` | **必需** | 同上 |
-| `X-Request-ID`、`x-codebuddy-request: 1`、`X-Agent-Intent: craft`、`X-Private-Data: true`、`acp-connection-id`、`x-requested-with` | 实测**非必需**（去掉仍 200） | 同上，逐项单变量 |
-| `X-IDE-Version` / `User-Agent` 的版本号 | 非必需（5.5.2 与 5.7.6 都过） | 同上 |
+| `X-Conversation-ID` | **Required** | 2026-10-22: removing it → 11128; the value need not be a UUID (`conv-1` works too) |
+| `X-Conversation-Request-ID` | **Required** | Same as above |
+| `X-Conversation-Message-ID` | **Required** | Same as above |
+| `X-Request-ID`, `x-codebuddy-request: 1`, `X-Agent-Intent: craft`, `X-Private-Data: true`, `acp-connection-id`, `x-requested-with` | Measured **not required** (200 without them) | Same as above, one variable at a time |
+| The version numbers in `X-IDE-Version` / `User-Agent` | Not required (both 5.5.2 and 5.7.6 pass) | Same as above |
 
-证据来源：官方客户端 `WorkBuddy AI 5.7.6` 的 `app.asar`（`main/daemon-bootstrap.js`
-里 `Yr()` 每次设这三个头），再逐项去掉重推。落点在 `src/buddy.mjs` 的
-`conversationHeaders()`：会话 id 按进程固定，请求/消息 id 每请求新生成。
+Evidence source: `app.asar` of the official client `WorkBuddy AI 5.7.6` (`Yr()` in
+`main/daemon-bootstrap.js` sets these three headers each time), then re-derived by removing them
+one at a time. The implementation is `conversationHeaders()` in `src/buddy.ts`: the conversation
+id is fixed per process, while the request/message ids are newly generated per request.
 
-同账号另外 25 个 `intl/…` 模型不是 11128，而是 `429` + `code 14018 Credits exhausted`
-（额度问题，与门禁无关）；`cn/…` 不校验这一组，带上无害。
+Another 25 `intl/…` models on the same account do not return 11128 but `429` +
+`code 14018 Credits exhausted` (a quota problem, unrelated to the gate); `cn/…` does not check
+this group, and sending them does no harm.
 
-**复验**：`fo doctor` 的「腾讯内容风控」一节；`11128` 的两种含义（内容风控 / 会话身份）
-靠 `displayTips` 与「换平凡 prompt 还拦不拦」区分。
+**Re-verification**: the "Tencent content moderation" section of `fo doctor`; the two meanings
+of `11128` (content moderation / conversation identity) are distinguished by `displayTips` and
+by whether a trivial prompt is still blocked.
 
-**加新规则的流程**：
+**Procedure for adding a new rule**:
 
-1. 抓下**真实请求体** —— 用一个本地假上游接住 Claude Code 的请求最省事；
-2. 二分定位到具体那一行（删一半看还拦不拦）；
-3. 确认它是字面量判据（改一个词就不拦）后，加进 `src/fingerprint.mjs` 的 `RULES`；
-4. 把「日期 + 判据 + 证据」补进上面那张表。
+1. Capture a **real request body** — a local fake upstream that receives Claude Code's requests
+   is the easiest way;
+2. Bisect down to the exact line (delete half and see whether it is still blocked);
+3. After confirming it is a literal criterion (changing one word removes the block), add it to
+   `RULES` in `src/fingerprint.ts`;
+4. Add "date + criterion + evidence" to the table above.
 
 ---
 
-## 二、OpenCode 免费档的报文形状门禁
+## 2. The OpenCode free tier's payload-shape gate
 
-**症状**：`403` + 
+**Symptom**: `403` +
 
 ```
 FreeTierError: OpenCode's free tier can only be used from within OpenCode.
 ```
 
-匿名（`Authorization: Bearer public`）能列到 88 个模型，但**标准 OpenAI 请求会被拒** ——
-它按报文形状判断调用方是不是官方客户端。
+Anonymous access (`Authorization: Bearer public`) can list 88 models, but **a standard OpenAI
+request is rejected** — it identifies whether the caller is the official client by payload
+shape.
 
-| 要件 | 事实 | 证据 |
+| Requirement | Fact | Evidence |
 | --- | --- | --- |
-| `stream: true` | 必填 | 2026-10-16：`false` → 403 |
-| `tools` 含 `bash` / `glob` / `grep` / `read` 四个**小写** function，各自 `parameters` 至少声明一个 property | 必填 | 同上：去掉 → 403 |
-| 会话 id = `ses_` + 12 位小写 hex + **14** 位 base62（尾段总长 26） | 必填，且只验形状 | 同上：写成 38 位 → 403；12+14 通过 |
-| `x-opencode-project`（40 hex）、`x-opencode-session`、`x-opencode-request`（`msg_` 形状）、`x-opencode-client: cli`、`User-Agent: opencode/<版本>` | 按官方客户端形状发送 | 2026-10-16 |
-| `x-opencode-session-id`（与 `x-opencode-session` 同值） | **实测当前非必填**（去掉仍 200），但仍照发 | 2026-10-16 `fo doctor` 判成 `relaxed` |
+| `stream: true` | Required | 2026-10-16: `false` → 403 |
+| `tools` contains the four **lowercase** function tools `bash` / `glob` / `grep` / `read`, each declaring at least one property in `parameters` | Required | Same as above: removing them → 403 |
+| Session id = `ses_` + 12 lowercase hex chars + **14** base62 chars (tail segment totals 26) | Required, and only the shape is checked | Same as above: 38 characters → 403; 12+14 passes |
+| `x-opencode-project` (40 hex), `x-opencode-session`, `x-opencode-request` (`msg_` shape), `x-opencode-client: cli`, `User-Agent: opencode/<version>` | Sent in the official client's shape | 2026-10-16 |
+| `x-opencode-session-id` (same value as `x-opencode-session`) | **Measured currently not required** (still 200 without it), but still sent | 2026-10-16; `fo doctor` judged it `relaxed` |
 
-⚠️ **尾段长度是最容易搞错的一点**：官方 `id/index.ts` 里的 `LENGTH = 26` 是**尾段总长**
-（12 hex + 14 base62），把它当成随机段长度就会得到 38 字符，然后一律 403。
+⚠️ **The tail-segment length is the easiest thing to get wrong**: `LENGTH = 26` in the official
+`id/index.ts` is the **total tail length** (12 hex + 14 base62). Treating it as the length of the
+random segment yields 38 characters, and then an unconditional 403.
 
-⚠️ **反例陷阱**：`ses_` + 26 个 `0` **形状是对的** —— `0` 既是 hex 字符也是 base62 字符，
-所以它符合 `^ses_[0-9a-f]{12}[0-9A-Za-z]{14}$`，真假门禁都不会拒。拿它当「错形状」的
-反例会得到假结论（这个坑在 `doctor` 的探针里踩过一次）。
+⚠️ **Counterexample trap**: `ses_` + 26 `0` characters **has the correct shape** — `0` is both a
+hex character and a base62 character, so it matches `^ses_[0-9a-f]{12}[0-9A-Za-z]{14}$`, and
+neither the real gate nor a fake one will reject it. Using it as a "wrong shape" counterexample
+produces a false conclusion (this pitfall was hit once in `doctor`'s probes).
 
-**工具名冲突怎么抹平**：Claude Code 自带 `Bash` / `Read`，门禁要的是小写四个名字，
-而且它不一定声明 `glob` / `grep`。处理方式是：
+**How tool-name conflicts are smoothed over**: Claude Code ships `Bash` / `Read`, while the gate
+wants four lowercase names, and it does not necessarily declare `glob` / `grep`. The approach:
 
-- 调用方声明过的（不分大小写）→ 出站改小写，响应里**改回原名**（否则 Claude Code
-  认不出 `bash` 这个工具）；
-- 调用方没声明的 → 补一个「摆设」桩，并把模型对桩的调用**整条丢弃** —— 那是
-  Claude Code 执行不了的工具名，转发过去只会变成一条无从处理的错误。
+- For tools the caller declared (case-insensitive) → lowercase them outbound and **restore the
+  original names** in the response (otherwise Claude Code will not recognize the `bash` tool);
+- For tools the caller did not declare → add a dummy stub and **drop the model's calls to the
+  stub entirely** — those are tool names Claude Code cannot execute; forwarding them would only
+  produce an error nobody can handle.
 
-**复验**：`fo doctor` 逐项重推（完整形状 + 四个变体）。
+**Re-verification**: `fo doctor` re-derives them item by item (full shape + four variants).
 
 ---
 
-## 三、OpenCode Go 套餐（认证通道，`/zen/go/v1`）
+## 3. OpenCode Go plan (authenticated channel, `/zen/go/v1`)
 
-与免费档**不是同一条路**：端点不同、模型清单不同（Go 37 个）、规矩也不同。
-DSH 桌面端的 `cordis.yml` 里 `opencode-go` 就是这套配置（`apiKeyEnv:
-OPENCODE_GO_API_KEY`、`baseURL: https://opencode.ai/zen/go/v1`、
-`headers: { x-opencode-session: <uuid> }`）。
+**Not the same path** as the free tier: different endpoint, different model list (37 for Go), and
+different rules. In the DSH desktop app's `cordis.yml`, `opencode-go` is exactly this
+configuration (`apiKeyEnv: OPENCODE_GO_API_KEY`,
+`baseURL: https://opencode.ai/zen/go/v1`, `headers: { x-opencode-session: <uuid> }`).
 
-| 要件 | 事实 | 证据 |
+| Requirement | Fact | Evidence |
 | --- | --- | --- |
-| `Authorization: Bearer oc_sk_…` | 必需 | 2026-10-16：无头、乱写 key 都 401 |
-| `x-opencode-session` | **必需**，值随意（UUID 或 `ses_` 形状都收） | 2026-10-16：缺 → `400 MissingSessionID`（"cannot be routed efficiently"）；两种值都 200 |
-| 免费档那套形状（5 个客户端头、四个小写工具、`ses_` 形状） | **不需要** | 同上：裸 OpenAI 报文直接 200 |
-| `reasoning_effort` | `low` / `medium` / `high` / `max` / `minimal` 都 200；**`off` 被拒** | 2026-10-16：`off` → 422，且文案是误导性的 `Endpoint is unavailable` |
+| `Authorization: Bearer oc_sk_…` | Required | 2026-10-16: no header and a bogus key both yield 401 |
+| `x-opencode-session` | **Required**, any value (both UUID and `ses_` shapes are accepted) | 2026-10-16: missing → `400 MissingSessionID` ("cannot be routed efficiently"); both value types yield 200 |
+| The free tier's shape (5 client headers, four lowercase tools, `ses_` shape) | **Not needed** | Same as above: a bare OpenAI payload returns 200 directly |
+| `reasoning_effort` | `low` / `medium` / `high` / `max` / `minimal` all yield 200; **`off` is rejected** | 2026-10-16: `off` → 422, with the misleading message `Endpoint is unavailable` |
 
-补充事实（都是实测撞出来的）：
+Additional facts (all discovered by measurement):
 
-- **deepseek 这族默认就思考**：`max_tokens` 给小了（实测 48 与 400）可能整段额度被
-  `reasoning_content` 吃掉，正文为空、`stop_reason: max_tokens` —— 看着像桥坏了，
-  其实不是；
-- **`high` 偶发 503**：首次实测撞到一次，随后连测 3 次都 200，属上游抖动，重试即可；
-- 能力元数据（窗口 / 输出上限 / 视觉）同样取自 models.dev：`deepseek-v4.1-flash` =
-  1M 窗口 / 384k 输出，与 DSH 配置里手写的值一致。
+- **The deepseek family thinks by default**: with a small `max_tokens` (measured with 48 and
+  400), the entire budget may be consumed by `reasoning_content`, leaving the content empty and
+  `stop_reason: max_tokens` — it looks like the bridge is broken, but it is not;
+- **`high` occasionally returns 503**: hit once on the first measurement, then 3 consecutive runs
+  all yielded 200; this is upstream jitter, so just retry;
+- Capability metadata (window / output limit / vision) also comes from models.dev:
+  `deepseek-v4.1-flash` = 1M window / 384k output, consistent with the values hand-written in the
+  DSH configuration.
 
-**复验**：`fo doctor` 的「OpenCode Go 套餐（认证通道）」一节会重推这三条
-（带会话头的最小对话、不带会话头应被拒、模型清单要 key）。
+**Re-verification**: the "OpenCode Go plan (authenticated channel)" section of `fo doctor`
+re-derives these three (a minimal conversation with the session header, a request without it that
+should be rejected, and a model list that requires the key).
 
 ---
 
-## 四、失效时是什么样
+## 4. What failure looks like
 
-| 失效点 | 症状 | 响亮吗 |
+| Failure point | Symptom | Loud? |
 | --- | --- | --- |
-| 腾讯内容风控加了新规则 | `400` + `11128`，整轮失败 | 响亮，但客户端文案容易把人带偏 |
-| 免费档门禁收紧 | `403` + `FreeTierError` | 响亮 |
-| 免费档门禁放松 | 探针里某个变体不再被拒 | 只在 `fo doctor` 里显形 |
-| 模型清单变了 | 个别模型 400/401（例如拿匿名 key 打付费档） | 响亮 |
-| 上游返回了没见过的新形状 | 翻译层可能**静默丢字段** | **不响亮** —— 需要看 `~/.flow-one/bridge.log` |
+| Tencent content moderation adds a new rule | `400` + `11128`, the whole request fails | Loud, but the client's message easily misleads |
+| Free-tier gate tightens | `403` + `FreeTierError` | Loud |
+| Free-tier gate relaxes | Some variant in the probes is no longer rejected | Only visible in `fo doctor` |
+| Model list changes | Individual models return 400/401 (e.g. using an anonymous key against a paid tier) | Loud |
+| The upstream returns a new shape we have not seen | The translation layer may **silently drop fields** | **Not loud** — check `~/.flow-one/bridge.log` |
 
-最后一行是这个项目最需要盯的地方：前四条都会大声失败，只有「新形状」会安静地少点东西。
-发现回答缺字段时的第一动作是看 bridge.log 里那一轮的 `in= / out=` 与上游原始帧。
+The last row is what this project most needs to watch: the first four fail loudly, and only "a
+new shape" quietly loses something. When an answer is missing fields, the first step is to look
+at that turn's `in= / out=` and the raw upstream frames in bridge.log.
 
 ---
 
-## 五、怎么自己加一条探针
+## 5. How to add a probe yourself
 
-`src/doctor.mjs` 里的探针都是纯函数 + 可注入的 `fetchImpl` / 服务器地址，所以能离线测：
+The probes in `src/doctor.ts` are all pure functions with an injectable `fetchImpl` / server
+address, so they can be tested offline:
 
-- `probeOpencodeGate({ baseUrl, fetchImpl })` —— 返回每一行的 `verdict`：
-  `pass`（该拒的被拒）/ `relaxed`（该拒的没拒）/ `fail` / `inconclusive`；
-- `probeTencentFingerprint(product)` —— 走**本工具自己的翻译层 + 改写器**再真发一次，
-  返回 `{ ok, blocked, limited }`；
-- `probeOpencodeGo()` —— 认证通道的三条（会话头必填、key 必需、能出字），返回带
-  `verdict` 的行；未配置 key 时整节跳过；
-- `localIssues({ settings, serviceEnv, serviceCli, runningCli, healthOk })` —— 纯函数，
-  喂假数据即可断言（密钥不一致、`model` 与 `ANTHROPIC_MODEL` 不一致、服务跑着别的代码、
-  没人监听这四类都覆盖到了）。
+- `probeOpencodeGate({ baseUrl, fetchImpl })` — returns a `verdict` for each row:
+  `pass` (what should be rejected was rejected) / `relaxed` (what should be rejected was not) /
+  `fail` / `inconclusive`;
+- `probeTencentFingerprint(product)` — goes through **this tool's own translation layer +
+  rewriter** and then actually sends a request, returning `{ ok, blocked, limited }`;
+- `probeOpencodeGo()` — the three checks for the authenticated channel (session header required,
+  key required, can produce output), returning rows with a `verdict`; the whole section is
+  skipped when no key is configured;
+- `localIssues({ settings, serviceEnv, serviceCli, runningCli, healthOk })` — a pure function;
+  feed it fake data to assert (all four categories are covered: mismatched keys, `model` not
+  matching `ANTHROPIC_MODEL`, the service running different code, and nothing listening).

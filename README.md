@@ -1,59 +1,84 @@
 # flow-one
 
-让 **Claude Code CLI** 用上 **WorkBuddy（国内版 CodeBuddy / 国际版）** 与
-**OpenCode 免费档**的本地反代。
+A local reverse proxy that lets the **Claude Code CLI** use **WorkBuddy (the CodeBuddy China
+edition and the International edition)** and the **OpenCode free tier**.
 
-Claude Code 只会说 Anthropic 的 Messages 协议，而这几家的接口都是 OpenAI 风格
-（WorkBuddy 的 `/v2/chat/completions`、OpenCode 的 `/inference/v1/chat/completions`）。
-这个桥就干这一件事：**进门说 Anthropic，出门说 OpenAI**，顺手把登录、续期、模型目录、
-免费档的形状门禁、环境隔离都办了。零依赖，只用 Node 内置能力。
+中文说明见 [README-cn.md](README-cn.md).
+
+Claude Code only speaks Anthropic's Messages protocol, while these services expose OpenAI-style
+APIs (WorkBuddy's `/v2/chat/completions`, OpenCode's `/inference/v1/chat/completions`).
+This bridge does exactly one thing: **Anthropic on the way in, OpenAI on the way out** — and
+handles login, token renewal, the model catalog, the free tier's shape gate, and environment
+isolation along the way. Zero dependencies, Node built-ins only.
 
 ```
-Claude Code CLI ──► 本桥 127.0.0.1:8788 ──► WorkBuddy 国内版 copilot.tencent.com   cn/…
-   (Anthropic            /v1/messages            (OpenAI 形状 SSE)
-    Messages)            ⇄ 翻译             ──► WorkBuddy 国际版 www.workbuddy.ai   intl/…
-                                          ──► OpenCode 免费档 opencode.ai/inference oc/…
+Claude Code CLI ──► this bridge 127.0.0.1:8788 ──► WorkBuddy China copilot.tencent.com    cn/…
+   (Anthropic            /v1/messages            (OpenAI-shaped SSE)
+    Messages)            ⇄ translate           ──► WorkBuddy International www.workbuddy.ai intl/…
+                                               ──► OpenCode free tier opencode.ai/inference oc/…
 ```
 
-## 安装
+## Installation
 
-**不走 npm 仓库，直接从 GitHub 装**（零依赖，装下来就是能跑的代码；有 Node ≥ 18.17 即可）。
+**Not published to the npm registry — install straight from GitHub** (zero dependencies; what
+you download is runnable code; Node ≥ 22.18 is all you need, since it strips TypeScript types
+natively and there is no build step).
 
 ```bash
-npm i -g github:9Ashwin/flow-one      # 装完有 flow-one 与 fo 两个命令
+npm i -g github:9Ashwin/flow-one      # installs the flow-one and fo commands
 ```
 
-不想装成全局命令，也可以每次现取：
+If you would rather not install it globally, fetch it on each run:
 
 ```bash
 npx -y github:9Ashwin/flow-one status
 ```
 
-要改代码就用 clone + link（`git pull` 之后命令即刻是新的）：
+To modify the code, clone and link (the command is updated as soon as you `git pull`):
 
 ```bash
 git clone https://github.com/9Ashwin/flow-one.git
 cd flow-one && npm link
 ```
 
-**更新**：重跑同一条 `npm i -g github:9Ashwin/flow-one`。
-**钉住某个版本**：`npm i -g github:9Ashwin/flow-one#v0.3.0`
-（注意：`v0.2.x` 两个 tag 是**已弃用的 Go 实现**，别钉它们。）
+**Updating**: rerun the same `npm i -g github:9Ashwin/flow-one`.
+**Pinning a version**: `npm i -g github:9Ashwin/flow-one#v0.3.0`
+(Note: the two `v0.2.x` tags are the **deprecated Go implementation** — do not pin them.)
 
-> 为什么不发 npm：npm 现在不允许凭据直接发布新包，只能先 stage 再由维护者带 2FA 批准
-> （`E_STAGE_REQUIRED`），而单包零依赖本来就不需要仓库中介 —— 从 GitHub 装同样是一条命令。
+> Why not publish to npm: npm no longer allows publishing a new package directly with
+> credentials; it must be staged first and approved by the maintainer with 2FA
+> (`E_STAGE_REQUIRED`). A single zero-dependency package does not need a registry in the middle
+> anyway — installing from GitHub is the same one command.
 
-## 快速开始
+## Quick start
 
 ```bash
-fo               # 在终端里直接跑，进交互式菜单
+fo               # run it in a terminal to open the interactive menu
 ```
 
-选 `1` 之后它自己走完四步：**接哪一家 → 登录 → 选模型 → 写配置并常驻**。
+After choosing `1`, it walks through four steps by itself: **which upstream → login → model
+selection → write configuration and run as a service**.
 
-一次只配一家（跟 zcf 一样，一项一项来），配完**按回车回菜单**；想再挂一家，回菜单
-再选一次「一键配置」即可 —— 挂载清单是**叠加**的（走 `BRIDGE_PRODUCTS` 并集），
-先前配好的不会被顶掉。
+Configure one upstream at a time (like zcf, one item at a time). When it finishes, **press Enter
+to return to the menu**; to attach another upstream, pick "one-click setup" again — the mounted
+list is **cumulative** (the union of `BRIDGE_PRODUCTS`), so earlier configuration is not
+displaced.
+
+Once you have configured an upstream, **switching channels no longer requires this flow**:
+
+```bash
+fo use cn      # switch to the China edition
+fo use intl    # switch to the International edition
+fo use ocg     # switch to the OpenCode Go plan
+```
+
+`fo use` does exactly three things: point the client configuration at that source, add its model
+prefix to the service's mounted list, and restart the service. It **does not ask about login,
+client, or auto-start** — those are already configured. It switches to **the model that line
+last used** (or the recommended order if none is recorded), so switching back and forth does not
+reset you to the default every time.
+
+The menu is localized in Chinese; the following is the actual terminal output.
 
 ```
   ──────── 第 1 步 · 接哪一家 ────────
@@ -79,346 +104,424 @@ fo               # 在终端里直接跑，进交互式菜单
   ──── 其余模型（75 个，按量计费 / 订阅） ────
 ```
 
-第 2 步只处理这一家：OpenCode 免费档没有登录这一步，选中它就直接跳到选模型；
-腾讯那两家会在这里走浏览器授权。
+Step 2 deals only with the chosen upstream: the OpenCode free tier has no login step, so
+selecting it jumps straight to model selection; the two Tencent product lines go through browser
+authorization here.
 
-选模型只列**这一家**的模型（认准一家配一家，不用在全部来源里挑）。
-清单**全部列出、不截断**，**免费档单独成组排在最前**（OpenCode 的免费模型不花
-积分/额度），其余按量计费或订阅的排在后面；分组标题只是标题，不占编号、光标会跳过。
+Model selection lists only **that upstream's** models (configure one upstream at a time instead
+of picking from all sources). The list is **complete and never truncated**, and the **free tier
+forms its own group at the top** (OpenCode's free models consume no credits/quota); metered or
+subscription models come after. Group headings are only headings: they take no number and the
+cursor skips over them.
 
-清单同时支持**边打边筛**：敲 `free`、`glm`、`oc/deep` 都会立刻缩小范围，退格删字、
-Esc 清空、↑↓ 移动、回车确认（筛选结果里不再插分组标题）。超过 12 条时只画光标附近
-那一段。清单里没有的 ID（自建网关、新模型）走最后那条「手动输入模型 ID」。
+The list also supports **type-to-filter**: typing `free`, `glm`, or `oc/deep` narrows it
+immediately. Backspace deletes, Esc clears, ↑↓ moves, Enter confirms (group headings are no
+longer inserted into filtered results). Above 12 entries, only the segment around the cursor is
+drawn. IDs that are missing from the list (self-hosted gateways, new models) go through the last
+entry, "manually enter a model ID".
 
-列表型的挑选（模型清单）用 ↑↓ 或**直接按编号**，空格建不用记，每一行都带着窗口、
-输出上限与档位；结束会给一张摘要框。
+List-style selections (model catalogs) use ↑↓ or **the number keys directly**; there is no
+need to remember spacebar shortcuts, and every row carries the context window, output limit, and
+effort level. A summary box is shown at the end.
 
-配置完直接运行 `claude` 就能用了。想还原：菜单里选「还原配置」，或者 `fo uninstall`。
+Once configured, just run `claude`. To revert: choose "restore configuration" in the menu, or
+run `fo uninstall`.
 
-## 两种上游
+## Two kinds of upstream
 
-| | 直连模式（默认） | 网关模式 |
+| | Direct mode (default) | Gateway mode |
 | --- | --- | --- |
-| 谁负责登录 | **本工具自己**；OpenCode 免费档连登录都不需要 | 上游负责，比如 [dsh-our-free-model](https://github.com/Ebony-Vinyl/dsh-our-free-model) |
-| 依赖 | 无 | 那个网关得在跑 |
-| 模型 ID | `cn/deepseek-v4.1-flash`、`intl/hy4-preview-f`、`oc/deepseek-v4.1-flash-free` | 上游的 ID，如 `workbuddy/deepseek-v4.1-flash` |
-| 适合 | 只想装这一个工具 | 已经有一套网关 / 多上游混合 |
+| Who handles login | **This tool itself**; the OpenCode free tier needs no login at all | The upstream does, e.g. [dsh-our-free-model](https://github.com/Ebony-Vinyl/dsh-our-free-model) |
+| Dependencies | None | That gateway must be running |
+| Model IDs | `cn/deepseek-v4.1-flash`, `intl/hy4-preview-f`, `oc/deepseek-v4.1-flash-free` | Upstream IDs, e.g. `workbuddy/deepseek-v4.1-flash` |
+| Best for | Installing only this tool | Already running a gateway / mixing multiple upstreams |
 
-一个来源一个前缀，所以**一个进程能同时挂三条线**，换个 `ANTHROPIC_MODEL` 就换了来源：
+One prefix per source, so **a single process can serve three lines at once**; changing
+`ANTHROPIC_MODEL` changes the source:
 
-| 前缀 | 来源 | 登录 |
+| Prefix | Source | Login |
 | --- | --- | --- |
-| `cn/` | WorkBuddy 国内版（CodeBuddy，`copilot.tencent.com`） | 要 |
-| `intl/` | WorkBuddy 国际版（`www.workbuddy.ai`） | 要 |
-| `oc/` | **OpenCode 免费档**（`opencode.ai/inference`） | **不要**，装完即用 |
-| `ocg/` | **OpenCode Go 套餐**（`opencode.ai/zen/go/v1`） | 要一把 API key（`oc_sk_…`） |
+| `cn/` | WorkBuddy China edition (CodeBuddy, `copilot.tencent.com`) | Required |
+| `intl/` | WorkBuddy International edition (`www.workbuddy.ai`) | Required |
+| `oc/` | **OpenCode free tier** (`opencode.ai/inference`) | **Not required**; works right after installation |
+| `ocg/` | **OpenCode Go plan** (`opencode.ai/zen/go/v1`) | Requires an API key (`oc_sk_…`) |
 
-### OpenCode Go 套餐（`ocg/`）
+### OpenCode Go plan (`ocg/`)
 
-买了 Go 套餐（$10/月起）就在菜单里选「一键配置 → OpenCode Go 套餐」，把
-`oc_sk_…` 粘贴进去（输入时不回显）；配好之后**自动多挂一条来源**，模型清单里出现
-`ocg/` 前缀的 37 个模型：DeepSeek V4.1 Flash / Pro、GLM-5.1/5.2/5.3、Kimi K3、
-Grok 4.6/4.7、Qwen3.8、Claude Haiku 5.5、Gemini 4 Argon…
+If you have bought the Go plan (from $10/month), choose "one-click setup → OpenCode Go plan" in
+the menu and paste the `oc_sk_…` key (input is not echoed). Once configured, **an additional
+source is mounted automatically**, and the model list shows 37 models with the `ocg/` prefix:
+DeepSeek V4.1 Flash / Pro, GLM-5.1/5.2/5.3, Kimi K3, Grok 4.6/4.7, Qwen3.8, Claude Haiku 5.5,
+Gemini 4 Argon…
 
-这条路与免费档**不是同一条**，规矩也不同（2026-10-16 实测；DSH 桌面端的
-`cordis.yml` 里也是同一套配置）：
+This path is **not the same** as the free tier and follows different rules (measured 2026-10-16;
+the DSH desktop app's `cordis.yml` uses the same configuration):
 
-| 事实 | 说明 |
+| Fact | Notes |
 | --- | --- |
-| 端点 `/zen/go/v1` | 免费档是 `/inference/v1`，两条路的模型清单不一样 |
-| `Authorization: Bearer oc_sk_…` 必需 | 无头或乱写 key 都是 401 |
-| **`x-opencode-session` 必需** | 缺了回 `400 MissingSessionID`（"cannot be routed efficiently"）；值是随意的会话 id，UUID 与 `ses_` 形状都收 —— 桥会在首次配置时生成并落盘复用 |
-| **不需要**免费档那套形状 | 裸 OpenAI 报文直接 200，不用补那四个小写工具、也不用发 `x-opencode-client` |
+| Endpoint `/zen/go/v1` | The free tier uses `/inference/v1`; the two paths expose different model lists |
+| `Authorization: Bearer oc_sk_…` required | No header or a bogus key both yield 401 |
+| **`x-opencode-session` required** | Without it the response is `400 MissingSessionID` ("cannot be routed efficiently"); the value is an arbitrary session id — both UUID and `ses_` shapes are accepted — and the bridge generates one on first setup, persists it, and reuses it |
+| The free tier's shape is **not needed** | A bare OpenAI payload returns 200 directly; no need to add the four lowercase tools or send `x-opencode-client` |
 
-两个实操细节：`reasoning_effort: "off"` 上游**不接受**（422，文案还是误导性的
-"Endpoint is unavailable"），本桥的档位映射只会发 `low/medium/high`；deepseek 这族
-**默认就思考**，`max_tokens` 给小了可能全被推理吃掉、正文为空 —— 调小 `max_tokens`
-调试时容易误判成「桥坏了」。
+Two practical details: the upstream **does not accept** `reasoning_effort: "off"` (422, with the
+misleading message "Endpoint is unavailable"), so this bridge's effort mapping only sends
+`low/medium/high`; the deepseek family **thinks by default**, so a small `max_tokens` may be
+entirely consumed by reasoning and leave the content empty — when debugging with a reduced
+`max_tokens`, that is easy to misread as "the bridge is broken".
 
-### OpenCode 免费档（`oc/`）
+### OpenCode free tier (`oc/`)
 
-`oc/deepseek-v4.1-flash-free` 就是官方免费档里的 DeepSeek V4.1 Flash，无需账号。
-但它**不是「换个 base URL」**：直接发标准 OpenAI 请求会被
+`oc/deepseek-v4.1-flash-free` is DeepSeek V4.1 Flash from the official free tier and needs no
+account. But it is **not "just a different base URL"**: a standard OpenAI request is rejected
+with
 
 ```
 FreeTierError: OpenCode's free tier can only be used from within OpenCode.
 ```
 
-拒掉 —— 它按**报文形状**判断调用方。实测（2026-10-16）凑齐这三样才 200：
+— it identifies the caller by **payload shape**. Measured (2026-10-16): all three of the
+following are needed to get a 200:
 
-- 5 个 `x-opencode-*` 头：`project`（40 hex）、`session` **与** `session-id`（同一值）、
-  `request`、`client: cli`，外加 `User-Agent: opencode/<版本>`；
-- 会话 id 形状 `ses_` + 12 位小写 hex + **14** 位 base62（尾段总长 26；误当成
-  「随机 26 位」会变 38 字符而一律 403）；
-- 请求体 `stream: true`，且 `tools` 里必须有 `bash` / `glob` / `grep` / `read`
-  四个小写 function 工具。
+- five `x-opencode-*` headers: `project` (40 hex), `session` **and** `session-id` (the same
+  value), `request`, `client: cli`, plus `User-Agent: opencode/<version>`;
+- session id shape `ses_` + 12 lowercase hex chars + **14** base62 chars (tail segment totals 26;
+  mistaking it for "26 random chars" yields 38 characters and an unconditional 403);
+- request body with `stream: true`, and `tools` must contain the four lowercase function tools
+  `bash` / `glob` / `grep` / `read`.
 
-工具名冲突由本桥抹平：Claude Code 自带的 `Bash` / `Read` 出站时改小写、响应里改回
-原名；它没声明的（通常是 `glob` / `grep`）补一个桩，并把模型对桩的调用**整条丢弃** ——
-那是 Claude Code 执行不了的工具名。
+Tool name conflicts are smoothed over by this bridge: Claude Code's own `Bash` / `Read` are
+lowercased on the way out and renamed back in the response; tools it did not declare (usually
+`glob` / `grep`) get a stub, and the model's calls to the stub are **dropped entirely** — those
+are tool names Claude Code cannot execute.
 
-**这两条门禁的完整事实、证据与复验方式在 [docs/gates.md](docs/gates.md)**；
-`fo doctor` 会把它们**逐项重推一遍**（Go 套餐那条路也会：带会话头的一次最小对话、
-不带会话头应被拒、模型清单要 key）（先验完整形状，再逐项去掉一个要件确认它确实
-还是必填），上游放松或收紧都会当场显形 —— 不用等用户来提「用不了」。`big-pickle` 等 `-free` 结尾的模型同样可用；
-不带 `-free` 的（`deepseek-v4.1-flash`、`deepseek-v4-pro` 等）属于 $10/月的
-OpenCode Go 订阅，走了会报 `AuthError`。
+**The complete facts, evidence, and re-verification procedure for these two gates are in
+[docs/gates.md](docs/gates.md)**; `fo doctor` **re-derives them item by item** (the Go plan path
+included: a minimal conversation with the session header, a request without it that should be
+rejected, and a model list that requires the key). It first verifies the full shape and then
+removes one requirement at a time to confirm it is still mandatory — so upstream relaxation or
+tightening shows up immediately, instead of waiting for users to report "it doesn't work".
+Models ending in `-free` such as `big-pickle` work the same way; those without `-free`
+(`deepseek-v4.1-flash`, `deepseek-v4-pro`, etc.) belong to the $10/month OpenCode Go
+subscription, and using them reports `AuthError`.
 
-## 命令行
+## Command line
 
-下面一律写 `fo`，换成 `flow-one` 等价。
+`fo` is used throughout below; `flow-one` is equivalent.
 
-| 命令 | 说明 |
+| Command | Description |
 | --- | --- |
-| `fo` | 终端里跑进菜单；无 TTY（systemd / 管道）直接起服务 |
-| `switch` | 只换模型（菜单里的「切换模型」） |
-| `doctor` | 自检：配置 / 登录 / 两条门禁（会真发几个请求） |
-| `setup` / `--setup` | 交互式一键配置（Claude Code 与 DSH 的配置**各问一次**要不要写） |
-| `client` | 打印接入信息（地址 / 令牌 / 模型 ID），自己填到客户端里 |
-| `uninstall` / `--uninstall` | 还原 Claude Code 配置并卸载后台服务 |
-| `login [cn\|intl]` | 登录；不带参数两条产品线都登 |
-| `status` | 登录状态、令牌有效期、服务与配置文件位置 |
-| `models` | 列出可用模型 ID（带窗口 / 输出上限 / 档位） |
+| `fo` | Runs the menu in a terminal; without a TTY (systemd / pipes) it starts the service directly |
+| `switch` | Changes only the model (the menu's "switch model") |
+| `use <cn\|intl\|oc\|ocg>` | Changes only the channel: switches to an already-configured source, uses the model it last used, and restarts the service |
+| `doctor` | Self-check: configuration / login / both gates (actually sends a few requests) |
+| `setup` / `--setup` | Interactive one-click setup (asks **once each** whether to write the Claude Code and DSH configurations) |
+| `client` | Prints connection details (address / token / model ID) for you to enter in the client yourself |
+| `uninstall` / `--uninstall` | Restores the Claude Code configuration and uninstalls the background service |
+| `login [cn\|intl]` | Login; with no argument it logs in to both product lines |
+| `status` | Login status, token expiry, service and configuration file locations |
+| `models` | Lists available model IDs (with context window / output limit / effort level) |
 
-不想用向导时，所有步骤都能用参数完成：
+If you prefer not to use the wizard, every step can be done with flags:
 
 ```bash
-node cli.mjs --mode gateway --upstream http://127.0.0.1:8326 \
+node cli.ts --mode gateway --upstream http://127.0.0.1:8326 \
              --model workbuddy/deepseek-v4.1-flash --port 8788 --api-key "$(openssl rand -hex 16)"
 ```
 
-| 选项 | 环境变量 | 默认值 | 说明 |
+| Option | Environment variable | Default | Description |
 | --- | --- | --- | --- |
-| `--mode` | `BRIDGE_MODE` | `direct` | `direct` 直连腾讯产品 / `gateway` 转发给上游 |
-| `--product` | `BRIDGE_PRODUCTS` | `cn,intl,oc` | 挂载哪几个来源；一键配置是**叠加**写它的，可重复 |
-| `--host` | `BRIDGE_HOST` | `127.0.0.1` | 监听地址 |
-| `--port` | `BRIDGE_PORT` | `8788` | 监听端口 |
-| `--model` | `BRIDGE_MODEL` | 直连为空 / 网关为 `workbuddy/deepseek-v4.1-flash` | 兜底模型 ID |
-| `--map` | `BRIDGE_MODEL_MAP` | 空 | `A=B,C=D` 形式的模型映射 |
-| `--api-key` | `BRIDGE_API_KEY` | 空（不校验） | 本桥自己的门禁密钥；`setup` 首次写固定默认值 `flow-one-local`，之后**一直复用**（客户端会长期引用它，随机换会让 Claude Code 401、DSH 报「密钥无效」） |
-| `--max-tokens` | `BRIDGE_MAX_TOKENS_CAP` | 0（不限） | 下发前的单次输出上限 |
-| `--heartbeat` | `BRIDGE_HEARTBEAT_MS` | 15000 | 思考期静默时发 ping 帧的间隔，0 关闭 |
-| `--thinking` | `BRIDGE_SHOW_THINKING` | 关 | 把上游思考增量渲染成 `thinking` 块 |
-| — | `BRIDGE_FINGERPRINT_REWRITE` | 开 | 腾讯内容指纹窄改写（见下） |
-| `--upstream` | `UPSTREAM_BASE_URL` | `http://127.0.0.1:8326` | 网关模式的 OpenAI 兼容上游 |
-| `--upstream-key` | `UPSTREAM_API_KEY` | 读 DSH 网关密钥 | 上游密钥 |
-| — | `BRIDGE_HOME` | `~/.flow-one` | 凭据与安装状态目录 |
+| `--mode` | `BRIDGE_MODE` | `direct` | `direct` connects to Tencent products / `gateway` forwards to an upstream |
+| `--product` | `BRIDGE_PRODUCTS` | `cn,intl,oc` | Which sources to mount; one-click setup **appends** to it, and it can be repeated |
+| `--host` | `BRIDGE_HOST` | `127.0.0.1` | Listen address |
+| `--port` | `BRIDGE_PORT` | `8788` | Listen port |
+| `--model` | `BRIDGE_MODEL` | Empty in direct mode / `workbuddy/deepseek-v4.1-flash` in gateway mode | Fallback model ID |
+| `--map` | `BRIDGE_MODEL_MAP` | Empty | Model mapping in the form `A=B,C=D` |
+| `--api-key` | `BRIDGE_API_KEY` | Empty (no check) | The bridge's own access key; `setup` writes the fixed default `flow-one-local` on first run and **reuses it** thereafter (clients reference it for the long term; rotating it randomly makes Claude Code return 401 and DSH report "invalid key") |
+| `--max-tokens` | `BRIDGE_MAX_TOKENS_CAP` | 0 (unlimited) | Per-response output cap before forwarding |
+| `--heartbeat` | `BRIDGE_HEARTBEAT_MS` | 15000 | Interval for ping frames during silent thinking periods; 0 disables |
+| `--thinking` | `BRIDGE_SHOW_THINKING` | Off | Renders upstream reasoning deltas as `thinking` blocks |
+| — | `BRIDGE_FINGERPRINT_REWRITE` | On | Narrow Tencent content-fingerprint rewrite (see below) |
+| `--upstream` | `UPSTREAM_BASE_URL` | `http://127.0.0.1:8326` | OpenAI-compatible upstream for gateway mode |
+| `--upstream-key` | `UPSTREAM_API_KEY` | Read from the DSH gateway key | Upstream key |
+| — | `BRIDGE_HOME` | `~/.flow-one` | Credentials and installation state directory |
 
-非回环监听必须设置自定义 `--api-key` / `BRIDGE_API_KEY`，空密钥和公开默认值
-`flow-one-local` 会被拒绝。免鉴权仅允许字面量回环 IP（IPv4 `127.0.0.0/8` 或 IPv6 `::1`）；
-主机名即使当前解析到回环也需要自定义密钥，避免解析变化扩大访问范围。
+Listening on a non-loopback address requires a custom `--api-key` / `BRIDGE_API_KEY`; an empty
+key and the public default `flow-one-local` are rejected. Authentication-free listening is
+allowed only for literal loopback IPs (IPv4 `127.0.0.0/8` or IPv6 `::1`); hostnames require a
+custom key even when they currently resolve to loopback, so that a resolution change cannot
+widen the access surface.
 
-## 它到底改了什么
+## What it actually changes
 
-**本工具的本分是提供反代，改你的客户端配置只是选项。** 向导第 4 步会**分开问两次**：
-要不要写 Claude Code（`~/.claude/settings.json`）、要不要写 DSH（`llm-pi-ai` provider +
-凭据引用）—— 两个独立开关，都答 y 就是两个都写。**每次 setup 都会问**（上次的选择作为
-默认值），两个都答 n 就不写客户端配置（包括之前已托管的配置）；变更桥端口等参数后，未更新的客户端需自行同步。`--clients claude,dsh|claude|dsh|none` 可直接表态、跳过提问。
-之后随时 `fo client` 打印接入地址、令牌与模型 ID，自己填到任何 Anthropic 兼容客户端里。
+**The tool's job is to provide the proxy; modifying your client configuration is optional.** The
+wizard's step 4 **asks twice, separately**: whether to write the Claude Code configuration
+(`~/.claude/settings.json`) and whether to write the DSH one (`llm-pi-ai` provider + credential
+reference) — two independent switches; answering y to both writes both. **Every setup asks**
+(the previous choice is the default); answering n to both writes no client configuration
+(including previously managed configuration). After changing parameters such as the bridge port,
+clients that were not updated must be synchronized manually. `--clients claude,dsh|claude|dsh|none`
+states the choice directly and skips the question.
+Afterwards `fo client` prints the connection address, token, and model ID at any time for you to
+enter in any Anthropic-compatible client.
 
-选了「写」的话，向导只碰三处，且都可还原：
+If you choose "write", the wizard touches only three places, all reversible:
 
-1. **`~/.claude/settings.json`**（仅当你选了「写」；先备份成 `settings.json.bak-<时间戳>`）
-   —— 只合并 `env` 下的 6 个 `ANTHROPIC_*` 键；原来就在的 `permissions`、`hooks`、
-   `statusLine`、`ANTHROPIC_CUSTOM_HEADERS` 等一律原样保留。
-   如果你的 `model` 是 `sonnet` 这类别名，会一起钉成我们的模型，免得 Claude Code
-   去请求网关里不存在的别名。
-   还原时**只删值仍等于本工具写入的那份**的键 —— 你自己改过的会被保留。
-2. **后台服务**：macOS 写 `~/Library/LaunchAgents/dev.flow-one.plist`
-   并 `launchctl bootstrap`；Linux 写 `~/.config/systemd/user/` 下的 unit 并
-   `systemctl --user enable` + `restart`。模式、上游、模型都写进服务环境，
-   所以服务不带参数启动也能拿到同一份配置。
-3. **`~/.flow-one/`**：登录凭据（0600）、`install.json`（记着
-   写了哪些键、装了什么服务，供还原用）、服务日志。
+1. **`~/.claude/settings.json`** (only if you chose "write"; backed up first as
+   `settings.json.bak-<timestamp>`) — it merges only the 6 `ANTHROPIC_*` keys under `env`;
+   existing `permissions`, `hooks`, `statusLine`, `ANTHROPIC_CUSTOM_HEADERS`, etc. are preserved
+   as-is.
+   If your `model` is an alias such as `sonnet`, it is pinned to our model as well, so Claude
+   Code does not request an alias that does not exist in the gateway.
+   On restore, it **deletes only keys whose value still equals the one this tool wrote** —
+   values you changed yourself are kept.
+2. **The background service**: on macOS it writes
+   `~/Library/LaunchAgents/dev.flow-one.plist` and runs `launchctl bootstrap`; on Linux it writes
+   a unit under `~/.config/systemd/user/` and runs `systemctl --user enable` + `restart`. Mode,
+   upstream, and model are written into the service environment, so the service gets the same
+   configuration when started without arguments.
+3. **`~/.flow-one/`**: login credentials (0600), `install.json` (records which keys were written
+   and which service was installed, for restoration), and service logs.
 
-### 模型 ID 后面的 `[1m]`
+### The `[1m]` suffix on model IDs
 
-`[1m]` 是 Claude Code 自己的标记，表示「这个模型按 1M 上下文登记」。
-**本工具按模型真实窗口决定加不加**：超过 200k 才加，未知就不加
-（Claude Code 对未识别 ID 的默认假设正是 200k）。
+`[1m]` is a Claude Code marker meaning "this model is registered with a 1M context".
+**This tool decides whether to add it based on the model's real context window**: it is added
+only above 200k, and not added when unknown (Claude Code's default assumption for an
+unrecognized ID is exactly 200k).
 
-这不是洁癖：OpenCode 免费档的 `deepseek-v4.1-flash-free` 实测窗口是 **200k**
-（能力数据取自 models.dev，官方 `/v1/models` 不含任何能力字段），给它登记 1M
-会让 Claude Code 到 1M 才压缩上下文，然后撞上模型真实上限。腾讯那两条线的窗口
-确实是 1M，所以照样带后缀。Claude Code 发请求前会把后缀剥掉，上游收到的是干净的 ID。
+This is not pedantry: the measured context window of OpenCode's free-tier
+`deepseek-v4.1-flash-free` is **200k** (capability data comes from models.dev; the official
+`/v1/models` contains no capability fields). Registering it as 1M would make Claude Code compact
+context only at 1M and then hit the model's real limit. The two Tencent lines really do have 1M
+windows, so they keep the suffix. Claude Code strips the suffix before sending, so the upstream
+receives a clean ID.
 
-## 接口
+## Endpoints
 
-| 方法 | 路径 | 说明 |
+| Method | Path | Description |
 | --- | --- | --- |
-| POST | `/v1/messages` | Anthropic Messages，流式与非流式（`?beta=true` 同样放行） |
-| POST | `/v1/messages/count_tokens` | 本地估算，不发上游请求 |
-| GET | `/v1/models` | 上游模型清单（直连模式带产品前缀） |
-| GET | `/health` | 存活探测，**不需要密钥** |
+| POST | `/v1/messages` | Anthropic Messages, streaming and non-streaming (`?beta=true` is also accepted) |
+| POST | `/v1/messages/count_tokens` | Local estimate; no upstream request is made |
+| GET | `/v1/models` | Upstream model list (with product prefixes in direct mode) |
+| GET | `/health` | Liveness probe; **no key required** |
 
-鉴权同时接受 `x-api-key` 与 `Authorization: Bearer`，比对用定长比较；
-`--api-key` 留空时不校验（此时只监听回环，别改成 `0.0.0.0`）。
+Authentication accepts both `x-api-key` and `Authorization: Bearer`, compared in constant time;
+when `--api-key` is empty no check is performed (in that case it listens on loopback only — do
+not change it to `0.0.0.0`).
 
-## 翻译规则
+## Translation rules
 
 | Anthropic | OpenAI |
 | --- | --- |
-| `system`（字符串或块数组） | 首条 `{role:'system'}` 消息 |
-| `text` / `image` 块 | `{type:'text'}` / `{type:'image_url'}` 部分 |
-| `tool_use` 块 | 助手消息上的 `tool_calls[]` |
-| `tool_result` 块 | `{role:'tool', tool_call_id}` 独立消息（排在同轮文本之前） |
+| `system` (string or block array) | First `{role:'system'}` message |
+| `text` / `image` blocks | `{type:'text'}` / `{type:'image_url'}` parts |
+| `tool_use` blocks | `tool_calls[]` on the assistant message |
+| `tool_result` blocks | Separate `{role:'tool', tool_call_id}` message (placed before same-turn text) |
 | `tools[].input_schema` | `tools[].function.parameters` |
-| `thinking.budget_tokens` | `reasoning_effort`（≥8192 → high，≥2048 → medium，否则 low） |
+| `thinking.budget_tokens` | `reasoning_effort` (≥8192 → high, ≥2048 → medium, otherwise low) |
 | `stop_sequences` | `stop` |
 
-响应侧：`stop_reason` 按本轮是否出现工具调用决定（有则 `tool_use`），否则
-`length → max_tokens`、其余 `end_turn`；流式按
-`message_start → content_block_start → content_block_delta → content_block_stop →
-message_delta → message_stop` 成帧，工具参数走 `input_json_delta`，
-响应头发出去之后的失败走流内 `error` 事件。
+On the response side, `stop_reason` is determined by whether this turn contains tool calls
+(`tool_use` if so); otherwise `length → max_tokens` and everything else `end_turn`. Streaming is
+framed as `message_start → content_block_start → content_block_delta → content_block_stop →
+message_delta → message_stop`; tool arguments use `input_json_delta`; failures after response
+headers have been sent are reported as an in-stream `error` event.
 
-直连模式额外做四件官方客户端才做的事：
+Direct mode additionally does four things only official clients do:
 
-1. **首条消息必须是 `system`** —— 国际版网关对首条是 user 的请求直接回
-   `400 + code 11128`，缺了就补一条。
-2. **`prompt_cache_key`** —— 同一个 system 前缀稳定命中服务端前缀缓存
-   （官方客户端实测同一请求开了缓存计费差约 17 倍）。
-3. **按模型族选 `User-Agent`** —— 国际版后台按这组分列「使用端」，`glm-*` /
-   `hy*` / `kimi-*` / `minimax-*` 这几条国内模型线要用国内客户端形态发。
-4. **DeepSeek 系要显式开思考** —— 这一族只有 `reasoning_effort` 生效，
-   `thinking` 字段单独不生效，两个都带才稳定返回 `reasoning_content`。
+1. **The first message must be `system`** — the International gateway answers
+   `400 + code 11128` to a request whose first message is `user`, so one is added when missing.
+2. **`prompt_cache_key`** — the same system prefix consistently hits the server-side prefix
+   cache (the official client measured roughly a 17× billing difference for the same request
+   with the cache enabled).
+3. **Choose `User-Agent` by model family** — the International backend groups its "client
+   usage" statistics by this; the domestic model lines `glm-*` / `hy*` / `kimi-*` / `minimax-*`
+   must be sent with the domestic client shape.
+4. **The DeepSeek family needs thinking enabled explicitly** — only `reasoning_effort` takes
+   effect for this family; the `thinking` field alone has no effect, and both are needed to
+   reliably get `reasoning_content` back.
 
-## 腾讯侧内容风控的窄改写
+## Narrow rewrites for Tencent-side content moderation
 
-腾讯后端会拦下「自称是别的客户端」的请求。本桥对**腾讯系模型**（`cn/`、`intl/`、
-`buddy/`、`workbuddy/` 前缀）做两条**有实测依据**的窄改写，其余文本逐字符不动
-（腾讯按前缀缓存，无谓地重建字符串会让每轮都算新前缀）：
+The Tencent backend blocks requests that "claim to be another client". This bridge applies five
+narrow rewrites, **each backed by a measurement**, to **Tencent-family models** (`cn/`, `intl/`,
+`buddy/`, `workbuddy/` prefixes); all other text is left character-for-character unchanged
+(Tencent caches by prefix, and needlessly rebuilding the string makes every turn count as a new
+prefix):
 
-| 命中的字面量 | 处理 | 实测依据 |
+| Literal matched | Handling | Measured evidence |
 | --- | --- | --- |
-| `You are Claude Code, Anthropic's official CLI for Claude` | 改成 `…, an official CLI for Claude` | 原句 `400 + 11128`；只有一半时不拦，所以规则要求两个片段同现 |
-| 整行 `x-anthropic-billing-header: …`（Claude Code 2.1.x 拼在 system 首行） | 删掉整行 | 键名是判据（大小写不敏感、值任意）；改名或删除即 200 |
+| `You are Claude Code, Anthropic's official CLI for Claude` | Changed to `…, an official CLI for Claude` | Original sentence → `400 + 11128`; half of it alone is not blocked, so the rule requires both fragments |
+| `Main branch (you will usually use this for PRs)` | Changed to `Main branch (PRs usually go here)` | Claude Code injects this only inside a git repository; the whole sentence is blocked, 200 after the rewrite |
+| `You are an AI agent powered by DeepSeek Harness` | Changed to `… powered by a DeepSeek harness` | DSH's persona line; split into fragments it is not blocked, so the match is the whole sentence |
+| `through the DeepSeek Harness Web GUI` | Changed to `through the harness Web GUI` | Blocked only when it appears together with the previous line |
+| A whole line `x-anthropic-billing-header: …` (Claude Code 2.1.x puts it on the first line of the system prompt) | The entire line is removed | The key name is the criterion (case-insensitive, any value); renaming or deleting it yields 200 |
 
-关掉：`--no-fingerprint-rewrite` 或 `BRIDGE_FINGERPRINT_REWRITE=0`。
-**请自行权衡**：这是绕过厂商侧的一条内容控制，只为让 Claude Code 这类第三方客户端
-能用起来（见文末免责声明）。
+To turn it off: `--no-fingerprint-rewrite` or `BRIDGE_FINGERPRINT_REWRITE=0`.
+**Weigh this yourself**: it is a workaround for a vendor-side content control, only so that
+third-party clients such as Claude Code can be used (see the disclaimer at the end).
 
-## 已知限制
+## Known limitations
 
-- **网关模式依赖那个网关在跑**。默认指向 DSH 的 `127.0.0.1:8326`，那是桌面应用
-  进程里的监听：DSH 关掉，本桥就取不到上游。要彻底独立请用直连模式。
-- **思考默认不渲染给客户端**（`--thinking` 才渲染）。
-- **`tool_choice` 不下发**（官方客户端从不发；`none` 时连工具定义一起摘掉）。
-- **工具结果里的图片**按 OpenAI 多部分格式发出，标准服务端可能不接受。
-- **非流式请求在上游仍然是流式**，由本桥归并成一个 JSON 返回。
-- **`count_tokens` 是估算**（4 字符 ≈ 1 token，图片记固定值）。
-- **`[claude-code:unrecognized_model]` 那行诊断在 `-p` 模式仍会出现**。
-  官方给的消除办法是把 `modelOverrides` 的键写成 Claude 的模型 ID —— 那等于让
-  Claude Code 以为自己在跑 Opus，会连带套用那个模型的窗口与行为，不值得为一行
-  stderr 噪声付这个代价。交互式会话里这行不打印，只进调试日志。
-- **OpenCode 免费档靠报文形状过门禁**，官方收紧形状就可能失效（那时会明确报
-  `FreeTierError`，不会静默降级）。它也只覆盖免费档，`-free` 结尾以外的模型要
-  OpenCode Go 订阅。
-- **服务跑的是「哪份代码」要看安装来源**：用全局安装（`npm i -g`）装的，服务指向
-  `…/lib/node_modules/…/cli.mjs` 这份**快照**，之后 `git pull` 与改仓库都不会生效
-  （表现是「命令行有新功能、服务里没有」）。`fo status` 会把服务代码路径打出来，
-  与当前命令不一致时会直接警告并提示重装。
-- 只覆盖对话与模型目录。**每日签到领积分不在范围内**。
+- **Gateway mode depends on that gateway running.** It points at DSH's `127.0.0.1:8326` by
+  default, which is a listener inside the desktop app process: if DSH is closed, the bridge has
+  no upstream. Use direct mode for full independence.
+- **Reasoning is not rendered to clients by default** (only with `--thinking`).
+- **`tool_choice` is not forwarded** (the official client never sends it; with `none`, tool
+  definitions are removed as well).
+- **Images in tool results** are sent in the OpenAI multipart format, which standard servers may
+  not accept.
+- **Non-streaming requests are still streamed upstream**, and this bridge consolidates them into
+  a single JSON response.
+- **`count_tokens` is an estimate** (4 characters ≈ 1 token; images count as a fixed value).
+- **The `[claude-code:unrecognized_model]` diagnostic line still appears in `-p` mode.**
+  The official workaround is to key `modelOverrides` by Claude model IDs — which amounts to
+  making Claude Code believe it is running Opus and inheriting that model's window and behavior.
+  That is not worth paying for one line of stderr noise. In interactive sessions the line is not
+  printed; it only goes to the debug log.
+- **The OpenCode free tier passes the gate on payload shape**, so an official tightening could
+  break it (in that case it reports `FreeTierError` explicitly rather than degrading silently).
+  It only covers the free tier; models not ending in `-free` require an OpenCode Go subscription.
+- **Which code the service runs depends on how it was installed**: with a global install
+  (`npm i -g`), the service points at the `cli.ts` **snapshot** under
+  `…/lib/node_modules/…/cli.ts`, and later `git pull`s or repository edits have no effect
+  (the symptom is "the CLI has a new feature but the service doesn't"). `fo status` prints the
+  service's code path and warns with a reinstall hint when it differs from the current command.
+- Covers conversations and the model catalog only. **Daily check-in for credits is out of
+  scope.**
 
-## 测试
+## Tests
 
 ```bash
-node --test        # 全部离线，不需要网络与账号
-fo doctor         # 唯一会真发请求的检查（两条门禁 + 本地配置）
+node --test        # fully offline, no network or account needed
+fo doctor         # the only check that really sends requests (both gates + local configuration)
 ```
 
-33 条用例，全部离线：翻译层纯函数、网关模式端到端（假上游 SSE）、直连模式登录轮询
-（含 `11217` 尚未就绪）、模型目录合并与过滤、流内策略拦截如实上报、指纹改写、
-安装器的「合并而非覆盖 / 写前备份 / 只还原自己写的键 / 服务文件内容」，
-终端界面的按键与编号选择，以及 OpenCode 免费档的门禁形状（会话/请求 id 位数、
-门禁工具补齐与改名、桩调用丢弃、端到端不落到客户端）。
+33 test cases, all offline: pure functions in the translation layer, gateway mode end to end
+(fake upstream SSE), direct-mode login polling (including `11217` not yet ready), model catalog
+merging and filtering, in-stream policy blocks reported faithfully, fingerprint rewriting, the
+installer's "merge rather than overwrite / back up before writing / restore only our own keys /
+service file contents", key and number-key selection in the terminal UI, and the OpenCode free
+tier's gate shape (session/request id lengths, adding and renaming gate tools, dropping stub
+calls, end-to-end never leaking to the client).
 
-⚠️ 界面用例单独放在 `test/prompt.test.mjs`，并且**不碰全局 `process.stdin`**：
-`src/prompt.mjs` 留了一个 `setStdinForTest()` 接缝给它们换输入流。早先是直接改
-`process.stdin`，结果是 node:test 的结果记账被搅乱 —— 往同一个文件里加一条这样的
-用例，整个文件的计数反而变少，日志里看不出异常。
+⚠️ The UI test cases live separately in `test/prompt.test.ts` and **do not touch the global
+`process.stdin`**: `src/prompt.ts` exposes a `setStdinForTest()` seam for them to swap the input
+stream. Previously they modified `process.stdin` directly, which disturbed node:test's result
+accounting — adding one such case to the same file made the file's total count decrease, with
+nothing abnormal visible in the logs.
 
-每个文件的「声明用例数」与「实际注册数」可以这样核对：
+The "declared case count" and "actually registered count" of each file can be cross-checked like
+this (the format string is Chinese, matching the terminal output the script prints):
 
 ```bash
-for f in test/*.test.mjs; do
+for f in test/*.test.ts; do
   printf '%-28s 声明 %s / 注册 %s\n' "$f" "$(grep -c '^test(' $f)" \
     "$(node --test --test-reporter=tap $f 2>/dev/null | grep -oE '^# tests [0-9]+' | grep -oE '[0-9]+')"
 done
 ```
 
-真机验证过（2026-10，本机）：真 `claude` CLI（2.1.301）经本桥拿到回答；
-网关模式对真实上游的非流式 / 流式 / 工具往返；两条腾讯产品线的
-`/v2/plugin/auth/state` 取址；OpenCode 免费档的非流式 / 流式 / 工具往返
-（模型发 `bash`、本桥交回 `Bash`）；launchd 自启与 `/health`。
+Verified on real hardware (2026-10, local machine): a real `claude` CLI (2.1.301) got answers
+through this bridge; gateway mode against a real upstream for non-streaming / streaming / tool
+round-trips; `/v2/plugin/auth/state` address discovery for both Tencent product lines; the
+OpenCode free tier for non-streaming / streaming / tool round-trips (the model sends `bash`, the
+bridge returns `Bash`); launchd auto-start and `/health`.
 
-## 免责声明
+## Disclaimer
 
-本项目通过**用户自己的账号凭据**访问官方客户端使用的接口，仅供个人学习与自用。
-请自行判断这是否符合你所在地区与服务条款的要求；不要把凭据提交进任何仓库，
-也不要把本桥暴露到公网。协议细节参考了
-[dsh-our-free-model](https://github.com/Ebony-Vinyl/dsh-our-free-model)（MIT）中被实测
-验证过的逆向结论，本项目的实现与之独立。
+This project accesses interfaces used by the official clients **through your own account
+credentials** and is intended for personal learning and personal use only. Judge for yourself
+whether this complies with the requirements of your region and the terms of service; do not
+commit credentials to any repository, and do not expose this bridge to the public internet.
+Protocol details reference reverse-engineering findings that were empirically verified in
+[dsh-our-free-model](https://github.com/Ebony-Vinyl/dsh-our-free-model) (MIT); this project's
+implementation is independent of it.
 
-## 发布到 npm（维护者）
+## Publishing to npm (maintainers)
 
-包名 `flow-one` 在 npm 上**尚未被占用**（2026-10-16 查证）。`fo`
-这个名字已被别人占用，所以它只作为本包提供的命令别名，不作包名。
+The package name `flow-one` is **not yet taken** on npm (checked 2026-10-16). The name `fo` is
+already taken by someone else, so it exists only as a command alias provided by this package,
+not as the package name.
 
 ```bash
-# 0. 前提：registry 必须是官方源 —— 国内镜像只能装、不能发
-npm config get registry          # 应为 https://registry.npmjs.org/
+# 0. Prerequisite: the registry must be the official one — mirrors can install but not publish
+npm config get registry          # should be https://registry.npmjs.org/
 
-# 1. 登录（没有账号先去 npmjs.com 注册）
-npm login                        # 开了双因素会要一次性验证码
+# 1. Log in (register at npmjs.com first if you have no account)
+npm login                        # a one-time code is required with 2FA enabled
 
-# 2. 先空跑：会执行 prepublishOnly（node --test）并列出将要发布的内容
+# 2. Dry run first: runs prepublishOnly (node --test) and lists what will be published
 npm publish --dry-run
 
-# 3. 正式发布
+# 3. Publish for real
 npm publish
 
-# 4. 核对
+# 4. Verify
 npm view flow-one version
 npm i -g flow-one && fo status
 ```
 
-几条踩过的坑：
+A few pitfalls encountered:
 
-- **发布前工作区要干净**：`git status` 有未提交改动时，包里会带上半成品。
-- **版本号只升不覆**：先 `npm version patch|minor|major`；同一个版本重发会被拒
-  （`EPUBLISHCONFLICT`）。
-- **72 小时内可撤**：`npm unpublish flow-one@0.1.0`；超过就只能发新版本。
-  所以第一次发之前，先 `npm i -g .` 在本地验一遍更稳。
-- **CI 里发布**要用 **Automation 类型**的 token（npm 网站 → Access Tokens），
-  普通 token 遇到 2FA 会被拒；配成仓库 secret `NPM_TOKEN`，打 `v*` tag 时
-  `npm publish --provenance --access public`。需要这条工作流可以说一声，我加个
-  `.github/workflows/release.yml`。
+- **The working tree must be clean before publishing**: uncommitted changes make it into the
+  published package as half-finished work.
+- **Version numbers only go up**: run `npm version patch|minor|major` first; republishing the
+  same version is rejected (`EPUBLISHCONFLICT`).
+- **Unpublishable only within 72 hours**: `npm unpublish flow-one@0.1.0`; after that you can
+  only publish a new version. So before the first release, `npm i -g .` to verify locally is
+  safer.
+- **Publishing from CI** requires an **Automation**-type token (npm website → Access Tokens);
+  regular tokens are rejected by 2FA. Store it as the repository secret `NPM_TOKEN` and run
+  `npm publish --provenance --access public` when a `v*` tag is pushed. Say the word if you want
+  this workflow and I will add a `.github/workflows/release.yml`.
 
 ## License
 
 MIT
 
-## 代码规范与门禁
+## Code conventions and gates
 
-这个仓库的规范写在 [AGENTS.md](AGENTS.md) 里（错误契约、代码落点表与分层、套餐分离不变式、
-跨平台要求、测试与验证门禁），**门禁写成命令**，一条命令跑完：
+This repository's conventions live in [AGENTS.md](AGENTS.md) (error contract, code placement
+table and layering, plan-separation invariants, cross-platform requirements, testing and
+verification gates). Supporting documents:
+
+| Document | Contents |
+| --- | --- |
+| [AGENTS.md](AGENTS.md) | The charter: rules a change must satisfy, and the gates that enforce them |
+| [docs/architecture.md](docs/architecture.md) | Layers, request path, where state lives, failure taxonomy |
+| [docs/protocol-translation.md](docs/protocol-translation.md) | Translation rules that are easy to get wrong |
+| [docs/gates.md](docs/gates.md) | The two upstream gates: measured facts, evidence, re-verification |
+| [docs/development.md](docs/development.md) | Setup, running, gates, where a change goes |
+| [README.zh-CN.md](README.zh-CN.md) | Chinese README |
+
+**The gates are written as commands**, run in one go:
 
 ```bash
-make verify     # 提交前跑这一条 = 语法检查 + 模块规约 + 全部单测
-make check      # 只跑静态检查（语法 + 无循环依赖 + 零第三方依赖 + 依赖方向）
-make test       # 只跑用例（node --test，零依赖）
-make help       # 列出所有目标
+make verify     # run this before committing = static checks + all unit tests
+make check      # static checks only: types + lint + formatting + module conventions
+make test       # tests only (node --test, zero dependencies)
+make types      # tsc --noEmit against the TypeScript sources
+make lint       # ESLint
+make format     # Prettier, in place
+make help       # list all targets
 ```
 
-几条刻意的约束：
+`make check` needs `npm install` once for `typescript`, `eslint` and `prettier`. Running the
+bridge and running the tests do not: `node cli.ts` and `node --test` use only Node built-ins.
 
-- **零第三方依赖**：只用 `node:` 内置模块。`dependencies` 为空是安装体验的核心 ——
-  一条 `npm i -g flow-one` 装完就能用，pnpm / bun 也不需要额外放行安装脚本。
-- **单包，不分包**：约 4000 行、17 个模块，单包足够；拆成 workspaces 或多包发布只会
-  把「装一个」变成「解析一堆包」，还要为每个新包过一次 npm 的发布审查。
-  规模问题用拆函数、拆模块解决，`make check` 会在文件超过 500 行时提醒。
-- **不允许循环依赖**：ESM 下的环路表现为 TDZ 报错，报错点离成因很远，
-  所以交给机器兜住（`scripts/check-modules.mjs`）。`src/home.mjs` 故意什么都不 import，
-  它存在的意义就是打断 `config ↔ opencode` 那一环。
-- **每个行为变更都配回归测试**，用例不得碰真实家目录（一律用临时 `BRIDGE_HOME`）。
+A few deliberate constraints:
+
+- **Zero third-party dependencies**: only `node:` built-ins. An empty `dependencies` is central to
+  the installation experience — one `npm i -g flow-one` is all it takes, and pnpm / bun need no
+  install-script allowlisting either.
+- **Single package, no splitting**: about 4000 lines across 17 modules is fine as one package;
+  splitting into workspaces or multiple published packages would only turn "install one thing"
+  into "resolve a pile of packages", plus another npm publish review for every new package.
+  Solve scale with smaller functions and modules; `make check` warns when a file exceeds 500
+  lines.
+- **Circular dependencies are not allowed**: an ESM cycle manifests as a TDZ error, far from its
+  cause, so the machine guards it (`scripts/check-modules.ts`). `src/home.ts` deliberately
+  imports nothing; its whole purpose is to break the `config ↔ opencode` cycle.
+- **Every behavior change comes with a regression test**, and test cases must not touch the real
+  home directory (always use a temporary `BRIDGE_HOME`).
