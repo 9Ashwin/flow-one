@@ -28,7 +28,7 @@ import { HOME_DIR, LEGACY_HOME_DIR, legacyHomeInUse } from "./home.js";
 import { DEFAULT_DSH_REASONING, DSH_SOURCE_IDS, applyDshConfig, dshCurrentlyManaged, removeDshConfig } from "./dsh.js";
 // The menu's "switch source" entry runs the same flow as `fo use`, just picked with
 // arrow keys when no argument is given
-import { useFlow } from "./use.js";
+import { autoFlow, useFlow } from "./use.js";
 import { banner, blank, box, confirm, gray, green, heading, info, input, isInteractive, menu, note, section, select, password, spinner, style, success, warn, fail, dim, yellow, } from "./prompt.js";
 import { SUBTYPES, asBridgeError, configError, renderError, upstreamError, validationError } from "./errors.js";
 const DEFAULT_PORT = 8788;
@@ -487,6 +487,8 @@ export async function clientFlow() {
         ? '  两个客户端都没配（按你的选择）；上面的信息可以直接填'
         : `  已帮你配：${managed.join('、')}`));
     blank();
+    if (record.serviceEnv?.BRIDGE_FALLBACK_MODELS)
+        info(`回退顺序：${record.serviceEnv.BRIDGE_FALLBACK_MODELS.split(',').join(' → ')}`);
     info(`前台把桥跑起来：${serveCommand(port, apiKey, model, record.serviceEnv ?? readInstallState().service?.env)}`);
     blank();
     return 0;
@@ -507,6 +509,8 @@ export function serveCommand(port, apiKey, model, env = {}) {
         args.push('--model', model);
     if (env.BRIDGE_UPSTREAM_USAGE === '0')
         args.push('--no-upstream-usage');
+    if (env.BRIDGE_FALLBACK_MODELS)
+        args.push('--fallback', env.BRIDGE_FALLBACK_MODELS);
     if (env.BRIDGE_MODE === 'gateway') {
         args.push('--mode', 'gateway');
         if (env.UPSTREAM_BASE_URL)
@@ -1055,6 +1059,7 @@ export async function mainMenu(options = {}) {
                         { key: '1', label: '切换渠道', hint: '国内版 / 国际版 / 免费档 / Go 套餐，用它上次的模型' },
                         { key: '2', label: '一键配置', hint: '接哪一家 → 选模型 → 写 Claude Code 配置 → 后台常驻' },
                         { key: '3', label: '切换模型', hint: '改完自动重启服务' },
+                        { key: '7', label: '自动回退', hint: '国际版 → 国内版 → Go 套餐，额度不足自动切换' },
                         { key: '4', label: '查看状态', hint: '登录有效期 / 服务 / 文件位置' },
                     ],
                 },
@@ -1074,6 +1079,8 @@ export async function mainMenu(options = {}) {
         try {
             if (choice === '1')
                 await useFlow();
+            if (choice === '7')
+                await autoFlow();
             if (choice === '2')
                 await setupWizard(options);
             if (choice === '3')

@@ -180,7 +180,7 @@ async function* rejectInStream(chunks, product) {
         const code = record.code;
         if (!hasChoices && (typeof code === 'number' || typeof record.msg === 'string')) {
             const message = record.msg ?? record.message ?? record.displayMsg ?? `code ${String(code)}`;
-            yield { error: { message: `${product.label}: ${String(message)}` } };
+            yield { error: { message: `${product.label}: ${typeof code === 'number' ? `${code} ` : ''}${String(message)}` } };
             return;
         }
         yield chunk;

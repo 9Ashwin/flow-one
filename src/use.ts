@@ -7,7 +7,7 @@
 // and it switches using **the model that line used last**, so nobody re-picks it each time.
 
 import { SOURCES, sourceByName } from './sources.ts'
-import { DEFAULT_LOCAL_API_KEY, credentialFile } from './config.ts'
+import { DEFAULT_FALLBACK_MODELS, DEFAULT_LOCAL_API_KEY, credentialFile, resolveConfig } from './config.ts'
 import { createDirectUpstream } from './upstreams.ts'
 import { credentialStatus } from './auth.ts'
 import { hasGoCredential } from './opencode.ts'
@@ -198,6 +198,50 @@ export async function chooseSource({
     }),
   })
   return source
+}
+
+/** Enable a stable client model with a configurable ordered list of upstream models. */
+export async function autoFlow(candidates?: string[]): Promise<number> {
+  const installed = readInstallState()
+  const record = bridgeRecord() as BridgeRecord
+  const { port, apiKey } = connectionOf({ record })
+  const previousEnv = installed.service?.env ?? record.serviceEnv ?? {}
+  if (previousEnv.BRIDGE_MODE === 'gateway') {
+    throw configError(SUBTYPES.SETTINGS_INCONSISTENT, 'automatic source fallback requires direct mode').withHint(
+      'run `fo setup` and configure a direct source first',
+    )
+  }
+  if (!clientConfigIsOurs({ port, file: claudeSettingsPath() })) {
+    throw configError(SUBTYPES.SETTINGS_INCONSISTENT, 'Claude Code is not configured for this bridge').withHint(
+      'run `fo setup` and select Claude Code first',
+    )
+  }
+  const remembered = DEFAULT_FALLBACK_MODELS.map(fallback => {
+    const source = fallback.split('/')[0]
+    const last = record.lastModels?.[source]?.model
+    return typeof last === 'string' && last.startsWith(`${source}/`) ? last : fallback
+  })
+  const chosen = candidates ?? (previousEnv.BRIDGE_FALLBACK_MODELS?.split(',') || remembered)
+  resolveConfig({ env: {}, argv: ['--fallback', chosen.join(',')] })
+  const products = [...new Set([...mountedIds(previousEnv), ...chosen.map(item => item.split('/')[0])])]
+  const env = { ...previousEnv, BRIDGE_MODE: 'direct', BRIDGE_FALLBACK_MODELS: chosen.join(',') }
+  const applied = await applySwitch({
+    port,
+    apiKey,
+    model: 'auto',
+    mounted: products,
+    env,
+    settings: claudeSettingsPath(),
+  })
+  if (applied.service !== undefined && !applied.service.ok) {
+    throw configError(SUBTYPES.SERVICE_UNSUPPORTED, 'the service could not be restarted').withHint(
+      applied.service.reason ?? 'check the service configuration and retry',
+    )
+  }
+  recordBridge({ port, apiKey, model: 'auto', serviceEnv: serviceEnvFor({ env, model: 'auto', products }) })
+  process.stderr.write(`Automatic fallback configured: ${chosen.join(' → ')}\n`)
+  if (applied.service === undefined) process.stderr.write('Start the foreground bridge using `fo client`.\n')
+  return 0
 }
 
 /**
