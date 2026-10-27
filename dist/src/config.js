@@ -157,6 +157,7 @@ Options:
   --max-tokens <N>          cap max_tokens before forwarding; 0 means no cap
   --heartbeat <ms>          heartbeat interval while thinking; 0 disables it (default ${DEFAULTS.heartbeatMs})
   --upstream-idle <ms>      silence from the upstream counted as a failure; 0 disables it (default ${DEFAULTS.upstreamIdleMs})
+  --no-upstream-usage       omit stream_options when an upstream rejects it (usage may be unavailable)
   --thinking                render the upstream's reasoning deltas as thinking blocks (dropped by default)
   --no-fingerprint-rewrite  disable the narrow Tencent-side content fingerprint rewrite (enabled by default, see README)
   --quiet                   print errors only
@@ -169,7 +170,7 @@ Gateway mode only:
 
 Environment: BRIDGE_MODE / BRIDGE_PRODUCTS / BRIDGE_HOST / BRIDGE_PORT / BRIDGE_MODEL /
 BRIDGE_API_KEY / BRIDGE_MODEL_MAP / BRIDGE_MAX_TOKENS_CAP / BRIDGE_SHOW_THINKING /
-BRIDGE_HEARTBEAT_MS / BRIDGE_FINGERPRINT_REWRITE / BRIDGE_HOME / UPSTREAM_BASE_URL /
+BRIDGE_HEARTBEAT_MS / BRIDGE_UPSTREAM_USAGE / BRIDGE_FINGERPRINT_REWRITE / BRIDGE_HOME / UPSTREAM_BASE_URL /
 UPSTREAM_API_KEY
 `;
 /** `--clients claude,dsh` / `none` -> the set of targets. */
@@ -269,6 +270,8 @@ export function resolveConfig({ env = process.env, argv = [], home = os.homedir(
         config.maxTokensCap = Number(env.BRIDGE_MAX_TOKENS_CAP);
     if (env.BRIDGE_SHOW_THINKING !== undefined)
         config.showThinking = truthy(env.BRIDGE_SHOW_THINKING);
+    if (env.BRIDGE_UPSTREAM_USAGE !== undefined)
+        config.upstreamUsage = truthy(env.BRIDGE_UPSTREAM_USAGE);
     if (String(env.FO_DSH_REASONING ?? '').trim() !== '')
         config.dshReasoning = String(env.FO_DSH_REASONING).trim();
     if (env.BRIDGE_FINGERPRINT_REWRITE !== undefined)
@@ -282,6 +285,10 @@ export function resolveConfig({ env = process.env, argv = [], home = os.homedir(
         const flag = argv[index];
         if (flag === '--help' || flag === '-h')
             return { help: true, command: 'help', commandArgs: [], config };
+        if (flag === '--no-upstream-usage') {
+            config.upstreamUsage = false;
+            continue;
+        }
         if (flag === '--thinking') {
             config.showThinking = true;
             continue;

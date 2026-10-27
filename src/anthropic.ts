@@ -888,6 +888,10 @@ export function createStreamTranslator({
     get usage(): AnthropicUsage {
       return usageNow()
     },
+    get upstreamInputTokens(): number | undefined {
+      const value = upstreamUsage.prompt_tokens
+      return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : undefined
+    },
   }
 }
 

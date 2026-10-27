@@ -255,7 +255,7 @@ export function requestId() {
  */
 const identityCache = new Map<string, { projectId: string; session: string }>()
 
-function identity(home: string): { projectId: string; session: string } {
+function identity(home: string, log: (message: string) => void = () => {}): { projectId: string; session: string } {
   const cached = identityCache.get(home)
   if (cached !== undefined) return cached
   const file = path.join(home, 'opencode.json')
@@ -265,7 +265,9 @@ function identity(home: string): { projectId: string; session: string } {
     fs.mkdirSync(home, { recursive: true, mode: 0o700 })
     // The two identifiers share a file. Serialize first-use updates across processes so
     // neither process overwrites the other one's session or uses a different identity.
-    const deadline = Date.now() + 3000
+    // Avoid blocking the event loop for seconds when a live process stalls while
+    // holding the lock; a later request retries the persisted identity.
+    const deadline = Date.now() + 250
     while (!locked) {
       try {
         const fd = fs.openSync(lock, 'wx', 0o600)
@@ -277,9 +279,17 @@ function identity(home: string): { projectId: string; session: string } {
         }
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code !== 'EEXIST' || Date.now() >= deadline) throw error
+        // A short-lived recovery guard ensures two contenders cannot both unlink
+        // the stale lock and accidentally remove a newly acquired one.
+        const guard = `${lock}.recovery`
+        let guardFd: number | undefined
         try {
+          guardFd = fs.openSync(guard, 'wx', 0o600)
+          fs.writeFileSync(guardFd, String(process.pid))
           const pid = Number(fs.readFileSync(lock, 'utf8'))
-          if (Number.isInteger(pid) && pid > 0 && Date.now() - fs.statSync(lock).mtimeMs > 30000) {
+          const old = Date.now() - fs.statSync(lock).mtimeMs > 30000
+          if (old && (!Number.isInteger(pid) || pid <= 0)) fs.unlinkSync(lock)
+          else if (old) {
             try {
               process.kill(pid, 0)
             } catch (probe) {
@@ -287,7 +297,35 @@ function identity(home: string): { projectId: string; session: string } {
             }
           }
         } catch {
-          /* another process may have just released the lock */
+          // A process can also die while reclaiming. Only an old guard owned by
+          // a dead process (or left empty before the PID write) is reclaimable.
+          if (guardFd === undefined) {
+            try {
+              const stat = fs.statSync(guard)
+              const owner = Number(fs.readFileSync(guard, 'utf8'))
+              let dead = !Number.isInteger(owner) || owner <= 0
+              if (!dead) {
+                try {
+                  process.kill(owner, 0)
+                } catch (probe) {
+                  dead = (probe as NodeJS.ErrnoException).code === 'ESRCH'
+                }
+              }
+              const current = fs.statSync(guard)
+              if (dead && Date.now() - stat.mtimeMs > 30000 && stat.ino === current.ino) fs.unlinkSync(guard)
+            } catch {
+              /* released or replaced by another contender */
+            }
+          }
+        } finally {
+          if (guardFd !== undefined) {
+            fs.closeSync(guardFd)
+            try {
+              fs.unlinkSync(guard)
+            } catch {
+              /* already removed */
+            }
+          }
         }
         Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10)
       }
@@ -315,12 +353,12 @@ function identity(home: string): { projectId: string; session: string } {
     identityCache.set(home, result)
     return result
   } catch {
-    // An unwritable home used to fall back to an ephemeral identity; keep that behaviour.
+    // Retry on the next request instead of pinning an ephemeral identity forever.
+    log('OpenCode identity could not be persisted; using a temporary identity for this request')
     const result = {
       projectId: crypto.createHash('sha1').update(crypto.randomBytes(16)).digest('hex'),
       session: sessionId(),
     }
-    identityCache.set(home, result)
     return result
   } finally {
     if (locked) {
@@ -600,7 +638,8 @@ export async function chat(
 
   // Persisted, not per-process: a restart used to mint a new session id and with it a
   // new affinity bucket, for the same reason `projectId` is persisted.
-  if (session === '') session = persistedSession()
+  const activeIdentity = identity(bridgeHome(), log)
+  session = activeIdentity.session
   const gated = applyFreeTierGate({ ...body, model })
   const response = await fetch(`${source.baseUrl}${source.chatPath}`, {
     method: 'POST',
@@ -608,7 +647,7 @@ export async function chat(
       authorization: `Bearer ${source.anonymousKey ?? ''}`,
       'content-type': 'application/json',
       accept: 'text/event-stream',
-      ...shapeHeaders({ project: projectId(), session, request: requestId() }),
+      ...shapeHeaders({ project: activeIdentity.projectId, session, request: requestId() }),
     },
     body: JSON.stringify(gated.body),
     signal,

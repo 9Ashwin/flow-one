@@ -111,10 +111,14 @@ Every upstream request sets `stream_options.include_usage`, including when the
 client requests a non-streaming response: the bridge still streams from upstream
 and folds the result. Some OpenAI-compatible providers require this flag to send
 usage. Tencent and OpenCode Go accepted it in the 2026-10-27 live checks.
+If an incompatible gateway rejects the option, restart with `--no-upstream-usage`
+(or `BRIDGE_UPSTREAM_USAGE=0`); that option is preserved in background service
+configuration. The bridge does not automatically retry a rejected request.
 
 Successful request logs include `cache_read`, `cache_write`, and `cache_ratio`.
 `unknown` means the upstream did not report the field; it is not a zero. The
-ratio divides reported cache reads by all input buckets. A process-local keyed
+ratio divides reported cache reads by the upstream-reported total input. If that
+total is absent, the ratio is `unknown` even when an estimated input count exists. A process-local keyed
 `prefix_id` compares the translated model, system messages, and tools without
 logging their contents. It changes after restart and does not cover conversation
 history or subsequent provider-specific rewrites, so a match does not guarantee

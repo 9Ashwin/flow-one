@@ -196,3 +196,231 @@ test('Tencent streaming forwards the usage request so cache metrics can be repor
   )
   assert.deepEqual(body.stream_options, { include_usage: true })
 })
+
+test('a cache hit without an upstream prompt total reports an unknown ratio in both response modes', async t => {
+  const logs: string[] = []
+  const upstream = {
+    describe: () => 'fake',
+    loadModels: async () => [],
+    chat: async () => ({
+      ok: true as const,
+      chunks: (async function* () {
+        yield {
+          choices: [{ delta: { content: 'ok' }, finish_reason: 'stop' }],
+          usage: { prompt_cache_hit_tokens: 50, completion_tokens: 1 },
+        }
+      })(),
+    }),
+  }
+  const bridge = createBridgeServer({
+    config: { host: '127.0.0.1', port: 0, model: 'test', apiKey: '', modelMap: {}, heartbeatMs: 0 },
+    upstream,
+    log: line => logs.push(line),
+  })
+  const address = (await bridge.listen()) as AddressInfo
+  t.after(() => bridge.close())
+  for (const stream of [false, true]) {
+    const response = await fetch(`http://127.0.0.1:${address.port}/v1/messages`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ model: 'test', messages: [{ role: 'user', content: 'hi' }], stream }),
+    })
+    assert.equal(response.status, 200)
+    await response.text()
+  }
+  const lines = logs.filter(line => line.includes('prefix_id='))
+  assert.equal(lines.length, 2)
+  for (const line of lines) assert.match(line, /cache_read=50 .*cache_ratio=unknown/)
+})
+
+test('empty and abandoned identity locks recover concurrently without overwriting identity', async t => {
+  const home = scratch()
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }))
+  const lock = path.join(home, 'opencode.json.lock')
+  fs.writeFileSync(lock, '')
+  fs.writeFileSync(`${lock}.recovery`, '')
+  const old = new Date(Date.now() - 60_000)
+  fs.utimesSync(lock, old, old)
+  fs.utimesSync(`${lock}.recovery`, old, old)
+  const script = `import {projectId,persistedSession} from './src/opencode.ts'; console.log(JSON.stringify({session:persistedSession(process.argv[1]),projectId:projectId(process.argv[1])}))`
+  const run = () =>
+    new Promise<string>((resolve, reject) => {
+      const child = spawn(process.execPath, ['--input-type=module', '-e', script, home], { cwd: process.cwd() })
+      let out = '',
+        err = ''
+      child.stdout.on('data', data => {
+        out += data
+      })
+      child.stderr.on('data', data => {
+        err += data
+      })
+      child.on('error', reject)
+      child.on('close', code => (code === 0 ? resolve(out.trim()) : reject(new Error(err))))
+    })
+  const results = (await Promise.all(Array.from({ length: 8 }, run))).map(value => JSON.parse(value))
+  for (const result of results) assert.deepEqual(result, results[0])
+  const stored = JSON.parse(fs.readFileSync(path.join(home, 'opencode.json'), 'utf8'))
+  assert.deepEqual(results[0], { session: stored.session, projectId: stored.projectId })
+})
+
+test('a live identity lock causes only a temporary fallback, then retries after release', t => {
+  const home = scratch()
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }))
+  const lock = path.join(home, 'opencode.json.lock')
+  fs.writeFileSync(lock, String(process.pid))
+  const temporary = projectId(home)
+  assert.equal(fs.existsSync(path.join(home, 'opencode.json')), false)
+  fs.unlinkSync(lock)
+  const persistent = projectId(home)
+  assert.notEqual(persistent, temporary)
+  assert.equal(JSON.parse(fs.readFileSync(path.join(home, 'opencode.json'), 'utf8')).projectId, persistent)
+})
+
+test('an incompatible gateway rejects usage options once and can be explicitly configured to omit them', async t => {
+  const { createGatewayUpstream } = await import('../src/upstreams.ts')
+  const http = await import('node:http')
+  const seen: Record<string, unknown>[] = []
+  const fake = http.createServer(async (req, res) => {
+    if (req.method === 'GET') {
+      res.writeHead(200, { 'content-type': 'application/json' })
+      res.end('{"data":[]}')
+      return
+    }
+    let raw = ''
+    for await (const chunk of req) raw += chunk
+    const body = JSON.parse(raw)
+    seen.push(body)
+    if (body.stream_options) {
+      res.writeHead(400, { 'content-type': 'application/json' })
+      res.end(JSON.stringify({ error: { message: 'unsupported stream_options' } }))
+      return
+    }
+    res.writeHead(200, { 'content-type': 'text/event-stream' })
+    res.end('data: {"choices":[{"delta":{"content":"ok"},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n')
+  })
+  await new Promise<void>(resolve => fake.listen(0, '127.0.0.1', resolve))
+  t.after(() => fake.close())
+  const port = (fake.address() as AddressInfo).port
+  const upstream = createGatewayUpstream({ upstream: `http://127.0.0.1:${port}` })
+  for (const allowed of [true, false]) {
+    const bridge = createBridgeServer({
+      config: { host: '127.0.0.1', port: 0, model: 'test', apiKey: '', modelMap: {}, upstreamUsage: allowed },
+      upstream,
+    })
+    const address = (await bridge.listen()) as AddressInfo
+    t.after(() => bridge.close())
+    const response = await fetch(`http://127.0.0.1:${address.port}/v1/messages`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ model: 'test', messages: [{ role: 'user', content: 'hi' }] }),
+    })
+    assert.equal(response.status, allowed ? 400 : 200)
+    await response.text()
+    await bridge.close()
+  }
+  assert.equal(seen.length, 2)
+  assert.deepEqual(seen[0].stream_options, { include_usage: true })
+  assert.equal(seen[1].stream_options, undefined)
+  const { resolveConfig } = await import('../src/config.ts')
+  assert.equal(resolveConfig({ env: {}, argv: ['--no-upstream-usage'] }).config.upstreamUsage, false)
+  assert.equal(resolveConfig({ env: { BRIDGE_UPSTREAM_USAGE: '0' }, argv: [] }).config.upstreamUsage, false)
+  const { serveCommand } = await import('../src/wizard.ts')
+  assert.match(serveCommand(8788, '', 'test', { BRIDGE_UPSTREAM_USAGE: '0' }), /--no-upstream-usage/)
+})
+
+test('cache benchmark sends a stable multi-turn prefix and never prints content or credentials', async t => {
+  const http = await import('node:http')
+  const bodies: Array<{ system: string; messages: unknown[] }> = []
+  const fake = http.createServer(async (req, res) => {
+    let raw = ''
+    for await (const chunk of req) raw += chunk
+    assert.equal(req.headers['x-api-key'], 'test-local-secret')
+    bodies.push(JSON.parse(raw))
+    res.writeHead(200, { 'content-type': 'application/json' })
+    res.end(
+      JSON.stringify({
+        content: [{ type: 'text', text: 'private-model-response' }],
+        usage: { input_tokens: 10, cache_read_input_tokens: 50 },
+      }),
+    )
+  })
+  await new Promise<void>(resolve => fake.listen(0, '127.0.0.1', resolve))
+  t.after(() => fake.close())
+  const port = (fake.address() as AddressInfo).port
+  const child = spawn(process.execPath, ['scripts/cache-benchmark.ts', `http://127.0.0.1:${port}`, 'test/model'], {
+    cwd: process.cwd(),
+    env: { ...process.env, FO_CACHE_BENCH_API_KEY: 'test-local-secret' },
+  })
+  let output = '',
+    error = ''
+  child.stdout.on('data', chunk => {
+    output += chunk
+  })
+  child.stderr.on('data', chunk => {
+    error += chunk
+  })
+  const code = await new Promise<number | null>((resolve, reject) => {
+    child.on('error', reject)
+    child.on('close', resolve)
+  })
+  assert.equal(code, 0, error)
+  const rows = output
+    .trim()
+    .split('\n')
+    .map(line => JSON.parse(line))
+  assert.deepEqual(
+    rows.map(row => row.turn),
+    [1, 2, 3, 4],
+  )
+  assert.deepEqual(
+    bodies.map(body => body.messages.length),
+    [1, 3, 5, 7],
+  )
+  assert.ok(bodies.every(body => body.system === bodies[0].system))
+  assert.ok(!output.includes('test-local-secret') && !output.includes('private-model-response'))
+})
+
+test('a dead lock owner is reclaimed and the recovered identity is persisted', t => {
+  const home = scratch()
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }))
+  const lock = path.join(home, 'opencode.json.lock')
+  fs.writeFileSync(lock, '99999999')
+  const old = new Date(Date.now() - 60_000)
+  fs.utimesSync(lock, old, old)
+  const project = projectId(home)
+  assert.equal(JSON.parse(fs.readFileSync(path.join(home, 'opencode.json'), 'utf8')).projectId, project)
+  assert.equal(fs.existsSync(lock), false)
+})
+
+test('an unwritable OpenCode home logs temporary identity and retries on the next request', async t => {
+  const home = scratch()
+  const previous = process.env.BRIDGE_HOME
+  const blocked = path.join(home, 'blocked')
+  fs.writeFileSync(blocked, 'file, not directory')
+  process.env.BRIDGE_HOME = blocked
+  t.after(() => {
+    if (previous === undefined) delete process.env.BRIDGE_HOME
+    else process.env.BRIDGE_HOME = previous
+    fs.rmSync(home, { recursive: true, force: true })
+  })
+  const logs: string[] = []
+  const { OPENCODE, chat } = await import('../src/opencode.ts')
+  t.mock.method(globalThis, 'fetch', async () => new Response('data: [DONE]\n\n'))
+  const first = await chat(
+    OPENCODE,
+    'example',
+    { messages: [{ role: 'user', content: 'hi' }] },
+    { log: line => logs.push(line) },
+  )
+  assert.equal(first.ok, true)
+  assert.ok(logs.some(line => line.includes('temporary identity')))
+  fs.unlinkSync(blocked)
+  const second = await chat(
+    OPENCODE,
+    'example',
+    { messages: [{ role: 'user', content: 'hi' }] },
+    { log: line => logs.push(line) },
+  )
+  assert.equal(second.ok, true)
+  assert.equal(fs.existsSync(path.join(blocked, 'opencode.json')), true)
+})

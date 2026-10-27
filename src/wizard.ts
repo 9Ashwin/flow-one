@@ -624,6 +624,7 @@ export async function clientFlow() {
 export function serveCommand(port: number, apiKey: string, model?: string, env: Record<string, string> = {}): string {
   const args = ['fo', 'serve', '--port', String(port), '--api-key', apiKey]
   if (model) args.push('--model', model)
+  if (env.BRIDGE_UPSTREAM_USAGE === '0') args.push('--no-upstream-usage')
   if (env.BRIDGE_MODE === 'gateway') {
     args.push('--mode', 'gateway')
     if (env.UPSTREAM_BASE_URL) args.push('--upstream', env.UPSTREAM_BASE_URL)
@@ -646,7 +647,7 @@ export function serveCommand(port: number, apiKey: string, model?: string, env: 
  * `decideService` / `decideClientConfig`.
  */
 export async function setupWizard(
-  options: { service?: boolean; clients?: string[]; dshReasoning?: string } = {},
+  options: { service?: boolean; clients?: string[]; dshReasoning?: string; upstreamUsage?: boolean } = {},
 ): Promise<void> {
   // Setup is menu interaction throughout: without a TTY (systemd, launchd, a pipe, an
   // agent invoking it) it used to print the menu anyway, get `undefined`, and then
@@ -688,6 +689,7 @@ export async function setupWizard(
   section('第 2 步 · 登录')
   let upstream: Upstream
   const serviceEnv: Record<string, string> = {}
+  if (options.upstreamUsage === false) serviceEnv.BRIDGE_UPSTREAM_USAGE = '0'
   if (chosen === GATEWAY) {
     const base = await input({
       message: '上游地址',
@@ -1187,7 +1189,7 @@ export async function doctorFlow() {
 }
 
 /** Entered when no arguments are given and the process runs in a terminal. */
-export async function mainMenu(): Promise<number> {
+export async function mainMenu(options: { upstreamUsage?: boolean } = {}): Promise<number> {
   for (;;) {
     banner('Claude Code ← WorkBuddy / OpenCode 本地反代', version())
     await statusLine()
@@ -1218,7 +1220,7 @@ export async function mainMenu(): Promise<number> {
     if (choice === 'Q') return 0
     try {
       if (choice === '1') await useFlow()
-      if (choice === '2') await setupWizard()
+      if (choice === '2') await setupWizard(options)
       if (choice === '3') await switchModel()
       if (choice === '4') await statusFlow()
       if (choice === '5') await loginFlow()

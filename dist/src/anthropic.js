@@ -867,6 +867,10 @@ export function createStreamTranslator({ model, id, write, showThinking = false,
         get usage() {
             return usageNow();
         },
+        get upstreamInputTokens() {
+            const value = upstreamUsage.prompt_tokens;
+            return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : undefined;
+        },
     };
 }
 /** Anthropic's error envelope. */

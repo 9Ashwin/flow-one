@@ -505,6 +505,8 @@ export function serveCommand(port, apiKey, model, env = {}) {
     const args = ['fo', 'serve', '--port', String(port), '--api-key', apiKey];
     if (model)
         args.push('--model', model);
+    if (env.BRIDGE_UPSTREAM_USAGE === '0')
+        args.push('--no-upstream-usage');
     if (env.BRIDGE_MODE === 'gateway') {
         args.push('--mode', 'gateway');
         if (env.UPSTREAM_BASE_URL)
@@ -564,6 +566,8 @@ export async function setupWizard(options = {}) {
     section('第 2 步 · 登录');
     let upstream;
     const serviceEnv = {};
+    if (options.upstreamUsage === false)
+        serviceEnv.BRIDGE_UPSTREAM_USAGE = '0';
     if (chosen === GATEWAY) {
         const base = await input({
             message: '上游地址',
@@ -1037,7 +1041,7 @@ export async function doctorFlow() {
     return 0;
 }
 /** Entered when no arguments are given and the process runs in a terminal. */
-export async function mainMenu() {
+export async function mainMenu(options = {}) {
     for (;;) {
         banner('Claude Code ← WorkBuddy / OpenCode 本地反代', version());
         await statusLine();
@@ -1071,7 +1075,7 @@ export async function mainMenu() {
             if (choice === '1')
                 await useFlow();
             if (choice === '2')
-                await setupWizard();
+                await setupWizard(options);
             if (choice === '3')
                 await switchModel();
             if (choice === '4')

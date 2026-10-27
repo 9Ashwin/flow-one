@@ -333,6 +333,8 @@ export function createBridgeServer({ config, upstream, log = () => { }, }) {
             anthropicError(res, 400, translated.error, undefined, reqId);
             return;
         }
+        if (config.upstreamUsage === false)
+            delete translated.body.stream_options;
         // A process-local keyed fingerprint allows prefix comparisons without logging
         // prompts or producing a reusable hash of potentially sensitive content.
         const prefixId = crypto
@@ -344,12 +346,14 @@ export function createBridgeServer({ config, upstream, log = () => { }, }) {
         }))
             .digest('hex')
             .slice(0, 16);
-        const cacheLog = (usage) => {
+        const cacheLog = (usage, upstreamInput) => {
             const read = usage.cache_read_input_tokens;
             if (read === undefined)
                 return `prefix_id=${prefixId} cache_read=unknown cache_ratio=unknown`;
-            const total = usage.input_tokens + read + (usage.cache_creation_input_tokens ?? 0);
-            return `prefix_id=${prefixId} in=${usage.input_tokens} cache_read=${read} cache_write=${usage.cache_creation_input_tokens ?? 'unknown'} cache_ratio=${total > 0 ? (read / total).toFixed(4) : 'unknown'}`;
+            const total = typeof upstreamInput === 'number' && Number.isFinite(upstreamInput) && upstreamInput > 0
+                ? upstreamInput
+                : undefined;
+            return `prefix_id=${prefixId} in=${usage.input_tokens} cache_read=${read} cache_write=${usage.cache_creation_input_tokens ?? 'unknown'} cache_ratio=${total === undefined ? 'unknown' : (read / total).toFixed(4)}`;
         };
         const wantsStream = isObject(body) ? body.stream === true : false;
         const id = `msg_${crypto.randomBytes(12).toString('hex')}`;
@@ -429,7 +433,7 @@ export function createBridgeServer({ config, upstream, log = () => { }, }) {
                 return;
             }
             json(res, 200, message);
-            log(`${reqId} model=${model} stream=0 ms=${Date.now() - started} first_chunk_ms=${firstByteAt === undefined ? '-' : firstByteAt - started} ttft=${firstOutputAt === undefined ? '-' : firstOutputAt - started} out=${outcome.text.length} ${cacheLog(message.usage)}`);
+            log(`${reqId} model=${model} stream=0 ms=${Date.now() - started} first_chunk_ms=${firstByteAt === undefined ? '-' : firstByteAt - started} ttft=${firstOutputAt === undefined ? '-' : firstOutputAt - started} out=${outcome.text.length} ${cacheLog(message.usage, isObject(outcome.usage) ? outcome.usage.prompt_tokens : undefined)}`);
             return;
         }
         res.writeHead(200, {
@@ -527,7 +531,7 @@ export function createBridgeServer({ config, upstream, log = () => { }, }) {
                 res.end();
             const usage = translator.usage;
             log(`${reqId} model=${model} stream=1 ms=${Date.now() - started} first_chunk_ms=${firstByteAt === undefined ? '-' : firstByteAt - started} ttft=${firstOutputAt === undefined ? '-' : firstOutputAt - started}` +
-                ` out=${usage.output_tokens} ${cacheLog(usage)}`);
+                ` out=${usage.output_tokens} ${cacheLog(usage, translator.upstreamInputTokens)}`);
         }
     }
     async function handle(req, res) {

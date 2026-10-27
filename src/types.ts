@@ -131,6 +131,7 @@ export interface BridgeConfig {
   showThinking?: boolean
   heartbeatMs?: number
   upstreamIdleMs?: number
+  upstreamUsage?: boolean
   dshReasoning?: string
   fingerprintRewrite?: boolean
   products?: Source[]
@@ -329,4 +330,5 @@ export interface StreamTranslator {
   fail(message: unknown): void
   readonly failure: string | undefined
   readonly usage: AnthropicUsage
+  readonly upstreamInputTokens: number | undefined
 }

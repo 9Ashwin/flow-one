@@ -206,6 +206,7 @@ async function commandServe(config: Config, log: (message: string) => void): Pro
       apiKey: config.apiKey,
       env: {
         BRIDGE_MODE: config.mode,
+        ...(config.upstreamUsage === false ? { BRIDGE_UPSTREAM_USAGE: '0' } : {}),
         ...(config.mode === 'gateway'
           ? {
               UPSTREAM_BASE_URL: config.upstream,
@@ -288,7 +289,12 @@ async function main() {
   const log = makeLogger(quiet)
   const out = makeDataWriter(quiet)
   if (command === 'setup')
-    return await setupWizard({ service: config.service, clients: config.clients, dshReasoning: config.dshReasoning })
+    return await setupWizard({
+      service: config.service,
+      clients: config.clients,
+      dshReasoning: config.dshReasoning,
+      upstreamUsage: config.upstreamUsage,
+    })
   if (command === 'uninstall') return await uninstallFlow()
   if (command === 'switch') return await switchModel()
   // Channel switch only: `fo use intl` — an already-configured source switches directly
@@ -310,7 +316,7 @@ async function main() {
   // (systemd, launchd, a pipe) start the service directly, so scripts and the background
   // service behave the same regardless of the menu.
   if (argv.length === 0 && isInteractive()) {
-    await mainMenu()
+    await mainMenu({ upstreamUsage: config.upstreamUsage })
     return
   }
   return await commandServe(config, log)
