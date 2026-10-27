@@ -20,9 +20,9 @@ Claude Code CLI ──► this bridge 127.0.0.1:8788 ──► WorkBuddy China c
 
 ## Installation
 
-**Not published to the npm registry — install straight from GitHub** (zero dependencies; what
-you download is runnable code; Node ≥ 22.18 is all you need, since it strips TypeScript types
-natively and there is no build step).
+**Not published to the npm registry — install straight from GitHub.** The repository includes
+a generated JavaScript snapshot, so installation needs no build step or third-party runtime
+dependencies. Node ≥ 22.18 is required.
 
 ```bash
 npm i -g github:9Ashwin/flow-one      # installs the flow-one and fo commands
@@ -34,11 +34,11 @@ If you would rather not install it globally, fetch it on each run:
 npx -y github:9Ashwin/flow-one status
 ```
 
-To modify the code, clone and link (the command is updated as soon as you `git pull`):
+To modify the code, clone the repository and run the TypeScript source directly:
 
 ```bash
 git clone https://github.com/9Ashwin/flow-one.git
-cd flow-one && npm link
+cd flow-one && node cli.ts
 ```
 
 **Updating**: rerun the same `npm i -g github:9Ashwin/flow-one`.
@@ -384,8 +384,8 @@ third-party clients such as Claude Code can be used (see the disclaimer at the e
   break it (in that case it reports `FreeTierError` explicitly rather than degrading silently).
   It only covers the free tier; models not ending in `-free` require an OpenCode Go subscription.
 - **Which code the service runs depends on how it was installed**: with a global install
-  (`npm i -g`), the service points at the `cli.ts` **snapshot** under
-  `…/lib/node_modules/…/cli.ts`, and later `git pull`s or repository edits have no effect
+  (`npm i -g`), the service points at the `dist/cli.js` **snapshot** under
+  `…/lib/node_modules/…/dist/cli.js`, and later `git pull`s or repository edits have no effect
   (the symptom is "the CLI has a new feature but the service doesn't"). `fo status` prints the
   service's code path and warns with a reinstall hint when it differs from the current command.
 - Covers conversations and the model catalog only. **Daily check-in for credits is out of
@@ -498,7 +498,7 @@ verification gates). Supporting documents:
 **The gates are written as commands**, run in one go:
 
 ```bash
-make verify     # run this before committing = static checks + all unit tests
+make verify     # run this before committing = build + static checks + all unit tests
 make check      # static checks only: types + lint + formatting + module conventions
 make test       # tests only (node --test, zero dependencies)
 make types      # tsc --noEmit against the TypeScript sources
@@ -513,8 +513,7 @@ bridge and running the tests do not: `node cli.ts` and `node --test` use only No
 A few deliberate constraints:
 
 - **Zero third-party dependencies**: only `node:` built-ins. An empty `dependencies` is central to
-  the installation experience — one `npm i -g flow-one` is all it takes, and pnpm / bun need no
-  install-script allowlisting either.
+  the installation experience — one `npm i -g github:9Ashwin/flow-one` is all it takes.
 - **Single package, no splitting**: about 4000 lines across 17 modules is fine as one package;
   splitting into workspaces or multiple published packages would only turn "install one thing"
   into "resolve a pile of packages", plus another npm publish review for every new package.

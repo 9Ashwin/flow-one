@@ -206,8 +206,34 @@ export function toOpenAiRequest(
   if (system !== '') messages.push({ role: 'system', content: system })
 
   for (const row of request.messages) {
-    if (!isObject(row)) continue
+    if (!isObject(row) || (row.role !== 'user' && row.role !== 'assistant' && row.role !== 'system'))
+      return { error: `unsupported message role: ${isObject(row) ? String(row.role) : 'invalid'}` }
     const blocks = blocksOf(row.content)
+    if (row.role === 'system') {
+      if (blocks.some(block => block.type !== 'text')) return { error: 'unsupported system content block' }
+      const text = flattenSystem(row.content)
+      if (text !== '')
+        messages.push({ role: 'system', content: typeof rewriteSystem === 'function' ? rewriteSystem(text) : text })
+      continue
+    }
+    const allowed =
+      row.role === 'assistant'
+        ? ['text', 'tool_use', 'thinking', 'redacted_thinking']
+        : ['text', 'image', 'tool_result']
+    for (const block of blocks) {
+      if (typeof block.type !== 'string' || !allowed.includes(block.type))
+        return { error: `unsupported content block: ${String(block.type)}` }
+      if (block.type === 'image' && supportsImages && imagePart(block) === undefined)
+        return { error: 'unsupported image source' }
+      if (block.type === 'tool_result' && Array.isArray(block.content)) {
+        for (const part of blocksOf(block.content)) {
+          if (part.type !== 'text' && part.type !== 'image')
+            return { error: `unsupported tool result content: ${String(part.type)}` }
+          if (part.type === 'image' && supportsImages && imagePart(part) === undefined)
+            return { error: 'unsupported image source' }
+        }
+      }
+    }
 
     if (row.role === 'assistant') {
       const text = textOf(blocks)
@@ -226,6 +252,8 @@ export function toOpenAiRequest(
     const pending = []
     for (const block of blocks) {
       if (block.type === 'tool_result') {
+        if (pending.length > 0)
+          return { error: 'text or images before a tool result cannot be represented without reordering' }
         const callId = typeof block.tool_use_id === 'string' ? block.tool_use_id : ''
         if (callId === '') continue
         messages.push({ role: 'tool', tool_call_id: callId, content: toolResultContent(block.content, contentOptions) })
@@ -262,6 +290,13 @@ export function toOpenAiRequest(
   const body: OpenAiRequestBody = { model, messages }
   if (tools.length > 0 && !dropTools) body.tools = tools
   if (choice !== undefined) body.tool_choice = choice
+  if (
+    !dropTools &&
+    tools.length > 0 &&
+    isObject(request.tool_choice) &&
+    request.tool_choice.disable_parallel_tool_use === true
+  )
+    body.parallel_tool_calls = false
   if (request.stream === true) {
     body.stream = true
     // Without `include_usage` a plain OpenAI-wire upstream emits no usage chunk at
@@ -282,8 +317,22 @@ export function toOpenAiRequest(
   if (Array.isArray(request.stop_sequences) && request.stop_sequences.length > 0) {
     body.stop = request.stop_sequences.filter(item => typeof item === 'string')
   }
-  const effort = effortFor(request.thinking)
+  const outputConfig = isObject(request.output_config) ? request.output_config : {}
+  const effort =
+    typeof outputConfig.effort === 'string'
+      ? outputConfig.effort
+      : (effortFor(request.thinking) ??
+        (isObject(request.thinking) && request.thinking.type === 'adaptive' ? 'medium' : undefined))
   if (effort !== undefined) body.reasoning_effort = effort
+  if (outputConfig.format !== undefined) {
+    const format = outputConfig.format
+    if (!isObject(format) || format.type !== 'json_schema' || !isObject(format.schema))
+      return { error: 'unsupported output format' }
+    body.response_format = {
+      type: 'json_schema',
+      json_schema: { name: 'messages_response', strict: true, schema: format.schema },
+    }
+  }
 
   // Anthropic's fast mode selects the upstream's priority lane. Measured 2026-10-27
   // against `opencode.ai/zen/go/v1`: a request carrying `service_tier: "priority"`
@@ -523,6 +572,7 @@ export function createStreamTranslator({
   let started = false
   let finished = false
   let error: string | undefined = undefined
+  let deferredText = ''
 
   const send = (event: string, payload: unknown): void => write(`event: ${event}\ndata: ${JSON.stringify(payload)}\n\n`)
 
@@ -607,6 +657,10 @@ export function createStreamTranslator({
 
   function textDelta(text: string): void {
     if (text === '') return
+    if ([...toolSlots.values()].some(slot => slot.open)) {
+      deferredText += text
+      return
+    }
     closeThinking()
     if (textIndex === null) {
       textIndex = nextIndex++
@@ -698,7 +752,9 @@ export function createStreamTranslator({
               ? delta.reasoning
               : ''
         thinkingDelta(reasoning)
-        if (typeof delta.content === 'string') textDelta(delta.content)
+        if (typeof delta.content === 'string' && Array.isArray(delta.tool_calls) && delta.tool_calls.length > 0)
+          deferredText += delta.content
+        else if (typeof delta.content === 'string') textDelta(delta.content)
         else if (Array.isArray(delta.content)) {
           for (const part of delta.content) if (isObject(part) && typeof part.text === 'string') textDelta(part.text)
         }
@@ -723,6 +779,10 @@ export function createStreamTranslator({
         openTool(slot)
       }
       closeTools()
+      if (deferredText !== '') {
+        textDelta(deferredText)
+        closeText()
+      }
       const reason = toolSlots.size > 0 ? 'tool_use' : error !== undefined ? 'end_turn' : (stopReason ?? 'end_turn')
       send('message_delta', {
         type: 'message_delta',

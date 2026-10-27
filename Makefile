@@ -17,12 +17,16 @@ NODE   ?= node
 SOURCES := $(wildcard cli.ts src/*.ts scripts/*.ts test/*.ts)
 NPX    ?= npx --no-install
 
-.PHONY: all verify check types lint modules test format-check format dev-deps run clean help
+.PHONY: all verify build check types lint modules test format-check format dev-deps run clean help
 
 all: verify
 
 ## verify: run before committing (static checks + the whole suite)
-verify: check test
+verify: build check test
+
+## build: produce the JavaScript snapshot installed from GitHub
+build: dev-deps
+	@npm run build
 
 ## check: static checks only (no network, no tests)
 check: types lint modules format-check

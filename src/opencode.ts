@@ -528,7 +528,7 @@ export async function chat(
       return failure
     }
     log(`${source.label}: turn established for ${model} (session ${String(credential.session).slice(0, 8)}…)`)
-    return { ok: true, chunks: readSse(asReadableStream(response.body)) }
+    return { ok: true, chunks: readSse(asReadableStream(response.body), true) }
   }
 
   // Persisted, not per-process: a restart used to mint a new session id and with it a
@@ -558,7 +558,7 @@ export async function chat(
     return failure
   }
   log(`${source.label}: turn established for ${model} (session ${session.slice(0, 12)}…)`)
-  return { ok: true, chunks: restoreToolCalls(readSse(asReadableStream(response.body)), gated) }
+  return { ok: true, chunks: restoreToolCalls(readSse(asReadableStream(response.body), true), gated) }
 }
 
 /** `fetch` types the body as nullable; a 2xx SSE response always has one. */

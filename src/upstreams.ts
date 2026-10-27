@@ -70,7 +70,7 @@ export function createGatewayUpstream(config: { upstream: string; upstreamKey?: 
         signal,
       })
       if (!response.ok) return failureOf(response)
-      return { ok: true, chunks: readSse(asStream(response.body)) }
+      return { ok: true, chunks: readSse(asStream(response.body), true) }
     },
   }
 }
@@ -182,7 +182,7 @@ export function createDirectUpstream(
       // In-stream policy blocks arrive as "HTTP 200 plus one {code,msg} frame" with no
       // `choices`; a content frame always carries `choices`, which is the signal used
       // to turn the former into a uniform chunk-level error.
-      const chunks = readSse(asStream(result.response.body))
+      const chunks = readSse(asStream(result.response.body), true)
       return { ok: true, chunks: rejectInStream(chunks, product) }
     },
   }

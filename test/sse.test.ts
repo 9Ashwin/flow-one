@@ -79,3 +79,15 @@ test('SSE 消费者提前退出释放 reader，读流异常原样传递', async 
 test('SSE EOF 不派发没有空行结束的不完整事件', async () => {
   assert.deepEqual(await collect(stream('data: {"partial":true}\n')), [])
 })
+
+test('截断的上游流不能当成完整回答，但 finish_reason 后 EOF 仍兼容', async () => {
+  const strict = async (input: string) => {
+    for await (const _ of readSse(stream(input), true)) {
+      /* consume */
+    }
+  }
+  await assert.rejects(strict('data: {"choices":[{"delta":{"content":"partial"}}]}\n\n'), /before completion/)
+  await strict('data: {"choices":[{"finish_reason":"stop"}]}\n\n')
+  await strict('data: [DONE]\n\n')
+  await assert.rejects(strict('data: invalid\n\n'), /invalid SSE JSON/)
+})

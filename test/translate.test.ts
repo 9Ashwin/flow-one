@@ -163,6 +163,76 @@ test('缺 messages / 非对象请求都给出可读的 400 理由', () => {
   assert.match(openAiRequest(null, { model: 'm' }).error, /JSON object/)
 })
 
+test('Claude Code 在 messages 中发送 system 时必须保留角色并应用渠道改写', () => {
+  const request = {
+    messages: [
+      { role: 'system', content: 'source' },
+      { role: 'user', content: 'hi' },
+    ],
+  }
+  assert.deepEqual(toOpenAiRequest(request).body?.messages?.[0], { role: 'system', content: 'source' })
+  assert.deepEqual(toOpenAiRequest(request, { rewriteSystem: text => `${text}!` }).body?.messages?.[0], {
+    role: 'system',
+    content: 'source!',
+  })
+})
+
+test('结构化输出、推理档位和禁止并行调用不能在转换时丢失', () => {
+  const { body } = toOpenAiRequest({
+    messages: [{ role: 'user', content: 'hi' }],
+    tools: [{ name: 'Read', input_schema: { type: 'object' } }],
+    tool_choice: { type: 'auto', disable_parallel_tool_use: true },
+    thinking: { type: 'enabled', budget_tokens: 1024 },
+    output_config: { effort: 'high', format: { type: 'json_schema', schema: { type: 'object' } } },
+  })
+  assert.equal(body?.reasoning_effort, 'high')
+  assert.equal(body?.parallel_tool_calls, false)
+  assert.deepEqual(body?.response_format, {
+    type: 'json_schema',
+    json_schema: { name: 'messages_response', strict: true, schema: { type: 'object' } },
+  })
+  assert.match(
+    toOpenAiRequest({ messages: [{ role: 'user', content: [{ type: 'document' }] }] }).error ?? '',
+    /unsupported content/,
+  )
+  assert.match(
+    toOpenAiRequest({
+      messages: [
+        {
+          role: 'user',
+          content: [
+            { type: 'text', text: 'before' },
+            { type: 'tool_result', tool_use_id: 'x', content: 'result' },
+          ],
+        },
+      ],
+    }).error ?? '',
+    /reordering/,
+  )
+})
+
+test('工具参数分片中插入文本不能产生相互重叠的内容块', () => {
+  const events: any[] = []
+  const stream = createStreamTranslator({
+    model: 'm',
+    id: 'msg_x',
+    write: frame => events.push(JSON.parse(frame.split('\ndata: ')[1])),
+  })
+  stream.push({
+    choices: [
+      {
+        delta: { content: 'text', tool_calls: [{ index: 0, id: 'call', function: { name: 'Read', arguments: '{' } }] },
+      },
+    ],
+  })
+  stream.push({ choices: [{ delta: { content: 'more', tool_calls: [{ index: 0, function: { arguments: '}' } }] } }] })
+  stream.end()
+  const toolStop = events.findIndex(e => e.type === 'content_block_stop' && e.index === 0)
+  const textStart = events.findIndex(e => e.type === 'content_block_start' && e.content_block.type === 'text')
+  assert.ok(toolStop >= 0 && textStart > toolStop)
+  assert.equal(events.find(e => e.delta?.type === 'text_delta').delta.text, 'textmore')
+})
+
 test('流式：文本 → text_delta，收尾发 message_delta + message_stop', () => {
   const frames: string[] = []
   const stream = createStreamTranslator({ model: 'm', id: 'msg_1', write: (frame: string) => frames.push(frame) })

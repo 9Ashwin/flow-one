@@ -66,6 +66,29 @@ const baseConfig = (overrides: Record<string, unknown>) => ({
   ...overrides,
 })
 
+test('上游连接正常关闭但内容截断时，流式和非流式都必须报错', async t => {
+  const upstreamServer = http.createServer((_req, res) => {
+    res.writeHead(200, { 'content-type': 'text/event-stream' })
+    res.end('data: {"choices":[{"delta":{"content":"partial"}}]}\n\n')
+  })
+  const upstreamUrl = await listen(upstreamServer)
+  t.after(() => upstreamServer.close())
+  const upstream = createGatewayUpstream({ upstream: upstreamUrl, upstreamKey: 'test' })
+  const bridge = createBridgeServer({ config: baseConfig({ model: 'test' }), upstream })
+  const address = await bridge.listen()
+  t.after(() => bridge.close())
+  for (const stream of [false, true]) {
+    const response = await fetch(`http://127.0.0.1:${address.port}/v1/messages`, {
+      method: 'POST',
+      body: JSON.stringify({ messages: [{ role: 'user', content: 'hi' }], stream }),
+    })
+    const text = await response.text()
+    assert.equal(response.status, stream ? 200 : 502)
+    assert.match(text, /upstream SSE ended before completion/)
+    if (stream) assert.match(text, /event: error/)
+  }
+})
+
 test('网关模式：Anthropic 进、OpenAI 出，Claude 模型名兜底到上游模型', async t => {
   const seen: SeenRequest[] = []
   const upstreamServer = http.createServer(async (req: http.IncomingMessage, res: http.ServerResponse) => {

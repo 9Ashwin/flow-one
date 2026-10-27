@@ -20,8 +20,9 @@ The split is by **who consumes the string**, not by where it is printed:
 | `throw` messages and `hint` fields | **English** | The consumer is a script branching on the error contract |
 | Chinese input aliases (`fo login 国内版`) | Chinese | They are **user-supplied values**, not text this program prints |
 
-The source is TypeScript executed directly by Node (≥ 22.18 strips the types), so there is no
-build step and no `dist/`. `tsc --noEmit` is a checker, not a compiler — `make check` runs it.
+The source is TypeScript executed directly by Node (≥ 22.18 strips the types) during development.
+The repository ships generated `dist/` JavaScript because Node cannot strip types under `node_modules`.
+`make check` type-checks without emitting; `make verify` also builds and tests the installed shape.
 
 ---
 
@@ -104,17 +105,16 @@ layers** (a lower number may be depended on by a higher number):
 
 ### Module conventions (checked by `make modules`)
 
-- **Zero third-party dependencies**: only `node:` built-ins and relative paths are allowed.
-  `dependencies` must be empty — this is the core of the installation experience (one
-  `npm i -g flow-one` and you are done, and pnpm/bun need no install-script allowlisting).
+- **Zero third-party runtime dependencies**: only `node:` built-ins and relative paths are
+  allowed. `dependencies` must be empty; regenerate and commit `dist/` when source changes.
 - **Circular dependencies are not allowed**: an ESM cycle manifests as a TDZ error
   (`Cannot access 'X' before initialization`) far from its cause. When two modules genuinely
   need each other, extract a third module like `home.ts` to break the cycle.
 - **Do not solve scale by splitting packages**: a single package is a deliberate choice. For a
   file over 500 lines (soft limit), split functions or split modules first.
 - New modules must also be added to the `LAYERS` table in `scripts/check-modules.ts`.
-- Relative imports carry the real `.ts` extension (`from './errors.ts'`). Node's type stripping
-  resolves the on-disk specifier, so there is no extension rewriting to hide it.
+- Source imports carry the real `.ts` extension (`from './errors.ts'`). The installation build
+  rewrites these relative extensions to `.js` in `dist/`.
 
 ## 4. Plan separation (hard invariant)
 
@@ -166,7 +166,7 @@ before the rename is still running".
 - Test cases **must not touch the real home directory**: always point `BRIDGE_HOME` (and
   `HOME` / `CLAUDE_CONFIG_DIR` when necessary) at a temporary directory created by
   `fs.mkdtempSync`; they must never actually invoke launchd/systemd.
-- Run `make verify` before committing (= `make check` + `make test`). **There is no CI
+- Run `make verify` before committing (= `make build` + `make check` + `make test`). **There is no CI
   backstop** (the repository has no `.github/workflows`), so the gates can only be run by hand.
 - `make check` is types (`tsc --noEmit`) + lint (ESLint) + formatting (Prettier) + module
   contracts. It needs `npm install` once for the dev toolchain; `make test` does not.
@@ -186,9 +186,8 @@ no registry in the middle, and npm now requires maintainers to approve new packa
 Releasing = tagging (`vX.Y.Z`) + updating `version` in `package.json`, and the two must match;
 `v0.2.x` are tags of the deprecated Go implementation — do not reuse them.
 
-TypeScript is executed, not compiled: `bin` points at `cli.ts`, and Node ≥ 22.18 strips the
-types on the fly. That is why `engines.node` is `>=22.18` — a lower floor would install cleanly
-and then fail on the first run with a syntax error instead of a clear message.
+The committed `dist/` snapshot is compiled from TypeScript, and `bin` points at its JavaScript.
+Development still runs TypeScript directly, so `engines.node` is `>=22.18`.
 
 ## 9. Commits and communication
 

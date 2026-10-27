@@ -4,18 +4,17 @@
   "private": false,
   "description": "把 WorkBuddy（国内版 CodeBuddy / 国际版）与 OpenCode 免费档接进 Claude Code CLI 的本地反代：Anthropic Messages ⇄ OpenAI Chat Completions，零依赖。",
   "type": "module",
-  "main": "./src/server.ts",
+  "main": "./dist/src/server.js",
   "bin": {
-    "flow-one": "./cli.ts",
-    "fo": "./cli.ts"
+    "flow-one": "./dist/cli.js",
+    "fo": "./dist/cli.js"
   },
   "files": [
-    "cli.ts",
-    "src",
-    "tsconfig.json"
+    "dist"
   ],
   "scripts": {
     "start": "node cli.ts",
+    "build": "tsc -p tsconfig.build.json && node -e \"require('node:fs').copyFileSync('package.json', 'dist/package.json')\"",
     "test": "node --test",
     "check": "make check",
     "verify": "make verify",

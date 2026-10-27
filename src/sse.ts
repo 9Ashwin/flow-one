@@ -6,12 +6,16 @@
 
 import type { ChatFailure } from './types.ts'
 
-export async function* readSse(body: ReadableStream<Uint8Array>): AsyncGenerator<unknown, void, undefined> {
+export async function* readSse(
+  body: ReadableStream<Uint8Array>,
+  requireCompletion = false,
+): AsyncGenerator<unknown, void, undefined> {
   const reader = body.getReader()
   const decoder = new TextDecoder()
   let buffer = ''
   let data: string[] = []
   let skipLf = false
+  let finished = false
   try {
     for (;;) {
       const { value, done } = await reader.read()
@@ -39,7 +43,17 @@ export async function* readSse(body: ReadableStream<Uint8Array>): AsyncGenerator
           try {
             chunk = JSON.parse(payload)
           } catch {
+            if (requireCompletion) throw new Error('upstream sent invalid SSE JSON')
             continue
+          }
+          if (chunk !== null && typeof chunk === 'object' && 'choices' in chunk && Array.isArray(chunk.choices)) {
+            finished ||= chunk.choices.some(
+              (choice: unknown) =>
+                choice !== null &&
+                typeof choice === 'object' &&
+                'finish_reason' in choice &&
+                typeof choice.finish_reason === 'string',
+            )
           }
           yield chunk
         } else if (line === 'data' || line.startsWith('data:')) {
@@ -47,8 +61,9 @@ export async function* readSse(body: ReadableStream<Uint8Array>): AsyncGenerator
         }
       }
     }
-    // SSE dispatches an event only on a blank line, so an unfinished event at EOF
-    // must not pass for a complete answer.
+    if (requireCompletion && (!finished || data.length > 0 || buffer.trim() !== '')) {
+      throw new Error('upstream SSE ended before completion')
+    }
   } finally {
     try {
       await reader.cancel()

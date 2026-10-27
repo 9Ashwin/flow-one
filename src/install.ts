@@ -23,7 +23,7 @@ import { bridgeHome } from './config.ts'
 import { SOURCES } from './sources.ts'
 import { writeFileAtomic } from './atomic.ts'
 
-const CLI_PATH = fileURLToPath(new URL('../cli.ts', import.meta.url))
+const CLI_PATH = fileURLToPath(new URL(import.meta.url.endsWith('.ts') ? '../cli.ts' : '../cli.js', import.meta.url))
 
 const sleep = (ms: number): Promise<void> =>
   new Promise(resolve => {
@@ -731,7 +731,7 @@ export function removeLegacyService(): { removed: boolean; path?: string } {
  * **Which copy of the code** the service file actually executes.
  *
  * Actually stepped on: a global install (`npm i -g` / that early npm link copy) points the
- * service at `…/lib/node_modules/flow-one/cli.ts`, which is a **snapshot** — afterwards,
+ * service at `…/lib/node_modules/flow-one/dist/cli.js`, which is a **snapshot** — afterwards,
  * whether you `git pull` or edit the repo, the service keeps running the old code and
  * nothing in the UI shows it (symptoms: "the new feature is on the command line but not in
  * the service", or "the fixed fingerprint still gets 400 from the service").

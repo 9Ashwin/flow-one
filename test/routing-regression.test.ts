@@ -264,6 +264,34 @@ test('上游静默超过 upstreamIdleMs 时以流内 error 事件收尾，而不
   assert.match(text, /event: message_stop/)
 })
 
+test('非流式和上游握手静默时返回 504，不能无限等待', { timeout: 5000 }, async t => {
+  for (const phase of ['handshake', 'body']) {
+    const upstream: Upstream = {
+      describe: () => 'test',
+      loadModels: async () => [],
+      chat: async () =>
+        phase === 'handshake'
+          ? await new Promise<ChatResult>(() => {})
+          : {
+              ok: true,
+              chunks: (async function* () {
+                await new Promise(() => {})
+                yield {}
+              })(),
+            },
+    }
+    const bridge = createBridgeServer({ config: { ...config, upstreamIdleMs: 30 }, upstream })
+    const address = await bridge.listen()
+    t.after(() => bridge.close())
+    const response = await fetch(`http://127.0.0.1:${address.port}/v1/messages`, {
+      method: 'POST',
+      body: JSON.stringify({ messages: [{ role: 'user', content: 'hi' }] }),
+    })
+    assert.equal(response.status, 504, phase)
+    assert.match(await response.text(), /timeout/)
+  }
+})
+
 test('失败时先报哪条来源出错，而不是只留最后一条', async t => {
   // 多条来源时，光一个 401 说明不了是哪条线断了。
   const upstream = {
@@ -299,6 +327,8 @@ test('日志带 request_id 与 ttft：换模型后能不能更快，要靠这两
     chat: async (): Promise<ChatResult> => ({
       ok: true,
       chunks: (async function* () {
+        yield { choices: [{ delta: { role: 'assistant' } }] }
+        await new Promise(resolve => setTimeout(resolve, 30))
         yield { choices: [{ delta: { content: 'ok' } }] }
       })(),
     }),
@@ -314,5 +344,7 @@ test('日志带 request_id 与 ttft：换模型后能不能更快，要靠这两
   const line = lines.find(item => item.includes('stream=1'))
   assert.ok(line !== undefined, '应该有 stream=1 的日志行')
   assert.match(line, /^req_[0-9a-f]{16} /, '每行日志以 request id 开头')
-  assert.match(line, /ttft=\d+/, '要记录首字节耗时，而不是只有一个总时长')
+  const firstChunk = Number(/first_chunk_ms=(\d+)/.exec(line)?.[1])
+  const ttft = Number(/ttft=(\d+)/.exec(line)?.[1])
+  assert.ok(Number.isFinite(firstChunk) && ttft - firstChunk >= 20, '元数据分片不能被算作首个可见输出')
 })

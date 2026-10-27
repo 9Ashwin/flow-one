@@ -221,6 +221,11 @@ export interface OpenAiRequestBody {
   messages?: OpenAiMessage[]
   tools?: OpenAiTool[]
   tool_choice?: OpenAiToolChoice
+  parallel_tool_calls?: boolean
+  response_format?: {
+    type: 'json_schema'
+    json_schema: { name: string; strict: boolean; schema: Record<string, unknown> }
+  }
   stream?: boolean
   stream_options?: { include_usage: boolean }
   max_tokens?: number

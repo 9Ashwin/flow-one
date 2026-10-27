@@ -119,6 +119,7 @@ const ABORTED = Symbol('aborted')
 async function* untilAborted(chunks: ChatChunks, signal: AbortSignal): AsyncGenerator<unknown, void, undefined> {
   const iterator = chunks[Symbol.asyncIterator]()
   let aborted = signal.aborted
+  let completed = false
   let fire: (value: typeof ABORTED) => void = () => {}
   const fired = new Promise<typeof ABORTED>(resolve => {
     fire = resolve
@@ -132,14 +133,20 @@ async function* untilAborted(chunks: ChatChunks, signal: AbortSignal): AsyncGene
     while (!aborted) {
       const next = await Promise.race([iterator.next(), fired])
       if (next === ABORTED) break
-      if (next.done === true) return
+      if (next.done === true) {
+        completed = true
+        return
+      }
       yield next.value
     }
     // Abandoned mid-flight: release the upstream connection, but never await it —
     // an upstream that ignores abort would otherwise keep the turn alive.
-    Promise.resolve(iterator.return?.()).catch(() => {})
   } finally {
     signal.removeEventListener('abort', stop)
+    if (!completed) {
+      const closing = Promise.resolve(iterator.return?.()).catch(() => {})
+      if (!aborted) await closing
+    }
   }
 }
 
@@ -314,9 +321,9 @@ export function createBridgeServer({
   async function handleMessages(req: IncomingMessage, res: ServerResponse, body: unknown): Promise<void> {
     const started = Date.now()
     const reqId = requestId()
-    // First upstream byte, used for the TTFT metric below. `ms` alone mixes queueing
-    // with generation, so a model switch cannot be told apart from a cold start.
+    // The first parsed chunk can be metadata; visible output is measured separately.
     let firstByteAt: number | undefined
+    let firstOutputAt: number | undefined
     const controller = new AbortController()
     res.once('close', () => controller.abort())
     if (res.destroyed) return
@@ -339,13 +346,31 @@ export function createBridgeServer({
     const id = `msg_${crypto.randomBytes(12).toString('hex')}`
 
     const attempts: Array<{ upstream: string; status?: number; message: string }> = []
-    let result = await openUpstream(translated.body, { signal: controller.signal })
+    const openWithTimeout = async (): Promise<ChatResult> => {
+      const idleMs = config.upstreamIdleMs ?? 0
+      if (!(idleMs > 0)) return openUpstream(translated.body, { signal: controller.signal })
+      let timer: NodeJS.Timeout | undefined
+      try {
+        return await Promise.race([
+          openUpstream(translated.body, { signal: controller.signal }),
+          new Promise<ChatResult>(resolve => {
+            timer = setTimeout(() => {
+              resolve({ ok: false, status: 504, message: 'upstream did not respond before timeout', retryable: false })
+              controller.abort()
+            }, idleMs)
+          }),
+        ])
+      } finally {
+        clearTimeout(timer)
+      }
+    }
+    let result = await openWithTimeout()
     if (result.ok !== true) {
       attempts.push({ upstream: upstream.name ?? 'upstream', status: result.status, message: result.message })
     }
     if (result.ok !== true && result.retryable === true && !controller.signal.aborted) {
       log(`${reqId} upstream ${result.status}, retrying once: ${result.message}`)
-      result = await openUpstream(translated.body, { signal: controller.signal })
+      result = await openWithTimeout()
       if (result.ok !== true) {
         attempts.push({ upstream: upstream.name ?? 'upstream', status: result.status, message: result.message })
       }
@@ -357,18 +382,44 @@ export function createBridgeServer({
 
     if (!wantsStream) {
       const outcome = createOutcome()
-      for await (const chunk of result.chunks) {
-        firstByteAt ??= Date.now()
-        foldChunk(outcome, chunk)
-        if (outcome.error !== undefined) break
+      let timer: NodeJS.Timeout | undefined
+      let timedOut = false
+      const arm = (): void => {
+        clearTimeout(timer)
+        const idleMs = config.upstreamIdleMs ?? 0
+        if (idleMs > 0)
+          timer = setTimeout(() => {
+            timedOut = true
+            controller.abort()
+          }, idleMs)
       }
+      try {
+        arm()
+        for await (const chunk of untilAborted(result.chunks, controller.signal)) {
+          firstByteAt ??= Date.now()
+          arm()
+          foldChunk(outcome, chunk)
+          if (outcome.text !== '' || outcome.toolCalls.length > 0 || (config.showThinking && outcome.thinking !== ''))
+            firstOutputAt ??= Date.now()
+          if (outcome.error !== undefined) break
+        }
+      } catch (error) {
+        if (!controller.signal.aborted) outcome.error = messageOf(error)
+      } finally {
+        clearTimeout(timer)
+      }
+      if (timedOut) {
+        anthropicError(res, 504, 'upstream produced no output before timeout', undefined, reqId)
+        return
+      }
+      if (controller.signal.aborted) return
       if (outcome.error !== undefined) {
         anthropicError(res, 502, outcome.error, undefined, reqId)
         return
       }
       json(res, 200, anthropicMessage(outcome, { model, id, inputTokens, showThinking: config.showThinking }))
       log(
-        `${reqId} model=${model} stream=0 ms=${Date.now() - started} ttft=${firstByteAt === undefined ? '-' : firstByteAt - started} out=${outcome.text.length}`,
+        `${reqId} model=${model} stream=0 ms=${Date.now() - started} first_chunk_ms=${firstByteAt === undefined ? '-' : firstByteAt - started} ttft=${firstOutputAt === undefined ? '-' : firstOutputAt - started} out=${outcome.text.length}`,
       )
       return
     }
@@ -397,6 +448,12 @@ export function createBridgeServer({
       inputTokens,
       showThinking: config.showThinking,
       write: (frame: string) => {
+        if (
+          frame.includes('"type":"text_delta"') ||
+          frame.includes('"type":"input_json_delta"') ||
+          frame.includes('"type":"thinking_delta"')
+        )
+          firstOutputAt ??= Date.now()
         pending.push(frame)
       },
     })
@@ -455,7 +512,7 @@ export function createBridgeServer({
       if (!res.writableEnded) res.end()
       const usage = translator.usage
       log(
-        `${reqId} model=${model} stream=1 ms=${Date.now() - started} ttft=${firstByteAt === undefined ? '-' : firstByteAt - started}` +
+        `${reqId} model=${model} stream=1 ms=${Date.now() - started} first_chunk_ms=${firstByteAt === undefined ? '-' : firstByteAt - started} ttft=${firstOutputAt === undefined ? '-' : firstOutputAt - started}` +
           ` in=${usage.input_tokens} out=${usage.output_tokens}` +
           `${usage.cache_read_input_tokens === undefined ? '' : ` cache_read=${usage.cache_read_input_tokens}`}`,
       )
