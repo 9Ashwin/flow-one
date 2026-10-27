@@ -9,7 +9,7 @@
 
 import fs from 'node:fs'
 import { isIP } from 'node:net'
-import { SUBTYPES, validationError } from './errors.ts'
+import { SUBTYPES, validationError, configError } from './errors.ts'
 import os from 'node:os'
 import path from 'node:path'
 import { SOURCE_NAMES, sourceByName, defaultSources } from './sources.ts'
@@ -101,7 +101,7 @@ export function validateListenAuth({ host, apiKey }: { host?: string; apiKey?: s
   const loopback =
     ipVersion === 4
       ? address.startsWith('127.')
-      : ipVersion === 6 && new URL(`http://[${address}]`).hostname === '[::1]'
+      : ipVersion === 6 && new URL(`http://[${address.split('%')[0]}]`).hostname === '[::1]'
   const key = typeof apiKey === 'string' ? apiKey.trim() : ''
   if (!loopback && (key === '' || key === DEFAULT_LOCAL_API_KEY)) {
     throw validationError(SUBTYPES.INVALID_REQUEST, 'a non-loopback listener cannot use an empty or public default key')
@@ -206,7 +206,9 @@ function parseClients(raw: unknown): ClientId[] {
     const id = item.trim()
     if (id === '' || id === 'none') continue
     if (id !== 'claude' && id !== 'dsh') {
-      throw new Error(`unknown client: ${id} (expected claude / dsh / none)`)
+      throw validationError(SUBTYPES.INVALID_FLAG, `unknown client: ${id} (expected claude / dsh / none)`).withParam(
+        '--clients',
+      )
     }
     if (!out.includes(id)) out.push(id)
   }
@@ -230,11 +232,15 @@ function truthy(value: unknown): boolean {
 }
 
 /** Source names -> source objects. An unknown name is an error, never a silent fallback. */
-function resolveSources(names: string[]): Source[] {
+function resolveSources(names: { name: string; env: boolean }[]): Source[] {
   const picked: Source[] = []
-  for (const name of names) {
+  for (const { name, env } of names) {
     const source = sourceByName(name)
-    if (source === undefined) throw new Error(`unknown source: ${name} (expected one of ${SOURCE_NAMES})`)
+    if (source === undefined)
+      throw (env ? configError : validationError)(
+        SUBTYPES.UNKNOWN_SOURCE,
+        `unknown source: ${name} (expected one of ${SOURCE_NAMES})`,
+      ).withParam(env ? 'BRIDGE_PRODUCTS' : '--product')
     if (!picked.includes(source)) picked.push(source)
   }
   return picked.length > 0 ? picked : defaultSources()
@@ -273,7 +279,8 @@ export function resolveConfig({
   config: Config
 } {
   const config: Config = { ...DEFAULTS, products: [...DEFAULTS.products], modelMap: {} }
-  const productNames: string[] = []
+  const productNames: { name: string; env: boolean }[] = []
+  const explicit = new Set<string>()
   const fromEnv: Record<string, string | undefined> = {
     mode: env.BRIDGE_MODE,
     host: env.BRIDGE_HOST,
@@ -298,7 +305,12 @@ export function resolveConfig({
   if (env.BRIDGE_SHOW_THINKING !== undefined) config.showThinking = truthy(env.BRIDGE_SHOW_THINKING)
   if (String(env.FO_DSH_REASONING ?? '').trim() !== '') config.dshReasoning = String(env.FO_DSH_REASONING).trim()
   if (env.BRIDGE_FINGERPRINT_REWRITE !== undefined) config.fingerprintRewrite = truthy(env.BRIDGE_FINGERPRINT_REWRITE)
-  if (String(env.BRIDGE_PRODUCTS ?? '').trim() !== '') productNames.push(...String(env.BRIDGE_PRODUCTS).split(','))
+  if (String(env.BRIDGE_PRODUCTS ?? '').trim() !== '')
+    productNames.push(
+      ...String(env.BRIDGE_PRODUCTS)
+        .split(',')
+        .map(name => ({ name, env: true })),
+    )
 
   const rest = []
   for (let index = 0; index < argv.length; index++) {
@@ -344,7 +356,10 @@ export function resolveConfig({
     if (flag === '--clients') {
       const value = argv[++index]
       if (value === undefined || value.startsWith('--'))
-        throw new Error('--clients requires a value (claude,dsh / claude / dsh / none)')
+        throw validationError(
+          SUBTYPES.MISSING_ARGUMENT,
+          '--clients requires a value (claude,dsh / claude / dsh / none)',
+        ).withParam('--clients')
       config.clients = parseClients(value)
       continue
     }
@@ -352,7 +367,11 @@ export function resolveConfig({
     if (flag === '--dsh-reasoning') {
       const value = argv[++index]
       if (value === undefined || value.startsWith('--'))
-        throw new Error('--dsh-reasoning requires a value (off/minimal/low/medium/high/xhigh/max/none)')
+        throw validationError(
+          SUBTYPES.MISSING_ARGUMENT,
+          '--dsh-reasoning requires a value (off/minimal/low/medium/high/xhigh/max/none)',
+        ).withParam('--dsh-reasoning')
+      explicit.add('dshReasoning')
       config.dshReasoning = value.trim().toLowerCase()
       continue
     }
@@ -369,23 +388,37 @@ export function resolveConfig({
       continue
     }
     const field = FLAGS[flag]
-    if (field === undefined) throw new Error(`unknown option: ${flag} (see --help)`)
+    if (field === undefined)
+      throw validationError(SUBTYPES.INVALID_FLAG, `unknown option: ${flag} (see --help)`).withParam(flag)
     const value = argv[++index]
-    if (value === undefined || value.startsWith('--')) throw new Error(`${flag} requires a value`)
+    if (value === undefined || value.startsWith('--'))
+      throw validationError(SUBTYPES.MISSING_ARGUMENT, `${flag} requires a value`).withParam(flag)
+    explicit.add(field)
     if (field === 'port' || field === 'maxTokensCap' || field === 'heartbeatMs' || field === 'upstreamIdleMs') {
       const number = Number(value)
-      if (!Number.isInteger(number) || number < 0) throw new Error(`${flag} needs a non-negative integer`)
+      if (!Number.isInteger(number) || number < 0)
+        throw validationError(
+          field === 'port' ? SUBTYPES.INVALID_PORT : SUBTYPES.INVALID_FLAG,
+          `${flag} needs a non-negative integer`,
+        ).withParam(flag)
       ;(config as unknown as Record<string, unknown>)[field] = number
     } else if (field === 'fingerprintRewrite') {
       config.fingerprintRewrite = truthy(value)
     } else if (field === 'modelMap') {
       config.modelMap = { ...config.modelMap, ...parseModelMap(value) }
     } else if (field === 'product' || field === 'products') {
-      productNames.push(...String(value).split(','))
+      productNames.push(
+        ...String(value)
+          .split(',')
+          .map(name => ({ name, env: false })),
+      )
     } else {
       // Passing `--upstream` explicitly already means "I want gateway mode"; there is
       // no reason to make people type a second flag.
-      if (field === 'upstream') config.mode = 'gateway'
+      if (field === 'upstream') {
+        config.mode = 'gateway'
+        explicit.add('mode')
+      }
       ;(config as unknown as Record<string, unknown>)[field] = value.trim()
     }
   }
@@ -393,16 +426,25 @@ export function resolveConfig({
   const command = rest[0] ?? 'serve'
   const commandArgs = rest.slice(1)
   if (command !== 'serve' && !SUBCOMMANDS.has(command)) {
-    throw new Error(`unknown subcommand: ${command} (expected ${[...SUBCOMMANDS].join(' / ')})`)
+    throw validationError(
+      SUBTYPES.INVALID_REQUEST,
+      `unknown subcommand: ${command} (expected ${[...SUBCOMMANDS].join(' / ')})`,
+    )
   }
   if (config.dshReasoning !== undefined) {
     const allowed = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'none']
     if (!allowed.includes(config.dshReasoning)) {
-      throw new Error(`--dsh-reasoning must be one of ${allowed.join(' / ')}, got: ${config.dshReasoning}`)
+      throw (explicit.has('dshReasoning') ? validationError : configError)(
+        SUBTYPES.INVALID_FLAG,
+        `--dsh-reasoning must be one of ${allowed.join(' / ')}, got: ${config.dshReasoning}`,
+      ).withParam(explicit.has('dshReasoning') ? '--dsh-reasoning' : 'FO_DSH_REASONING')
     }
   }
   if (config.mode !== 'direct' && config.mode !== 'gateway') {
-    throw new Error(`--mode must be direct or gateway, got: ${config.mode}`)
+    throw (explicit.has('mode') ? validationError : configError)(
+      SUBTYPES.INVALID_FLAG,
+      `--mode must be direct or gateway, got: ${config.mode}`,
+    ).withParam(explicit.has('mode') ? '--mode' : 'BRIDGE_MODE')
   }
   config.products = resolveSources(productNames)
   config.credentialFile = credentialFile(env, home)
@@ -414,7 +456,10 @@ export function resolveConfig({
       const url = new URL(upstream)
       if (url.protocol !== 'http:' && url.protocol !== 'https:') throw new Error('protocol')
     } catch {
-      throw new Error(`the upstream address is not a valid http(s) URL: ${upstream}`)
+      throw (explicit.has('upstream') ? validationError : configError)(
+        SUBTYPES.INVALID_UPSTREAM_URL,
+        `the upstream address is not a valid http(s) URL: ${upstream}`,
+      ).withParam(explicit.has('upstream') ? '--upstream' : 'UPSTREAM_BASE_URL')
     }
     config.upstream = upstream.replace(/\/+$/, '')
     if (config.upstreamKey === '') {
@@ -429,8 +474,33 @@ export function resolveConfig({
   }
 
   if (!Number.isInteger(config.port) || config.port < 0 || config.port > 65535) {
-    throw new Error('the port must be an integer between 0 and 65535')
+    throw (explicit.has('port') ? validationError : configError)(
+      SUBTYPES.INVALID_PORT,
+      'the port must be an integer between 0 and 65535',
+    ).withParam(explicit.has('port') ? '--port' : 'BRIDGE_PORT')
   }
-  validateListenAuth(config)
+  for (const [field, envName, flag] of [
+    ['maxTokensCap', 'BRIDGE_MAX_TOKENS_CAP', '--max-tokens'],
+    ['heartbeatMs', 'BRIDGE_HEARTBEAT_MS', '--heartbeat'],
+    ['upstreamIdleMs', 'BRIDGE_UPSTREAM_IDLE_MS', '--upstream-idle'],
+  ] as const) {
+    const number = config[field] ?? 0
+    if (!Number.isInteger(number) || number < 0) {
+      throw (explicit.has(field) ? validationError : configError)(
+        SUBTYPES.INVALID_FLAG,
+        `${flag} needs a non-negative integer`,
+      ).withParam(explicit.has(field) ? flag : envName)
+    }
+  }
+  try {
+    validateListenAuth(config)
+  } catch (error) {
+    if (!explicit.has('host') && !explicit.has('apiKey') && (env.BRIDGE_HOST || env.BRIDGE_API_KEY)) {
+      throw configError(SUBTYPES.INVALID_REQUEST, 'a non-loopback listener cannot use an empty or public default key')
+        .withParam('BRIDGE_API_KEY')
+        .withHint('Set a custom BRIDGE_API_KEY, or listen on BRIDGE_HOST 127.0.0.1 / ::1.')
+    }
+    throw error
+  }
   return { help: false, command, commandArgs, config }
 }

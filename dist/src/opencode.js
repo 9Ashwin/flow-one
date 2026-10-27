@@ -37,6 +37,7 @@ import crypto from 'node:crypto';
 import { bridgeHome, credentialFile } from "./home.js";
 import { resolveToolIndex } from "./anthropic.js";
 import { readStore, saveCredential } from "./auth.js";
+import { writeFileAtomic } from "./atomic.js";
 const BASE62 = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz';
 /** Gate tool names: the server recognises the official client shape by these four names. */
 export const GATE_TOOLS = ['bash', 'glob', 'grep', 'read'];
@@ -131,6 +132,20 @@ export const OPENCODE_GO = {
 };
 /** The entry name in the credential store (shared with the two Tencent lines via credentials.json). */
 const GO_ENTRY = 'opencode-go';
+// Older stores may lack a session. A key-derived UUID is stable across restarts and
+// avoids a read-modify-write race with another process refreshing credentials.
+function legacyGoSession(apiKey) {
+    const bytes = crypto
+        .createHash('sha256')
+        .update('flow-one/opencode-go/session\0')
+        .update(apiKey)
+        .digest()
+        .subarray(0, 16);
+    bytes[6] = (bytes[6] & 0x0f) | 0x40;
+    bytes[8] = (bytes[8] & 0x3f) | 0x80;
+    const hex = bytes.toString('hex');
+    return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+}
 /** Read the Go plan credential; undefined when it is not configured. */
 export function goCredential() {
     const entry = readStore(credentialFile())[GO_ENTRY];
@@ -138,7 +153,7 @@ export function goCredential() {
         return undefined;
     return {
         apiKey: entry.apiKey,
-        session: typeof entry.session === 'string' && entry.session !== '' ? entry.session : crypto.randomUUID(),
+        session: typeof entry.session === 'string' && entry.session !== '' ? entry.session : legacyGoSession(entry.apiKey),
     };
 }
 export const hasGoCredential = () => goCredential() !== undefined;
@@ -216,62 +231,100 @@ export function requestId() {
  * synchronous read there is paid by every concurrent turn. The value only
  * changes when the file is deleted, which no code path does.
  */
-const projectIdCache = new Map();
-export function projectId(home = bridgeHome()) {
-    const cached = projectIdCache.get(home);
+const identityCache = new Map();
+function identity(home) {
+    const cached = identityCache.get(home);
     if (cached !== undefined)
         return cached;
     const file = path.join(home, 'opencode.json');
-    try {
-        const stored = JSON.parse(fs.readFileSync(file, 'utf8'));
-        if (typeof stored?.projectId === 'string' && /^[0-9a-f]{40}$/.test(stored.projectId)) {
-            projectIdCache.set(home, stored.projectId);
-            return stored.projectId;
-        }
-    }
-    catch {
-        /* first use */
-    }
-    const identity = crypto.randomBytes(16).toString('hex');
-    const value = crypto.createHash('sha1').update(`git-remote:opencode/${identity}`).digest('hex');
+    const lock = `${file}.lock`;
+    let locked = false;
     try {
         fs.mkdirSync(home, { recursive: true, mode: 0o700 });
-        fs.writeFileSync(file, JSON.stringify({ projectId: value }, null, 2), { mode: 0o600 });
+        // The two identifiers share a file. Serialize first-use updates across processes so
+        // neither process overwrites the other one's session or uses a different identity.
+        const deadline = Date.now() + 3000;
+        while (!locked) {
+            try {
+                const fd = fs.openSync(lock, 'wx', 0o600);
+                locked = true;
+                try {
+                    fs.writeFileSync(fd, String(process.pid));
+                }
+                finally {
+                    fs.closeSync(fd);
+                }
+            }
+            catch (error) {
+                if (error.code !== 'EEXIST' || Date.now() >= deadline)
+                    throw error;
+                try {
+                    const pid = Number(fs.readFileSync(lock, 'utf8'));
+                    if (Number.isInteger(pid) && pid > 0 && Date.now() - fs.statSync(lock).mtimeMs > 30000) {
+                        try {
+                            process.kill(pid, 0);
+                        }
+                        catch (probe) {
+                            if (probe.code === 'ESRCH')
+                                fs.unlinkSync(lock);
+                        }
+                    }
+                }
+                catch {
+                    /* another process may have just released the lock */
+                }
+                Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
+            }
+        }
+        let stored = {};
+        try {
+            const parsed = JSON.parse(fs.readFileSync(file, 'utf8'));
+            if (parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed))
+                stored = parsed;
+        }
+        catch {
+            /* first use */
+        }
+        const project = typeof stored.projectId === 'string' && /^[0-9a-f]{40}$/.test(stored.projectId)
+            ? stored.projectId
+            : crypto
+                .createHash('sha1')
+                .update(`git-remote:opencode/${crypto.randomBytes(16).toString('hex')}`)
+                .digest('hex');
+        const session = typeof stored.session === 'string' && SESSION_SHAPE.test(stored.session) ? stored.session : sessionId();
+        if (project !== stored.projectId || session !== stored.session) {
+            writeFileAtomic(file, JSON.stringify({ ...stored, projectId: project, session }, null, 2), 0o600);
+        }
+        const result = { projectId: project, session };
+        identityCache.set(home, result);
+        return result;
     }
     catch {
-        /* a failed write does not affect this request */
+        // An unwritable home used to fall back to an ephemeral identity; keep that behaviour.
+        const result = {
+            projectId: crypto.createHash('sha1').update(crypto.randomBytes(16)).digest('hex'),
+            session: sessionId(),
+        };
+        identityCache.set(home, result);
+        return result;
     }
-    projectIdCache.set(home, value);
-    return value;
+    finally {
+        if (locked) {
+            try {
+                fs.unlinkSync(lock);
+            }
+            catch {
+                /* already removed */
+            }
+        }
+    }
+}
+export function projectId(home = bridgeHome()) {
+    return identity(home).projectId;
 }
 /** Session id used by the anonymous tier, persisted next to the project id. */
 export function persistedSession(home = bridgeHome()) {
-    const file = path.join(home, 'opencode.json');
-    try {
-        const stored = JSON.parse(fs.readFileSync(file, 'utf8'));
-        if (typeof stored?.session === 'string' && SESSION_SHAPE.test(stored.session))
-            return stored.session;
-    }
-    catch {
-        /* first use */
-    }
-    const value = sessionId();
-    try {
-        const stored = (() => {
-            try {
-                return JSON.parse(fs.readFileSync(file, 'utf8'));
-            }
-            catch {
-                return {};
-            }
-        })();
-        fs.mkdirSync(home, { recursive: true, mode: 0o700 });
-        fs.writeFileSync(file, JSON.stringify({ ...stored, session: value }, null, 2), { mode: 0o600 });
-    }
-    catch {
-        /* a failed write only costs affinity, not this request */
-    }
-    return value;
+    return identity(home).session;
 }
 const SESSION_SHAPE = /^ses_[0-9a-f]{12}[0-9A-Za-z]{14}$/;
 /**

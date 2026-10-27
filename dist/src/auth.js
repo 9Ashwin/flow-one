@@ -47,39 +47,15 @@ const sleep = (ms) => new Promise(resolve => {
 export function storePath(env = process.env, home) {
     return credentialFile(env, home);
 }
-/**
- * Last parsed credentials, keyed by file.
- *
- * The server reads the store on every request (to pick up tokens that `fo login`
- * refreshed in another process). A synchronous read on the event loop is cheap
- * once and expensive at concurrency, so the parse is memoised and revalidated
- * against the file's mtime/size: a stale token would be a correctness bug, a
- * stale `stat` cannot happen because `stat` is the check itself.
- */
-const storeCache = new Map();
+/** Read on every request so a login in another process is visible immediately. */
 export function readStore(file = storePath()) {
-    let signature;
-    try {
-        const stats = fs.statSync(file);
-        signature = `${stats.mtimeMs}:${stats.size}`;
-        const cached = storeCache.get(file);
-        if (cached !== undefined && cached.signature === signature)
-            return cached.value;
-    }
-    catch {
-        // Missing file: fall through, report the empty store below.
-    }
-    let value = {};
     try {
         const parsed = JSON.parse(fs.readFileSync(file, 'utf8'));
-        if (parsed !== null && typeof parsed === 'object')
-            value = parsed;
+        return parsed !== null && typeof parsed === 'object' ? parsed : {};
     }
     catch {
-        value = {};
+        return {};
     }
-    storeCache.set(file, { signature: signature ?? 'missing', value });
-    return value;
 }
 function writeStore(data, file = storePath()) {
     // Create the directory with 0700: credentials must not be readable by other
@@ -88,22 +64,11 @@ function writeStore(data, file = storePath()) {
     // path must not be the one place missing that fallback.
     fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
     writeFileAtomic(file, JSON.stringify(data, null, 2), 0o600);
-    // Keep the memoised copy in step with what we just wrote; the next `stat` would
-    // also catch it, but this drops a redundant parse in the common login-then-use path.
-    try {
-        const stats = fs.statSync(file);
-        storeCache.set(file, { signature: `${stats.mtimeMs}:${stats.size}`, value: data });
-    }
-    catch {
-        /* the revalidation path will re-read */
-    }
 }
 export function saveCredential(product, credential, file = storePath()) {
     writeStore({ ...readStore(file), [product.id]: credential }, file);
 }
 export function dropCredential(product, file = storePath()) {
-    // Copy first: `readStore` may hand back the cached object, and deleting a key
-    // from it would corrupt every later reader.
     const data = { ...readStore(file) };
     delete data[product.id];
     writeStore(data, file);

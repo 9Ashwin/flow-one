@@ -327,6 +327,7 @@ export function toBuddyBody(
     model,
     messages,
     stream: true,
+    ...(openAiBody.stream_options === undefined ? {} : { stream_options: openAiBody.stream_options }),
     prompt_cache_key: cacheKeyFor(messages, model),
   }
   if (Array.isArray(openAiBody.tools) && openAiBody.tools.length > 0) body.tools = openAiBody.tools

@@ -569,11 +569,27 @@ test('缓存用量：上游自报的缓存数超过 prompt_tokens 时不把整�
   assert.equal(message.usage.cache_read_input_tokens, 10)
 })
 
+test('缓存读取与写入合计超过输入时不能上报超出总数的用量', () => {
+  const outcome = outcomeOf()
+  foldChunk(outcome, {
+    choices: [{ message: { content: 'x' }, finish_reason: 'stop' }],
+    usage: {
+      prompt_tokens: 100,
+      completion_tokens: 1,
+      prompt_tokens_details: { cached_tokens: 80, cache_write_tokens: 80 },
+    },
+  })
+  const message = anthropicMessageOf(outcome, { model: 'm', id: 'msg_e' })
+  assert.equal(message.usage.input_tokens, 0)
+  assert.equal(message.usage.cache_read_input_tokens, 80)
+  assert.equal(message.usage.cache_creation_input_tokens, 20)
+})
+
 test('流式请求带 stream_options.include_usage，否则纯 OpenAI 上游在流式下不回 usage', () => {
   const { body } = openAiRequest({ messages: [{ role: 'user', content: 'hi' }], stream: true }, { model: 'm' })
   assert.deepEqual(body.stream_options, { include_usage: true })
   const plain = openAiRequest({ messages: [{ role: 'user', content: 'hi' }] }, { model: 'm' })
-  assert.equal(plain.body.stream_options, undefined, '非流式请求不该带流式选项')
+  assert.deepEqual(plain.body.stream_options, { include_usage: true }, '非流式响应也由流式上游聚合')
 })
 
 test('流式 usage 分片在收尾时给出真实的缓存读计数', () => {

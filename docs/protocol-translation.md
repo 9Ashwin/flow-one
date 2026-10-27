@@ -107,8 +107,18 @@ never hit". An upstream that reports more cached tokens than `prompt_tokens` is
 clamped rather than rejected — one miscalibrated usage block should not turn a
 whole turn into a 500.
 
-Streaming requests also set `stream_options.include_usage`, without which a plain
-OpenAI-wire upstream emits no usage chunk at all on a streaming response.
+Every upstream request sets `stream_options.include_usage`, including when the
+client requests a non-streaming response: the bridge still streams from upstream
+and folds the result. Some OpenAI-compatible providers require this flag to send
+usage. Tencent and OpenCode Go accepted it in the 2026-10-27 live checks.
+
+Successful request logs include `cache_read`, `cache_write`, and `cache_ratio`.
+`unknown` means the upstream did not report the field; it is not a zero. The
+ratio divides reported cache reads by all input buckets. A process-local keyed
+`prefix_id` compares the translated model, system messages, and tools without
+logging their contents. It changes after restart and does not cover conversation
+history or subsequent provider-specific rewrites, so a match does not guarantee
+a cache hit.
 
 ### Streaming frames
 

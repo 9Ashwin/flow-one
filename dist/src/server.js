@@ -208,6 +208,7 @@ async function readBody(req) {
 export function createBridgeServer({ config, upstream, log = () => { }, }) {
     validateListenAuth(config);
     /** Model id → upstream metadata (image support, window, …). */
+    const prefixSecret = crypto.randomBytes(32);
     const known = new Map();
     let modelsFetchedAt = 0;
     let refreshing;
@@ -285,7 +286,12 @@ export function createBridgeServer({ config, upstream, log = () => { }, }) {
         catch (error) {
             if (signal.aborted)
                 throw error;
-            return { ok: false, status: 502, message: messageOf(error) };
+            const status = error?.statusCode;
+            return {
+                ok: false,
+                status: typeof status === 'number' && Number.isInteger(status) && status >= 400 && status <= 599 ? status : 502,
+                message: messageOf(error),
+            };
         }
         if (result.ok === true)
             return result;
@@ -327,6 +333,24 @@ export function createBridgeServer({ config, upstream, log = () => { }, }) {
             anthropicError(res, 400, translated.error, undefined, reqId);
             return;
         }
+        // A process-local keyed fingerprint allows prefix comparisons without logging
+        // prompts or producing a reusable hash of potentially sensitive content.
+        const prefixId = crypto
+            .createHmac('sha256', prefixSecret)
+            .update(JSON.stringify({
+            model,
+            system: translated.body.messages?.filter(message => message.role === 'system'),
+            tools: translated.body.tools,
+        }))
+            .digest('hex')
+            .slice(0, 16);
+        const cacheLog = (usage) => {
+            const read = usage.cache_read_input_tokens;
+            if (read === undefined)
+                return `prefix_id=${prefixId} cache_read=unknown cache_ratio=unknown`;
+            const total = usage.input_tokens + read + (usage.cache_creation_input_tokens ?? 0);
+            return `prefix_id=${prefixId} in=${usage.input_tokens} cache_read=${read} cache_write=${usage.cache_creation_input_tokens ?? 'unknown'} cache_ratio=${total > 0 ? (read / total).toFixed(4) : 'unknown'}`;
+        };
         const wantsStream = isObject(body) ? body.stream === true : false;
         const id = `msg_${crypto.randomBytes(12).toString('hex')}`;
         const openWithTimeout = async () => {
@@ -405,7 +429,7 @@ export function createBridgeServer({ config, upstream, log = () => { }, }) {
                 return;
             }
             json(res, 200, message);
-            log(`${reqId} model=${model} stream=0 ms=${Date.now() - started} first_chunk_ms=${firstByteAt === undefined ? '-' : firstByteAt - started} ttft=${firstOutputAt === undefined ? '-' : firstOutputAt - started} out=${outcome.text.length}`);
+            log(`${reqId} model=${model} stream=0 ms=${Date.now() - started} first_chunk_ms=${firstByteAt === undefined ? '-' : firstByteAt - started} ttft=${firstOutputAt === undefined ? '-' : firstOutputAt - started} out=${outcome.text.length} ${cacheLog(message.usage)}`);
             return;
         }
         res.writeHead(200, {
@@ -503,8 +527,7 @@ export function createBridgeServer({ config, upstream, log = () => { }, }) {
                 res.end();
             const usage = translator.usage;
             log(`${reqId} model=${model} stream=1 ms=${Date.now() - started} first_chunk_ms=${firstByteAt === undefined ? '-' : firstByteAt - started} ttft=${firstOutputAt === undefined ? '-' : firstOutputAt - started}` +
-                ` in=${usage.input_tokens} out=${usage.output_tokens}` +
-                `${usage.cache_read_input_tokens === undefined ? '' : ` cache_read=${usage.cache_read_input_tokens}`}`);
+                ` out=${usage.output_tokens} ${cacheLog(usage)}`);
         }
     }
     async function handle(req, res) {

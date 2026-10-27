@@ -309,14 +309,10 @@ export function toOpenAiRequest(request, { model, maxTokensCap = 0, rewriteSyste
         isObject(request.tool_choice) &&
         request.tool_choice.disable_parallel_tool_use === true)
         body.parallel_tool_calls = false;
-    if (request.stream === true) {
-        body.stream = true;
-        // Without `include_usage` a plain OpenAI-wire upstream emits no usage chunk at
-        // all on a streaming response, leaving token counts and cache-hit reporting to
-        // the local 4-chars-per-token estimate. Upstreams that ignore the flag are
-        // unaffected — the translator falls back to its own numbers.
-        body.stream_options = { include_usage: true };
-    }
+    // Every upstream request streams, including when the Anthropic response is folded
+    // into JSON. Request usage in both cases so cached tokens do not disappear.
+    body.stream = true;
+    body.stream_options = { include_usage: true };
     const maxTokens = Number(request.max_tokens);
     if (Number.isFinite(maxTokens) && maxTokens > 0) {
         body.max_tokens = maxTokensCap > 0 ? Math.min(Math.trunc(maxTokens), maxTokensCap) : Math.trunc(maxTokens);
@@ -431,8 +427,12 @@ function anthropicUsageFrom(openAiUsage, fallback = {}) {
     // never hit".
     if (cacheRead !== undefined)
         result.cache_read_input_tokens = Math.min(cacheRead, prompt ?? cacheRead);
-    if (cacheWrite !== undefined)
-        result.cache_creation_input_tokens = Math.min(cacheWrite, prompt ?? cacheWrite);
+    if (cacheWrite !== undefined) {
+        // Read and write are disjoint input buckets; together they cannot exceed the
+        // upstream's total even if its counters are inconsistent.
+        const remaining = prompt === undefined ? cacheWrite : Math.max(0, prompt - (result.cache_read_input_tokens ?? 0));
+        result.cache_creation_input_tokens = Math.min(cacheWrite, remaining);
+    }
     if (reasoning !== undefined)
         result.output_tokens_details = { thinking_tokens: reasoning };
     return result;
