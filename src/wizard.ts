@@ -1131,8 +1131,7 @@ export async function doctorFlow() {
   return verdict ? 1 : 0
 }
 
-/** Entered when no arguments are given and the process runs in a terminal.
- * Returning 'serve' means the service should be started. */
+/** Entered when no arguments are given and the process runs in a terminal. */
 export async function mainMenu(): Promise<number> {
   for (;;) {
     banner('Claude Code ← WorkBuddy / OpenCode 本地反代', version())

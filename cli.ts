@@ -27,7 +27,7 @@ import { needsLogin } from './src/sources.ts'
 import { hasGoCredential } from './src/opencode.ts'
 import { createDirectUpstream, createGatewayUpstream } from './src/upstreams.ts'
 import { createBridgeServer } from './src/server.ts'
-import { isInteractive, note, style } from './src/prompt.ts'
+import { isInteractive } from './src/prompt.ts'
 import { installService, serviceState } from './src/install.ts'
 import { clientFlow, doctorFlow, mainMenu, setupWizard, statusFlow, switchModel, uninstallFlow } from './src/wizard.ts'
 import { useFlow } from './src/use.ts'
@@ -304,9 +304,8 @@ async function main() {
   // (systemd, launchd, a pipe) start the service directly, so scripts and the background
   // service behave the same regardless of the menu.
   if (argv.length === 0 && isInteractive()) {
-    const chosen = await mainMenu()
-    if (chosen !== 0) return
-    note(style.dim('running in the foreground, press Ctrl+C to exit'))
+    await mainMenu()
+    return
   }
   return await commandServe(config, log)
 }
