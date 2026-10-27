@@ -640,12 +640,17 @@ test('接入参数记在账本 bridge 段：不写客户端配置也能拿到令
   // 卸载（服务那块走「本来就没装过」的路径）也要把这两问的答案忘掉
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'fo-install-home-'))
   const previousHome = process.env.HOME
+  const previousXdg = process.env.XDG_CONFIG_HOME
   process.env.HOME = dir
+  process.env.XDG_CONFIG_HOME = path.join(dir, '.config')
   try {
     const { uninstallService } = loose(await import('../src/install.ts'))
     uninstallService()
   } finally {
-    process.env.HOME = previousHome
+    if (previousHome === undefined) delete process.env.HOME
+    else process.env.HOME = previousHome
+    if (previousXdg === undefined) delete process.env.XDG_CONFIG_HOME
+    else process.env.XDG_CONFIG_HOME = previousXdg
   }
   const ledger = JSON.parse(fs.readFileSync(path.join(home, 'install.json'), 'utf8'))
   assert.equal('bridge' in ledger, false, '卸载后账本不该留桥的令牌')
