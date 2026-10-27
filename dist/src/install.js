@@ -531,14 +531,19 @@ export function bridgeRecord() {
  * international edition's alias, and deriving by alias would misfile it as that source's
  * model.
  */
-export function recordBridge({ port, apiKey, model, contextWindow, source, serviceEnv, }) {
+export function recordBridge({ port, apiKey, model, contextWindow, source, sourceModel, sourceContextWindow, serviceEnv, }) {
     const state = readInstallState();
     const previous = bridgeRecord();
     const bare = String(model ?? '').replace(/\[[^\]]*\]$/, '');
     const lastModels = previous.lastModels !== null && typeof previous.lastModels === 'object' ? { ...previous.lastModels } : {};
     const key = typeof source === 'string' && source !== '' ? source : literalSourceOf(bare);
+    const rememberedModel = sourceModel === undefined ? bare : sourceModel.replace(/\[[^\]]*\]$/, '');
+    const rememberedWindow = sourceModel === undefined ? contextWindow : sourceContextWindow;
     if (key !== '')
-        lastModels[key] = { model: bare, ...(Number.isFinite(contextWindow) ? { contextWindow } : {}) };
+        lastModels[key] = {
+            model: rememberedModel,
+            ...(Number.isFinite(rememberedWindow) ? { contextWindow: rememberedWindow } : {}),
+        };
     state.bridge = {
         port,
         apiKey,

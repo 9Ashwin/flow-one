@@ -246,7 +246,11 @@ export function createBridgeServer({ config, upstream, log = () => { }, }) {
         if (wanted !== '' && Object.hasOwn(config.modelMap, wanted))
             return config.modelMap[wanted];
         if (config.fallbackModels?.length &&
-            (wanted === 'auto' || ((wanted === '' || /^claude-/i.test(wanted)) && config.model === 'auto')))
+            (wanted === 'auto' ||
+                (config.model === 'auto' &&
+                    (wanted === '' ||
+                        /^claude-/i.test(wanted) ||
+                        config.fallbackModels.some(id => id.split('/')[0] === wanted.split('/')[0] && wanted.includes('/'))))))
             return 'auto';
         if (config.fallbackModels?.length &&
             wanted.includes('/') &&
@@ -531,6 +535,7 @@ export function createBridgeServer({ config, upstream, log = () => { }, }) {
                 : undefined;
             return `prefix_id=${prefixId} in=${usage.input_tokens} cache_read=${read} cache_write=${usage.cache_creation_input_tokens ?? 'unknown'} cache_ratio=${total === undefined ? 'unknown' : (read / total).toFixed(4)}`;
         };
+        const responseModel = requestedModel === 'auto' ? 'auto' : model;
         if (!wantsStream) {
             const outcome = createOutcome();
             let timer;
@@ -575,7 +580,12 @@ export function createBridgeServer({ config, upstream, log = () => { }, }) {
             }
             let message;
             try {
-                message = anthropicMessage(outcome, { model, id, inputTokens, showThinking: config.showThinking });
+                message = anthropicMessage(outcome, {
+                    model: responseModel,
+                    id,
+                    inputTokens,
+                    showThinking: config.showThinking,
+                });
             }
             catch (error) {
                 anthropicError(res, 502, messageOf(error), undefined, reqId);
@@ -604,7 +614,7 @@ export function createBridgeServer({ config, upstream, log = () => { }, }) {
         // is where backpressure is awaited.
         let pending = [];
         const translator = createStreamTranslator({
-            model,
+            model: responseModel,
             id,
             inputTokens,
             showThinking: config.showThinking,

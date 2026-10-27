@@ -40,7 +40,7 @@ export const DEFAULTS: Config = {
   mode: 'direct' as const,
   host: '127.0.0.1',
   port: 8788,
-  /** The gateway-mode upstream; defaults to dsh-our-free-model's channel gateway. */
+  /** The gateway-mode upstream; defaults to the local channel gateway. */
   upstream: 'http://127.0.0.1:8326',
   upstreamKey: '',
   /** Empty = decided by the upstream catalogue (direct mode takes the first available model). */
@@ -138,7 +138,7 @@ const SUBCOMMANDS = new Set([
 export { bridgeHome, credentialFile }
 
 /**
- * dsh-our-free-model's channel gateway keeps its key under the DSH home; gateway mode reads
+ * The local channel gateway keeps its key under the DSH home; gateway mode reads
  * it from there by convention when nothing is configured explicitly. If it cannot be read,
  * treat it as absent (the gateway answers 401, which makes it obvious the key was not given).
  */
@@ -163,10 +163,10 @@ Usage:
   flow-one login [cn|intl]    log in (both when no product name is given)
   flow-one status             show login status
   flow-one models             list available model IDs
-  flow-one switch             pick a model interactively (writes config, restarts the service)
+  flow-one switch             pick a backend model (keeps the unified entry when available)
   flow-one auto               configure automatic fallback for Claude Code
-  flow-one use <cn|intl|oc|ocg>  switch channel only: go to a source that is already configured,
-                              reusing its last model (skips the one-shot setup; restarts the service)
+  flow-one use <auto|cn|intl|oc|ocg>  enable fallback or prioritize a configured source
+                              when multiple sources are available
   flow-one doctor             self-check: config / login / both gates (really sends requests)
   flow-one setup              interactive one-shot setup (login → pick model → configure the proxy
                               → optionally configure your clients)

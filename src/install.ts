@@ -664,6 +664,8 @@ export function recordBridge({
   model,
   contextWindow,
   source,
+  sourceModel,
+  sourceContextWindow,
   serviceEnv,
 }: {
   port: number
@@ -671,6 +673,8 @@ export function recordBridge({
   model: string
   contextWindow?: number
   source?: string
+  sourceModel?: string
+  sourceContextWindow?: number
   serviceEnv?: Record<string, string>
 }): void {
   const state = readInstallState()
@@ -679,7 +683,13 @@ export function recordBridge({
   const lastModels =
     previous.lastModels !== null && typeof previous.lastModels === 'object' ? { ...previous.lastModels } : {}
   const key = typeof source === 'string' && source !== '' ? source : literalSourceOf(bare)
-  if (key !== '') lastModels[key] = { model: bare, ...(Number.isFinite(contextWindow) ? { contextWindow } : {}) }
+  const rememberedModel = sourceModel === undefined ? bare : sourceModel.replace(/\[[^\]]*\]$/, '')
+  const rememberedWindow = sourceModel === undefined ? contextWindow : sourceContextWindow
+  if (key !== '')
+    lastModels[key] = {
+      model: rememberedModel,
+      ...(Number.isFinite(rememberedWindow) ? { contextWindow: rememberedWindow } : {}),
+    }
   state.bridge = {
     port,
     apiKey,

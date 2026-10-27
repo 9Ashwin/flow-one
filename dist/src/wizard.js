@@ -14,6 +14,7 @@
 import fs from 'node:fs';
 import net from 'node:net';
 import crypto from 'node:crypto';
+import path from 'node:path';
 import process from 'node:process';
 import { CN, INTL } from "./products.js";
 import { OPENCODE, OPENCODE_GO, goCredential, goKeyTail, hasGoCredential, saveGoKey } from "./opencode.js";
@@ -24,11 +25,11 @@ import { login, credentialStatus } from "./auth.js";
 import { createDirectUpstream, createGatewayUpstream } from "./upstreams.js";
 import { credentialFile, DEFAULT_LOCAL_API_KEY } from "./config.js";
 import { installClaudeSettings, installService, uninstallClaudeSettings, uninstallService, serviceState, serviceChoice, recordServiceChoice, claudeSettingsPath, readInstallState, serviceCliPath, currentCliPath, LEGACY_SERVICE_LABEL, CLIENT_TARGETS, clientChoice, recordClientChoice, bridgeRecord, recordBridge, sizedModelId, clientConfigIsOurs, } from "./install.js";
-import { HOME_DIR, LEGACY_HOME_DIR, legacyHomeInUse } from "./home.js";
+import { HOME_DIR, LEGACY_HOME_DIR, bridgeHome, legacyHomeInUse } from "./home.js";
 import { DEFAULT_DSH_REASONING, DSH_SOURCE_IDS, applyDshConfig, dshCurrentlyManaged, removeDshConfig } from "./dsh.js";
 // The menu's "switch source" entry runs the same flow as `fo use`, just picked with
 // arrow keys when no argument is given
-import { autoFlow, useFlow } from "./use.js";
+import { autoFlow, configuredFallbackModels, fallbackContextWindow, updateFallbackModels, useFlow } from "./use.js";
 import { banner, blank, box, confirm, gray, green, heading, info, input, isInteractive, menu, note, section, select, password, spinner, style, success, warn, fail, dim, yellow, } from "./prompt.js";
 import { SUBTYPES, asBridgeError, configError, renderError, upstreamError, validationError } from "./errors.js";
 const DEFAULT_PORT = 8788;
@@ -178,6 +179,12 @@ async function statusLine() {
     const state = running !== undefined ? green(`运行中（${port}）`) : service.installed ? '已安装但没在跑' : '未运行';
     note(`  ${gray('模型')} ${model === '' ? gray('未配置') : style.bold(model.replace('[1m]', ''))}   ${gray('服务')} ${state}`);
     note(`  ${gray('来源')} ${gray(SOURCES.map(source => loggedInLabel(source)).join(' · '))}`);
+    const clients = clientChoice();
+    note(`  ${gray('代码工具')} ${clients.asked ? labelOfClients(clients.clients) : gray('尚未选择')}`);
+    const installed = readInstallState();
+    const order = (installed.service?.env ?? installed.bridge?.serviceEnv)?.BRIDGE_FALLBACK_MODELS;
+    if (model.replace(/\[[^\]]*\]$/, '') === 'auto' && order)
+        note(`  ${gray('回退顺序')} ${gray(order.split(',').join(' → '))}`);
 }
 /** Log in source by source; skip sources that need no login, and skip ones already logged in unless `force`. */
 export async function ensureLoggedIn(products, { force = false } = {}) {
@@ -364,54 +371,29 @@ export async function decideService({ service, state = serviceState(), choice = 
     return wants;
 }
 const CLIENT_LABELS = { claude: 'Claude Code', dsh: 'DSH' };
-/** Two independent yes/no questions (not "which should be configured" — that squeezes two switches into one choice). */
-const CLIENT_QUESTIONS = {
-    claude: '帮你也写 Claude Code 的配置（~/.claude/settings.json）？',
-    dsh: '帮你也写 DSH 的配置（llm-pi-ai provider）？',
-};
 function labelOfClients(ids) {
-    return ids.map(id => CLIENT_LABELS[id] ?? id).join(' / ');
+    return ids.length === 0 ? '仅反代' : ids.map(id => CLIENT_LABELS[id] ?? id).join(' / ');
 }
-/**
- * The "should we write the client config for you" question — asked once each for Claude
- * Code and DSH (two independent switches).
- *
- * This tool's job is **providing the reverse proxy**; editing client config is a favor —
- * and on Windows, touching someone else's config can trip permission errors (real machine
- * EPERM, 2026-10-19).
- *
- * ⚠️ This question is asked **every time** (unlike "install as a service"): it asks "whose
- * files are we touching this run", and users may well want only the proxy, or only DSH.
- * Asking once and never again would lock the choice in with no way to change it (user
- * report 2026-10-22). The recorded answer only serves as the **default**: pressing Enter
- * all the way reproduces last time's choice. Only an explicit `--clients` skips the question.
- *
- * Already-managed config only affects the default; when the user explicitly declines this
- * time the file must be left byte-for-byte intact.
- */
-export async function decideClientTargets({ clients, ours = [], choice = clientChoice(), ask = confirm, } = {}) {
-    if (Array.isArray(clients))
-        return clients.filter(id => CLIENT_TARGETS.includes(id));
-    const keep = [...new Set(ours.filter(id => CLIENT_TARGETS.includes(id)))];
-    if (keep.length > 0) {
-        note(dim(`  ${labelOfClients(keep)} 的配置本来就指向本桥：默认更新，选择不写则保留原样`));
-    }
-    const remembered = new Set(choice.asked ? choice.clients : []);
-    const picked = [];
-    // Two independent switches, one question each — no "write both" combo option: combining
-    // is the UI's job, and the answer is really two booleans (zcf asks the same way: ask
-    // about each thing, no multi-select).
-    for (const id of CLIENT_TARGETS) {
-        const managed = keep.includes(id);
-        const wants = await ask({
-            message: CLIENT_QUESTIONS[id],
-            initial: managed || remembered.has(id),
-        });
-        if (wants)
-            picked.push(id);
-    }
+async function chooseCodeTools() {
+    const choice = clientChoice();
+    const choices = [
+        { label: 'Claude Code', value: ['claude'] },
+        { label: 'DSH', value: ['dsh'] },
+        { label: '仅反代，不写客户端配置', value: [] },
+        { label: 'Codex', hint: '暂未支持 Responses 协议', value: ['codex'], disabled: true },
+    ];
+    const initial = Math.max(0, choices.findIndex(item => item.value.length === choice.clients.length && item.value.every(id => choice.clients.includes(id))));
+    const picked = await select({ message: '选择代码工具', options: choices, initial: choice.asked ? initial : 0 });
     recordClientChoice(picked);
     return picked;
+}
+/** Reuse the recorded client choice unless the command explicitly overrides it. */
+export async function decideClientTargets({ clients, choice = clientChoice(), choose = chooseCodeTools, } = {}) {
+    if (Array.isArray(clients))
+        return clients.filter(id => CLIENT_TARGETS.includes(id));
+    if (choice.asked)
+        return choice.clients;
+    return await choose();
 }
 /**
  * The "write the client config or not" half of step 4.
@@ -547,7 +529,9 @@ export async function setupWizard(options = {}) {
             'the client config yourself; get the connection info from `flow-one client` ' +
             '(base URL / token / model ID)');
     }
+    const targets = await decideClientTargets({ clients: options.clients });
     heading('一键配置');
+    note(dim(`  代码工具：${labelOfClients(targets)}（可在主菜单切换）`));
     note(dim('  一次配一家：接哪一家 → 登录 → 选模型 → 配反代（客户端配置可选）→ 常驻'));
     note(dim('  想再挂一家，配完回菜单再选一次「一键配置」即可（不会顶掉先前的）'));
     blank();
@@ -615,7 +599,26 @@ export async function setupWizard(options = {}) {
     blank();
     section('第 3 步 · 模型');
     const picked = await pickModel(rows);
-    const model = picked.id;
+    const previous = readInstallState();
+    const previousEnv = previous.service?.env ?? previous.bridge?.serviceEnv ?? {};
+    const configured = previousEnv.BRIDGE_MODE === 'gateway' ? undefined : previousEnv.BRIDGE_FALLBACK_MODELS?.split(',').filter(Boolean);
+    const candidates = chosen === GATEWAY
+        ? []
+        : updateFallbackModels(configured?.length ? configured : configuredFallbackModels(picked.id, previous.bridge?.lastModels), picked.id);
+    const automatic = candidates.length >= 2;
+    const model = automatic ? 'auto' : picked.id;
+    const contextWindow = automatic
+        ? fallbackContextWindow(candidates, previous.bridge?.lastModels, {
+            model: picked.id,
+            contextWindow: picked.contextWindow,
+        })
+        : picked.contextWindow;
+    if (automatic) {
+        serviceEnv.BRIDGE_FALLBACK_MODELS = candidates.join(',');
+        const mounted = (serviceEnv.BRIDGE_PRODUCTS ?? '').split(',').filter(Boolean);
+        serviceEnv.BRIDGE_PRODUCTS = [...new Set([...mounted, ...candidates.map(value => value.split('/')[0])])].join(',');
+        note(dim(`  统一入口 auto，后台顺序：${candidates.join(' → ')}`));
+    }
     serviceEnv.BRIDGE_MODEL = model;
     blank();
     section('第 4 步 · 写入并常驻');
@@ -624,22 +627,25 @@ export async function setupWizard(options = {}) {
     // The token must be stable: client config references it long-term (a random one causes
     // Claude Code 401s and DSH "invalid key")
     const apiKey = bridgeApiKey();
-    const ours = [];
-    if (clientConfigIsOurs({ port }))
-        ours.push('claude');
-    if (dshCurrentlyManaged())
-        ours.push('dsh');
-    const targets = await decideClientTargets({ clients: options.clients, ours });
     // Connection parameters are independent of "write client config": the ledger always
     // needs them, `fo client` and a foreground bridge rely on it
-    recordBridge({ port, apiKey, model, contextWindow: picked.contextWindow, serviceEnv });
+    recordBridge({
+        port,
+        apiKey,
+        model,
+        contextWindow,
+        ...(automatic
+            ? { source: picked.id.split('/')[0], sourceModel: picked.id, sourceContextWindow: picked.contextWindow }
+            : {}),
+        serviceEnv,
+    });
     const applied = applyClientConfig({
         wantsClient: targets.includes('claude'),
         file: claudeSettingsPath(),
         baseUrl: `http://127.0.0.1:${port}`,
         apiKey,
         model,
-        contextWindow: picked.contextWindow,
+        contextWindow,
     });
     if (applied.written) {
         success(`Claude Code 配置已写入 ${applied.file}`);
@@ -708,7 +714,7 @@ export async function setupWizard(options = {}) {
     box([
         wantsService && (service?.ok !== true || health === undefined) ? '配置已写入，服务未就绪' : '配置完成',
         `${gray('本次')}  ${chosen === GATEWAY ? '转发给已有网关' : `${chosen.id}（${chosen.label}）`}`,
-        `${gray('模型')}  ${model}${picked.contextWindow === undefined ? '' : `  ${gray(`窗口 ${shortNumber(picked.contextWindow)}`)}`}`,
+        `${gray('模型')}  ${model}${contextWindow === undefined ? '' : `  ${gray(`窗口 ${shortNumber(contextWindow)}`)}`}`,
         `${gray('已挂')}  ${mounted.join('、')}`,
         `${gray('监听')}  http://127.0.0.1:${port}`,
         `${gray('服务')}  ${wantsService ? (service?.ok !== true ? '安装失败' : health === undefined ? '已安装但未就绪' : '运行中') : running === undefined ? '未常驻' : '复用已有实例'}`,
@@ -775,6 +781,16 @@ export async function switchModel() {
     });
     const model = chosen;
     const contextWindow = shown.find(row => row.id === chosen)?.contextWindow;
+    const configured = env.BRIDGE_FALLBACK_MODELS?.split(',').filter(Boolean);
+    const candidates = configured?.length ? configured : configuredFallbackModels(model, record.lastModels);
+    if (env.BRIDGE_MODE !== 'gateway' &&
+        record.port !== undefined &&
+        candidates.length >= 2 &&
+        clientConfigIsOurs({ port })) {
+        await autoFlow(updateFallbackModels(candidates, model), { model, contextWindow });
+        success('后台模型已更新，Claude Code 继续使用统一入口 auto');
+        return 0;
+    }
     if (installed.service?.path !== undefined && fs.existsSync(installed.service.path)) {
         const service = await installService({ port, apiKey, env: { ...env, BRIDGE_MODEL: model } });
         if (!service.ok)
@@ -865,6 +881,12 @@ export async function statusFlow() {
     }
     note(`  配置文件  ${gray(readInstallState().claudeSettings?.file ?? '本工具未写入过')}`);
     note(`  凭据文件  ${gray(credentialFile())}`);
+    if (service.installed && service.kind === 'launchd')
+        note(`  请求日志  ${gray(path.join(bridgeHome(), 'bridge.err.log'))} ${gray('（查看 model= 实际命中模型）')}`);
+    else if (service.installed && service.kind === 'systemd')
+        note(`  请求日志  ${gray('journalctl --user -u dev.flow-one')} ${gray('（查看 model= 实际命中模型）')}`);
+    else
+        note(`  请求日志  ${gray('前台运行时显示在终端；查看 model= 实际命中模型')}`);
     blank();
     return 0;
 }
@@ -1056,11 +1078,11 @@ export async function mainMenu(options = {}) {
                     items: [
                         // Switching source is first: the most frequent daily action is "switch to
                         // another source and keep working", not reconfiguring.
-                        { key: '1', label: '切换渠道', hint: '国内版 / 国际版 / 免费档 / Go 套餐，用它上次的模型' },
+                        { key: '1', label: '选择渠道', hint: '选择自动回退或配置优先渠道' },
                         { key: '2', label: '一键配置', hint: '接哪一家 → 选模型 → 写 Claude Code 配置 → 后台常驻' },
-                        { key: '3', label: '切换模型', hint: '改完自动重启服务' },
-                        { key: '7', label: '自动回退', hint: '国际版 → 国内版 → Go 套餐，额度不足自动切换' },
+                        { key: '3', label: '配置后台模型', hint: '调整候选模型，保持统一入口' },
                         { key: '4', label: '查看状态', hint: '登录有效期 / 服务 / 文件位置' },
+                        { key: 'T', label: '切换代码工具', hint: '记住客户端选择，下次配置时自动使用' },
                     ],
                 },
                 {
@@ -1077,16 +1099,20 @@ export async function mainMenu(options = {}) {
         if (choice === 'Q')
             return 0;
         try {
+            if (choice === 'T') {
+                const picked = await chooseCodeTools();
+                note(`  已选择 ${labelOfClients(picked)}；下次一键配置时写入相应客户端`);
+            }
             if (choice === '1')
                 await useFlow();
-            if (choice === '7')
-                await autoFlow();
             if (choice === '2')
                 await setupWizard(options);
             if (choice === '3')
                 await switchModel();
-            if (choice === '4')
+            if (choice === '4') {
                 await statusFlow();
+                await input({ message: '按回车返回主菜单' });
+            }
             if (choice === '5')
                 await loginFlow();
             if (choice === '6')
@@ -1101,8 +1127,5 @@ export async function mainMenu(options = {}) {
             process.stderr.write(renderError(typed));
             warn('操作未完成，已返回主菜单');
         }
-        // No more "press Enter to return to the menu": nothing clears the screen here, the
-        // action's output stays above and the next banner merely appends — that pause was
-        // just a wasted Enter press.
     }
 }

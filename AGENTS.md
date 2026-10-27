@@ -200,7 +200,7 @@ Development still runs TypeScript directly, so `engines.node` is `>=22.18`.
 
 ### Comment format
 
-The shape follows the sibling project `floway`. The distinction is by **audience**, not by taste:
+The distinction is by **audience**, not by taste:
 
 | Where | Form | Why |
 | --- | --- | --- |

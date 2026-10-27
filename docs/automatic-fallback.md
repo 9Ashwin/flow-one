@@ -1,13 +1,17 @@
 # Automatic model fallback
 
-After `fo setup` has configured Claude Code and the bridge, enable automatic
-fallback with `fo auto`. Claude Code uses the stable model `auto`; the bridge
-tries these sources in order, using the last model configured for each source.
-When a source has no remembered model, it uses these defaults:
+`fo setup` uses the stable Claude Code model `auto` whenever at least two
+configured direct sources are available. The bridge selects the backend model
+from an ordered list. Select `auto` under menu option 1, or run `fo use auto`, to enable this
+unified entry using the saved order, or these defaults where no model was saved:
 
 1. `intl/deepseek-v4.1-flash`
 2. `cn/deepseek-v4.1-flash`
 3. `ocg/deepseek-v4.1-flash`
+
+In the interactive menu, select option 1, then `auto` and configure the fallback
+order. Enter candidate numbers in priority order; omitted candidates are removed.
+At least two candidates are required, and `q` cancels without saving.
 
 For a different model or order, list explicit source/model IDs:
 
@@ -19,8 +23,11 @@ The configured models and order are stored in the service environment and the
 installation ledger. A source that is not mounted yet is mounted automatically.
 Log in to the Tencent editions and configure the OpenCode Go key separately.
 The command only updates Claude Code settings already managed by this bridge;
-it backs up the previous settings. Use `fo use <source>` to switch back to an
-explicit source, or `fo auto` to re-enable the stored order.
+it backs up the previous settings. `fo use <source>` adjusts the backend priority
+without changing the unified Claude Code model. `fo switch` changes the selected
+source's backend model while preserving the route. Re-running setup accumulates
+configured sources and keeps the unified route when at least two are available.
+If only one source is configured, it remains a direct model with no fallback.
 
 For foreground use, `fo client` prints the complete command, including
 `--fallback`. A manual proxy can also use:
@@ -45,6 +52,11 @@ after cooldown. This state is process-local and resets on restart. If every
 candidate is limited, the bridge returns HTTP 429 with `Retry-After`.
 
 The bridge translates each candidate independently, including Tencent-specific
-system prompt rewrites. Explicitly requested source/model IDs still target that
-source. If candidate models differ, their context windows, image support and
-answers may differ too; configure equivalent models when continuity matters.
+system prompt rewrites. In automatic mode, older Claude Code sessions that still
+send a source-prefixed model for a configured source also use the unified route;
+an explicit `--map` takes precedence. Responses identify the unified `auto`
+model while logs record the selected backend. A 1M client window is configured
+only if every candidate has a recorded window of at least 1M. If any capability
+is unknown, the client keeps the conservative default. Candidate models may
+otherwise differ in image support and answers; configure equivalent models when
+continuity matters.

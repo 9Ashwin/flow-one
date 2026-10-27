@@ -3,7 +3,7 @@
 A local reverse proxy that lets the **Claude Code CLI** use **WorkBuddy (the CodeBuddy China
 edition and the International edition)** and the **OpenCode free tier**.
 
-中文说明见 [README-cn.md](README-cn.md).
+中文说明见 [README.zh-CN.md](README.zh-CN.md).
 
 Claude Code only speaks Anthropic's Messages protocol, while these services expose OpenAI-style
 APIs (WorkBuddy's `/v2/chat/completions`, OpenCode's `/inference/v1/chat/completions`).
@@ -22,11 +22,31 @@ Claude Code CLI ──► this bridge 127.0.0.1:8788 ──► WorkBuddy China c
 
 **Not published to the npm registry — install straight from GitHub.** The repository includes
 a generated JavaScript snapshot, so installation needs no build step or third-party runtime
-dependencies. Node ≥ 22.18 is required.
+dependencies. Node ≥ 22.18, npm, and Git are required.
 
 ```bash
+node --version                        # requires Node.js 22.18 or newer
+git --version                         # npm uses Git to fetch the repository
 npm i -g github:9Ashwin/flow-one      # installs the flow-one and fo commands
+fo --version                          # verifies the command is available
+fo                                    # open the interactive menu
 ```
+
+For a first installation, choose **2. 一键配置** in the menu and follow the prompts. Choose a
+source and model, then decide whether to write client configuration and install a background
+service. `Q` exits the menu.
+
+To update, run the same `npm i -g github:9Ashwin/flow-one` command. If a background service is
+already installed, update it using the currently selected source, for example:
+
+```bash
+fo use intl     # replace intl with the current source: cn, intl, oc, or ocg
+fo doctor       # check configuration and service; this sends real upstream requests
+```
+
+If replacing an old `npm link` fails with `ENOTDIR`, remove the old global installation with
+`npm uninstall -g flow-one`, then run the GitHub installation command again. Existing login
+credentials are kept in the data directory.
 
 If you would rather not install it globally, fetch it on each run:
 
@@ -41,10 +61,9 @@ git clone https://github.com/9Ashwin/flow-one.git
 cd flow-one && node cli.ts
 ```
 
-**Updating**: rerun the same installation command.
-**Pinning**: `npm i -g --install-links github:9Ashwin/flow-one#v0.3.1`.
-The existing `v0.3.0` tag predates the JavaScript snapshot and does not work as a global install;
-the `v0.2.x` tags are the deprecated Go implementation.
+The existing `v0.3.1` tag predates the latest fixes; install the default branch as shown above
+to get them. The `v0.3.0` tag cannot be used for global installation, and the `v0.2.x` tags
+are the deprecated Go implementation.
 
 > Why not publish to npm: npm no longer allows publishing a new package directly with
 > credentials; it must be staged first and approved by the maintainer with 2FA
@@ -57,11 +76,11 @@ the `v0.2.x` tags are the deprecated Go implementation.
 fo               # run it in a terminal to open the interactive menu
 ```
 
-After choosing `1`, it walks through four steps by itself: **which upstream → login → model
+After choosing `2`, it walks through four steps by itself: **which upstream → login → model
 selection → write configuration and run as a service**.
 
-Configure one upstream at a time (like zcf, one item at a time). When it finishes, **press Enter
-to return to the menu**; to attach another upstream, pick "one-click setup" again — the mounted
+Configure one upstream at a time (like zcf, one item at a time). When it finishes, the menu
+returns automatically; to attach another upstream, pick "one-click setup" again — the mounted
 list is **cumulative** (the union of `BRIDGE_PRODUCTS`), so earlier configuration is not
 displaced.
 
@@ -132,7 +151,7 @@ run `fo uninstall`.
 
 | | Direct mode (default) | Gateway mode |
 | --- | --- | --- |
-| Who handles login | **This tool itself**; the OpenCode free tier needs no login at all | The upstream does, e.g. [dsh-our-free-model](https://github.com/Ebony-Vinyl/dsh-our-free-model) |
+| Who handles login | **This tool itself**; the OpenCode free tier needs no login at all | The upstream gateway does |
 | Dependencies | None | That gateway must be running |
 | Model IDs | `cn/deepseek-v4.1-flash`, `intl/hy4-preview-f`, `oc/deepseek-v4.1-flash-free` | Upstream IDs, e.g. `workbuddy/deepseek-v4.1-flash` |
 | Best for | Installing only this tool | Already running a gateway / mixing multiple upstreams |
@@ -256,11 +275,9 @@ widen the access surface.
 ## What it actually changes
 
 **The tool's job is to provide the proxy; modifying your client configuration is optional.** The
-wizard's step 4 **asks twice, separately**: whether to write the Claude Code configuration
-(`~/.claude/settings.json`) and whether to write the DSH one (`llm-pi-ai` provider + credential
-reference) — two independent switches; answering y to both writes both. **Every setup asks**
-(the previous choice is the default); answering n to both writes no client configuration
-(including previously managed configuration). After changing parameters such as the bridge port,
+wizard asks which code tools to configure once, then reuses that choice on later setups. Choose
+Claude Code, DSH, or proxy only; use **Switch code tool** in the main menu to change it.
+Codex is not yet supported because it requires the Responses API. After changing parameters such as the bridge port,
 clients that were not updated must be synchronized manually. `--clients claude,dsh|claude|dsh|none`
 states the choice directly and skips the question.
 Afterwards `fo client` prints the connection address, token, and model ID at any time for you to
@@ -438,47 +455,10 @@ This project accesses interfaces used by the official clients **through your own
 credentials** and is intended for personal learning and personal use only. Judge for yourself
 whether this complies with the requirements of your region and the terms of service; do not
 commit credentials to any repository, and do not expose this bridge to the public internet.
-Protocol details reference reverse-engineering findings that were empirically verified in
-[dsh-our-free-model](https://github.com/Ebony-Vinyl/dsh-our-free-model) (MIT); this project's
-implementation is independent of it.
 
-## Publishing to npm (maintainers)
+## Distribution
 
-The package name `flow-one` is **not yet taken** on npm (checked 2026-10-16). The name `fo` is
-already taken by someone else, so it exists only as a command alias provided by this package,
-not as the package name.
-
-```bash
-# 0. Prerequisite: the registry must be the official one — mirrors can install but not publish
-npm config get registry          # should be https://registry.npmjs.org/
-
-# 1. Log in (register at npmjs.com first if you have no account)
-npm login                        # a one-time code is required with 2FA enabled
-
-# 2. Dry run first: runs prepublishOnly (node --test) and lists what will be published
-npm publish --dry-run
-
-# 3. Publish for real
-npm publish
-
-# 4. Verify
-npm view flow-one version
-npm i -g flow-one && fo status
-```
-
-A few pitfalls encountered:
-
-- **The working tree must be clean before publishing**: uncommitted changes make it into the
-  published package as half-finished work.
-- **Version numbers only go up**: run `npm version patch|minor|major` first; republishing the
-  same version is rejected (`EPUBLISHCONFLICT`).
-- **Unpublishable only within 72 hours**: `npm unpublish flow-one@0.1.0`; after that you can
-  only publish a new version. So before the first release, `npm i -g .` to verify locally is
-  safer.
-- **Publishing from CI** requires an **Automation**-type token (npm website → Access Tokens);
-  regular tokens are rejected by 2FA. Store it as the repository secret `NPM_TOKEN` and run
-  `npm publish --provenance --access public` when a `v*` tag is pushed. Say the word if you want
-  this workflow and I will add a `.github/workflows/release.yml`.
+Releases are Git tags in this repository; this project is not published to the npm registry.
 
 ## License
 

@@ -327,6 +327,7 @@ export async function select({ message, options, initial = 0, filterable = false
                         const option = options[index];
                         if (option.disabled !== true && option.separator !== true)
                             return done(option, finish);
+                        typed = '';
                     }
                 }
             }

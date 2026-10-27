@@ -409,6 +409,7 @@ export async function select<T = string>({
           if (Number(next) * 10 > options.length) {
             const option = options[index]
             if (option.disabled !== true && option.separator !== true) return done(option, finish)
+            typed = ''
           }
         }
       }

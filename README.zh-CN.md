@@ -20,11 +20,31 @@ Claude Code CLI ──► 本桥 127.0.0.1:8788 ──► WorkBuddy 国内版 co
 ## 安装
 
 **Install directly from GitHub.** The repository includes generated JavaScript, so the
-installed program needs no build step or third-party runtime dependencies. Node ≥ 22.18 is required.
+installed program needs no build step or third-party runtime dependencies. Node ≥ 22.18, npm,
+and Git are required.
 
 ```bash
+node --version                        # requires Node.js 22.18 or newer
+git --version                         # npm uses Git to fetch the repository
 npm i -g github:9Ashwin/flow-one      # installs flow-one and fo
+fo --version                          # verifies the command is available
+fo                                    # open the interactive menu
 ```
+
+For a first installation, choose **2. 一键配置** and follow the prompts. Choose a source and
+model, then decide whether to write client configuration and install a background service.
+`Q` exits the menu.
+
+To update, run the same GitHub installation command. If a background service is installed,
+update it using the currently selected source:
+
+```bash
+fo use intl     # replace intl with the current source: cn, intl, oc, or ocg
+fo doctor       # check configuration and service; this sends real upstream requests
+```
+
+If an old `npm link` causes `ENOTDIR`, run `npm uninstall -g flow-one` and then repeat the
+GitHub installation. Existing login credentials remain in the data directory.
 
 不想全局安装，也可以每次现取：
 
@@ -39,10 +59,9 @@ git clone https://github.com/9Ashwin/flow-one.git
 cd flow-one && node cli.ts
 ```
 
-**Updating**: rerun the installation command. To pin this version, use
-`npm i -g --install-links github:9Ashwin/flow-one#v0.3.1`.
-The existing `v0.3.0` tag predates the JavaScript snapshot and does not work as a global install;
-the `v0.2.x` tags are the deprecated Go implementation.
+The existing `v0.3.1` tag predates the latest fixes; install the default branch as shown above
+to get them. The `v0.3.0` tag cannot be used for global installation, and the `v0.2.x` tags
+are the deprecated Go implementation.
 
 > 为什么不发 npm：npm 现在不允许直接发布新包，必须先 staging 再由维护者用 2FA 批准
 > （`E_STAGE_REQUIRED`）。而零依赖单包本来也不需要中间商 —— 从 GitHub 装就是同一条命令。
@@ -53,10 +72,10 @@ the `v0.2.x` tags are the deprecated Go implementation.
 fo               # 终端里直接跑，进交互菜单
 ```
 
-选 `1` 之后它会自己走四步：**接哪一家 → 登录 → 选模型 → 写配置并常驻**。
+Choose `2` to run setup: **source → login → model → configuration and background service**.
 
-一次只配一家（像 zcf 那样一项一项来）。走完**按回车回菜单**；要再接一家就再选一次
-「一键配置」—— 挂载清单是**累加**的（`BRIDGE_PRODUCTS` 的并集），先配的不会被顶掉。
+Configure one source at a time. The menu returns automatically; choose setup again to add a
+source. The mounted source list is cumulative, so earlier sources remain configured.
 
 配过之后，**切换渠道不用再走这个流程**：
 
@@ -116,7 +135,7 @@ fo use ocg     # 切到 OpenCode Go 套餐
 
 | | 直连模式（默认） | 网关模式 |
 | --- | --- | --- |
-| 谁负责登录 | **本工具自己**；OpenCode 免费档完全不用登录 | 上游负责，例如 [dsh-our-free-model](https://github.com/Ebony-Vinyl/dsh-our-free-model) |
+| 谁负责登录 | **本工具自己**；OpenCode 免费档完全不用登录 | 由上游网关负责 |
 | 依赖 | 无 | 那个网关得在跑 |
 | 模型 ID | `cn/deepseek-v4.1-flash`、`intl/hy4-preview-f`、`oc/deepseek-v4.1-flash-free` | 上游的 ID，例如 `workbuddy/deepseek-v4.1-flash` |
 | 适合 | 只装这一个工具 | 已经在跑网关 / 想混用多条上游 |
@@ -228,10 +247,9 @@ node cli.ts --mode gateway --upstream http://127.0.0.1:8326 \
 
 ## 它到底改了什么
 
-**本工具的职责是提供反代；改你的客户端配置是可选动作。** 向导第 4 步**分两次单独问**：
-要不要写 Claude Code 的配置（`~/.claude/settings.json`）、要不要写 DSH 的
-（`llm-pi-ai` provider + 凭据引用）—— 两个独立开关，都答 y 就都写。**每次 setup 都会问**
-（上一次的选择作为默认值）；两个都答 n 就不写任何客户端配置（包括以前代管过的）。
+**本工具的职责是提供反代；改你的客户端配置是可选动作。** 首次配置时选择 Claude Code、
+DSH 或仅反代，之后沿用选择；要更改时在主菜单选择「切换代码工具」。
+Codex 需要 Responses API，暂不支持。
 改过反代端口这类参数之后，没跟着更新的客户端需要手动同步。
 `--clients claude,dsh|claude|dsh|none` 可直接表态、跳过提问。
 之后随时用 `fo client` 打印连接地址、令牌与模型 ID，自己填进任何 Anthropic 兼容客户端。
@@ -387,43 +405,11 @@ launchd 自启与 `/health`。
 
 本项目**以你自己的账号凭据**访问官方客户端所用的接口，仅供个人学习与个人使用。
 是否符合你所在地区的要求与服务条款，请自行判断；不要把凭据提交到任何仓库，
-也不要把本反代暴露到公网。协议细节参考了
-[dsh-our-free-model](https://github.com/Ebony-Vinyl/dsh-our-free-model)（MIT）里实测过的
-逆向结论；本项目的实现与它无关。
+也不要把本反代暴露到公网。
 
-## 发布到 npm（维护者）
+## Distribution
 
-包名 `flow-one` **暂未被占用**（2026-10-16 核查）。`fo` 已被他人占用，所以它只是本包
-提供的命令别名，不是包名。
-
-```bash
-# 0. 前提：registry 必须是官方源 —— 国内镜像只能装、不能发
-npm config get registry          # 应该是 https://registry.npmjs.org/
-
-# 1. 登录（没有账号先去 npmjs.com 注册）
-npm login                        # 开了 2FA 时需要一个一次性验证码
-
-# 2. 先空跑：会执行 prepublishOnly（node --test）并列出将要发布的内容
-npm publish --dry-run
-
-# 3. 正式发布
-npm publish
-
-# 4. 核对
-npm view flow-one version
-npm i -g flow-one && fo status
-```
-
-踩过的几个坑：
-
-- **发布前工作区必须干净**：未提交的改动会以半成品形式进入发布的包里。
-- **版本号只能往上走**：先 `npm version patch|minor|major`；重发同一版本会被拒
-  （`EPUBLISHCONFLICT`）。
-- **只有 72 小时可撤回**：`npm unpublish flow-one@0.1.0`；过期后只能发新版本。
-  所以首次发布前先用 `npm i -g .` 本地验一遍更稳。
-- **从 CI 发布**需要 **Automation** 类型的 token（npm 网站 → Access Tokens）；
-  普通 token 会被 2FA 拒。把它存成仓库密钥 `NPM_TOKEN`，在推 `v*` tag 时跑
-  `npm publish --provenance --access public`。
+Releases are Git tags in this repository; this project is not published to the npm registry.
 
 ## 许可证
 

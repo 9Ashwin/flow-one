@@ -21,7 +21,7 @@ import {
 } from './install.ts'
 import { applySwitch, preferredModel, serviceEnvFor } from './switch.ts'
 import { SUBTYPES, configError, validationError } from './errors.ts'
-import { dim, gray, isInteractive, select, style } from './prompt.ts'
+import { dim, gray, input, isInteractive, note, select, style } from './prompt.ts'
 import type { Source, UpstreamModel } from './types.ts'
 
 /**
@@ -44,6 +44,17 @@ export interface BridgeRecord {
   contextWindow?: number
   lastModels?: LastModels
   serviceEnv?: Record<string, string>
+}
+
+function fallbackOrder(record: BridgeRecord, env: Record<string, string>): string[] {
+  return (
+    env.BRIDGE_FALLBACK_MODELS?.split(',') ||
+    DEFAULT_FALLBACK_MODELS.map(fallback => {
+      const source = fallback.split('/')[0]
+      const last = record.lastModels?.[source]?.model
+      return typeof last === 'string' && last.startsWith(`${source}/`) ? last : fallback
+    })
+  )
 }
 
 /** The result of picking a model for a source; `model` is undefined when nothing is known. */
@@ -179,29 +190,75 @@ export async function chooseSource({
   const current = String(record.model ?? '').replace(/\[[^\]]*\]$/, '')
   const currentSource = current.includes('/') ? current.slice(0, current.indexOf('/')) : ''
   const lastModels: LastModels = record.lastModels ?? {}
+  const env = readInstallState().service?.env ?? record.serviceEnv ?? {}
+  const order = fallbackOrder(record, env).join(' → ')
   const source = await select<string>({
-    message: '切到哪一家？',
-    initial: Math.max(
-      0,
-      SOURCES.findIndex(item => item.id === currentSource),
-    ),
-    options: SOURCES.map(product => {
-      const usable = usableNow(product)
-      const last = lastModels[product.id]?.model
-      const state = usable ? (last === undefined ? '还没有用过这一条' : `上次 ${last}`) : unusableHint(product)
-      return {
-        label: product.label,
-        hint: `${product.id === currentSource ? '当前 · ' : ''}${state}`,
-        value: product.id,
-        disabled: !usable,
-      }
-    }),
+    message: '选择渠道或自动回退',
+    initial: current === 'auto' ? 0 : Math.max(0, SOURCES.findIndex(item => item.id === currentSource) + 1),
+    options: [
+      { label: '自动回退（auto）', hint: `${current === 'auto' ? '当前 · ' : ''}顺序：${order}`, value: 'auto' },
+      ...SOURCES.map(product => {
+        const usable = usableNow(product)
+        const last = lastModels[product.id]?.model
+        const state = usable ? (last === undefined ? '还没有用过这一条' : `上次 ${last}`) : unusableHint(product)
+        return {
+          label: product.label,
+          hint: `${product.id === currentSource ? '当前 · ' : ''}${state}`,
+          value: product.id,
+          disabled: !usable,
+        }
+      }),
+    ],
   })
   return source
 }
 
+/** Update one source's configured model without removing other candidates. */
+export function updateFallbackModels(candidates: string[], model: string, prefer = false): string[] {
+  const source = model.split('/')[0]
+  const result = [...candidates]
+  const index = result.findIndex(value => value.split('/')[0] === source)
+  if (index < 0) result.push(model)
+  else result[index] = model
+  return prefer ? [model, ...result.filter(value => value !== model)] : result
+}
+
+/** Build the automatic route from configured accounts and their last models. */
+export function configuredFallbackModels(model: string, lastModels: LastModels = {}): string[] {
+  const chosenSource = model.split('/')[0]
+  const available = DEFAULT_FALLBACK_MODELS.filter(value => {
+    const source = sourceByName(value.split('/')[0])
+    return source !== undefined && (source.id === chosenSource || usableNow(source))
+  }).map(value => {
+    const source = value.split('/')[0]
+    const last = lastModels[source]?.model
+    return typeof last === 'string' && last.startsWith(`${source}/`) ? last : value
+  })
+  return updateFallbackModels(available, model)
+}
+
+/** A one-million window is safe only when every configured candidate proves it. */
+export function fallbackContextWindow(
+  candidates: string[],
+  lastModels: LastModels = {},
+  selected?: { model: string; contextWindow?: number },
+): number | undefined {
+  if (candidates.length === 0) return undefined
+  const windows = candidates.map(model => {
+    if (selected?.model === model) return selected.contextWindow
+    const last = lastModels[model.split('/')[0]]
+    return last?.model === model ? last.contextWindow : undefined
+  })
+  return windows.every(window => typeof window === 'number' && window >= 1_000_000)
+    ? Math.min(...(windows as number[]))
+    : undefined
+}
+
 /** Enable a stable client model with a configurable ordered list of upstream models. */
-export async function autoFlow(candidates?: string[]): Promise<number> {
+export async function autoFlow(
+  candidates?: string[],
+  selected?: { model: string; contextWindow?: number },
+): Promise<number> {
   const installed = readInstallState()
   const record = bridgeRecord() as BridgeRecord
   const { port, apiKey } = connectionOf({ record })
@@ -216,19 +273,16 @@ export async function autoFlow(candidates?: string[]): Promise<number> {
       'run `fo setup` and select Claude Code first',
     )
   }
-  const remembered = DEFAULT_FALLBACK_MODELS.map(fallback => {
-    const source = fallback.split('/')[0]
-    const last = record.lastModels?.[source]?.model
-    return typeof last === 'string' && last.startsWith(`${source}/`) ? last : fallback
-  })
-  const chosen = candidates ?? (previousEnv.BRIDGE_FALLBACK_MODELS?.split(',') || remembered)
+  const chosen = candidates ?? fallbackOrder(record, previousEnv)
   resolveConfig({ env: {}, argv: ['--fallback', chosen.join(',')] })
   const products = [...new Set([...mountedIds(previousEnv), ...chosen.map(item => item.split('/')[0])])]
+  const contextWindow = fallbackContextWindow(chosen, record.lastModels, selected)
   const env = { ...previousEnv, BRIDGE_MODE: 'direct', BRIDGE_FALLBACK_MODELS: chosen.join(',') }
   const applied = await applySwitch({
     port,
     apiKey,
     model: 'auto',
+    contextWindow,
     mounted: products,
     env,
     settings: claudeSettingsPath(),
@@ -238,16 +292,72 @@ export async function autoFlow(candidates?: string[]): Promise<number> {
       applied.service.reason ?? 'check the service configuration and retry',
     )
   }
-  recordBridge({ port, apiKey, model: 'auto', serviceEnv: serviceEnvFor({ env, model: 'auto', products }) })
+  recordBridge({
+    port,
+    apiKey,
+    model: 'auto',
+    contextWindow,
+    ...(selected === undefined
+      ? {}
+      : {
+          source: selected.model.split('/')[0],
+          sourceModel: selected.model,
+          sourceContextWindow: selected.contextWindow,
+        }),
+    serviceEnv: serviceEnvFor({ env, model: 'auto', products }),
+  })
   process.stderr.write(`Automatic fallback configured: ${chosen.join(' → ')}\n`)
   if (applied.service === undefined) process.stderr.write('Start the foreground bridge using `fo client`.\n')
   return 0
 }
 
+async function chooseAutoFlow(): Promise<number> {
+  const record = bridgeRecord() as BridgeRecord
+  const env = readInstallState().service?.env ?? record.serviceEnv ?? {}
+  const current = fallbackOrder(record, env)
+  const action = await select({
+    message: '自动回退',
+    options: [
+      { label: '启用自动回退', hint: `顺序：${current.join(' → ')}`, value: 'enable' },
+      { label: '配置回退顺序', hint: '按顺序选择候选模型，可添加或移除', value: 'configure' },
+      { label: '返回主菜单', value: 'cancel' },
+    ],
+  })
+  if (action === 'cancel') return 0
+  if (action === 'enable') return await autoFlow()
+  const options = [...current]
+  for (const source of SOURCES) {
+    if (options.some(model => model.startsWith(`${source.id}/`))) continue
+    const remembered = record.lastModels?.[source.id]?.model
+    const fallback = DEFAULT_FALLBACK_MODELS.find(model => model.startsWith(`${source.id}/`))
+    const model = remembered?.startsWith(`${source.id}/`)
+      ? remembered
+      : (fallback ?? (source.kind === 'openai' ? `${source.id}/${source.defaultModel}` : undefined))
+    if (model) options.push(model)
+  }
+  note('  按优先级输入编号，未输入的候选项不参与回退；至少选择两项。')
+  for (const [index, model] of options.entries()) note(`  ${index + 1}. ${model}`)
+  const selection = await input({
+    message: '输入编号（逗号或空格分隔，q 取消）',
+    initial: current.map(model => options.indexOf(model) + 1).join(','),
+    validate: value => {
+      if (value.toLowerCase() === 'q') return undefined
+      const parts = value.split(/[,，\s]+/)
+      const indexes = parts.map(part => Number(part))
+      if (parts.length < 2 || parts.some(part => !/^\d+$/.test(part)) || indexes.some(i => i < 1 || i > options.length))
+        return '请输入至少两个有效编号，或输入 q 取消'
+      if (new Set(indexes).size !== indexes.length) return '编号不能重复'
+      return undefined
+    },
+  })
+  if (selection.toLowerCase() === 'q') return 0
+  return await autoFlow(selection.split(/[,，\s]+/).map(value => options[Number(value) - 1]))
+}
+
 /**
  * The full `fo use <source>` flow.
  *
- * @param {string} [name] source name (cn / intl / oc / ocg and their aliases); when omitted, show the picker
+ * @param {string} [name] auto or source name; when omitted, show the picker
  */
 export async function useFlow(name?: string | Source): Promise<number> {
   // Without an argument the flow opens an arrow-key picker. In a non-TTY context (a script,
@@ -257,9 +367,12 @@ export async function useFlow(name?: string | Source): Promise<number> {
   if (name === undefined && !isInteractive()) {
     throw validationError(SUBTYPES.MISSING_ARGUMENT, 'no source given')
       .withParam('use')
-      .withHint(`pick one of: ${SOURCES.map(source => source.id).join(' / ')}`)
+      .withHint(`pick one of: auto / ${SOURCES.map(source => source.id).join(' / ')}`)
   }
-  const source = resolveSource(name ?? (await chooseSource()))
+  const choice = name ?? (await chooseSource())
+  if (typeof choice === 'string' && choice.trim().toLowerCase() === 'auto')
+    return name === undefined ? await chooseAutoFlow() : await autoFlow()
+  const source = resolveSource(choice)
   const installed = readInstallState()
   const record = bridgeRecord() as BridgeRecord
   const { port, apiKey } = connectionOf({ record })
@@ -302,6 +415,17 @@ export async function useFlow(name?: string | Source): Promise<number> {
     throw configError(SUBTYPES.NO_SOURCES, `${source.label} has no usable default model yet`).withHint(
       `run \`fo setup\` and pick it, or check the list with \`fo models\``,
     )
+  }
+
+  const existing = env.BRIDGE_FALLBACK_MODELS?.split(',').filter(Boolean)
+  const candidates = existing?.length ? existing : configuredFallbackModels(picked.model, lastModels)
+  if (candidates.length >= 2 && clientConfigIsOurs({ port, file: claudeSettingsPath() })) {
+    await autoFlow(updateFallbackModels(candidates, picked.model, true), {
+      model: picked.model,
+      contextWindow: picked.contextWindow,
+    })
+    out(`  ${dim('Claude Code keeps the unified auto model; source priority was updated.')}`)
+    return 0
   }
 
   const apply = await applySwitch({

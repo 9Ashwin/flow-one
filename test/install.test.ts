@@ -556,62 +556,25 @@ test('配反代是本分，写 Claude Code 配置是可选的：选了不写就�
   assert.equal(parsed.env.ANTHROPIC_MODEL, 'cn/x[1m]', '1M 窗口才加后缀')
 })
 
-test('客户端配置：Claude Code 与 DSH 各问一次（不做「两个都」组合选项），默认值沿用上次', async () => {
+test('记录的代码工具不应反复询问，显式参数仍优先', async () => {
   scratch()
   const { decideClientTargets } = loose(await import('../src/wizard.ts'))
-  const { clientChoice } = loose(await import('../src/install.ts'))
-
-  type Prompt = { message: string; initial?: boolean }
-  let prompts: Prompt[] = []
-  let answers: boolean[] = []
-  const ask = async (prompt: Prompt) => {
-    prompts.push(prompt)
-    return answers.shift() ?? false
+  const { clientChoice, recordClientChoice } = loose(await import('../src/install.ts'))
+  let calls = 0
+  const choose = async () => {
+    calls++
+    recordClientChoice(['claude', 'dsh'])
+    return ['claude', 'dsh']
   }
-  const reset = () => {
-    prompts = []
-    answers = []
-  }
-
-  // 第一次：两个都答 y → 两个都配
-  reset()
-  answers = [true, true]
-  assert.deepEqual(await decideClientTargets({ ask }), ['claude', 'dsh'])
-  assert.equal(prompts.length, 2, '两个独立问题，不做多选')
-  assert.match(prompts[0].message, /Claude Code/)
-  assert.match(prompts[1].message, /DSH/)
+  assert.deepEqual(await decideClientTargets({ choose }), ['claude', 'dsh'])
   assert.deepEqual(clientChoice(), { asked: true, clients: ['claude', 'dsh'] })
-
-  // 第二次：默认值跟着上次的答案（Claude Code 默认 y、DSH 默认 y）
-  reset()
-  answers = [true, false]
-  assert.deepEqual(await decideClientTargets({ ask }), ['claude'])
-  assert.deepEqual(
-    prompts.map(p => p.initial),
-    [true, true],
-    '默认值 = 上次的选择',
-  )
-
-  // 第三次：两个都 n → 只配反代；默认值随之上一次（claude=y, dsh=n）
-  reset()
-  answers = [false, false]
-  assert.deepEqual(await decideClientTargets({ ask }), [])
-  assert.deepEqual(
-    prompts.map(p => p.initial),
-    [true, false],
-  )
-
-  // 已经归我们管的配置：默认 y，但明确答 n 时必须尊重
-  reset()
-  answers = [false, false]
-  assert.deepEqual(await decideClientTargets({ ours: ['dsh'], ask }), [])
-  assert.equal(prompts[1].initial, true)
-
-  // 显式 --clients 跳过提问、不落账本
-  reset()
-  answers = []
-  assert.deepEqual(await decideClientTargets({ clients: ['dsh'], ask }), ['dsh'])
-  assert.equal(prompts.length, 0, 'flag 表态时不该再问')
+  assert.deepEqual(await decideClientTargets({ choose }), ['claude', 'dsh'])
+  assert.equal(calls, 1)
+  assert.deepEqual(await decideClientTargets({ clients: ['dsh'], choose }), ['dsh'])
+  assert.equal(calls, 1)
+  recordClientChoice([])
+  assert.deepEqual(await decideClientTargets({ choose }), [])
+  assert.equal(calls, 1)
 })
 
 test('接入信息：只打印地址/令牌/模型 ID，1M 窗口才带 [1m] 后缀', async () => {
@@ -685,22 +648,17 @@ test('配置指向本桥时显式拒绝仍然优先，文件保持原样', async
   installClaudeSettings({ file, baseUrl: 'http://127.0.0.1:9999', apiKey: 'k', model: 'cn/x' })
   assert.equal(clientConfigIsOurs({ port: 8788, file }), true)
 
-  // 用户上次选了「都不写」：配置是我们的时也不能覆盖本次明确拒绝
+  // A recorded refusal must remain authoritative without another prompt.
   recordClientChoice([])
   let asked = 0
-  const ask = async () => {
-    asked += 1
-    return false
+  const choose = async () => {
+    asked++
+    return ['claude']
   }
   const { decideClientTargets } = loose(await import('../src/wizard.ts'))
-  assert.deepEqual(await decideClientTargets({ ours: ['claude'], ask }), [], '明确拒绝不能被已托管状态覆盖')
-  assert.equal(asked, 2, '两个独立问题都必须尊重答案')
-  // 但显式 --clients none 永远优先，且不触发提问
-  assert.deepEqual(await decideClientTargets({ clients: [], ours: ['claude'], ask }), [])
-  assert.equal(asked, 2)
-  // 不属于本桥时按问出来的答案执行（这次两问都答 n）
-  assert.deepEqual(await decideClientTargets({ ours: [], ask }), [])
-  assert.equal(asked, 4)
+  assert.deepEqual(await decideClientTargets({ choose }), [])
+  assert.deepEqual(await decideClientTargets({ clients: [], choose }), [])
+  assert.equal(asked, 0)
 })
 
 test('桥的口令必须稳定：复用已有的，第一次装落固定默认值（不再每次 setup 换钥匙）', async () => {

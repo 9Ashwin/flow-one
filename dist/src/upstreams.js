@@ -39,7 +39,7 @@ export function createGatewayUpstream(config) {
             return {
                 id: row.id,
                 name: typeof row.name === 'string' ? row.name : row.id,
-                // dsh-our-free-model's gateway includes these in its catalogue; others just
+                // Some gateways include these in their catalogue; others just
                 // leave them out.
                 ...(typeof row.context_window === 'number' ? { contextWindow: row.context_window } : {}),
                 ...(typeof row.max_tokens === 'number' ? { maxOutputTokens: row.max_tokens } : {}),
