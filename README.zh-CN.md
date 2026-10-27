@@ -19,11 +19,11 @@ Claude Code CLI ──► 本桥 127.0.0.1:8788 ──► WorkBuddy 国内版 co
 
 ## 安装
 
-**不发布到 npm 仓库 —— 直接从 GitHub 装**（零依赖，下载下来就是可运行的代码；
-Node ≥ 22.18 即可，它原生剥离 TypeScript 类型，因此没有构建步骤）。
+**Install directly from GitHub.** The repository includes generated JavaScript, so the
+installed program needs no build step or third-party runtime dependencies. Node ≥ 22.18 is required.
 
 ```bash
-npm i -g github:9Ashwin/flow-one      # 装上 flow-one 与 fo 两个命令
+npm i -g --install-links github:9Ashwin/flow-one      # installs flow-one and fo
 ```
 
 不想全局安装，也可以每次现取：
@@ -32,16 +32,16 @@ npm i -g github:9Ashwin/flow-one      # 装上 flow-one 与 fo 两个命令
 npx -y github:9Ashwin/flow-one status
 ```
 
-要改代码就 clone 后 link（`git pull` 之后命令立刻生效）：
+To modify the code, clone the repository and run the TypeScript source directly:
 
 ```bash
 git clone https://github.com/9Ashwin/flow-one.git
-cd flow-one && npm link
+cd flow-one && node cli.ts
 ```
 
-**更新**：重跑同一条 `npm i -g github:9Ashwin/flow-one`。
-**锁定版本**：`npm i -g github:9Ashwin/flow-one#v0.3.0`
-（注意 `v0.2.x` 两个 tag 是**已弃用的 Go 实现**，不要锁它们。）
+**Updating**: rerun the installation command. To pin a version, use a commit containing `dist/`.
+The existing `v0.3.0` tag predates the JavaScript snapshot and does not work as a global install;
+the `v0.2.x` tags are the deprecated Go implementation.
 
 > 为什么不发 npm：npm 现在不允许直接发布新包，必须先 staging 再由维护者用 2FA 批准
 > （`E_STAGE_REQUIRED`）。而零依赖单包本来也不需要中间商 —— 从 GitHub 装就是同一条命令。
@@ -342,7 +342,7 @@ message_delta → message_stop` 成帧，工具参数走 `input_json_delta`，
 - **OpenCode 免费档靠报文形状过门禁**，官方收紧就会坏（那时会明确报 `FreeTierError`，
   而不是悄悄降级）。它只覆盖免费档；不以 `-free` 结尾的模型需要 OpenCode Go 订阅。
 - **服务跑的是哪份代码取决于怎么装的**：全局安装（`npm i -g`）时，服务指向
-  `…/lib/node_modules/…/cli.ts` 那份**快照**，之后的 `git pull` 或改仓库都不影响它
+  `…/lib/node_modules/…/dist/cli.js` 那份**快照**，之后的 `git pull` 或改仓库都不影响它
   （症状是「命令行有新功能，服务没有」）。`fo status` 会打印服务用的代码路径，
   与当前命令不一致时提示重装。
 - 只覆盖对话与模型清单。**每日签到领积分不在范围内。**
@@ -431,7 +431,7 @@ MIT
 跨平台要求、测试与验证门禁）。**门禁写成了命令**，一条命令跑完：
 
 ```bash
-make verify     # 提交前跑这一条 = 静态检查 + 全部单测
+make verify     # build + static checks + all tests
 make check      # 只做静态检查：类型 + lint + 格式 + 模块规约
 make test       # 只跑用例（node --test，零依赖）
 make types      # 对 TypeScript 源码跑 tsc --noEmit
@@ -445,8 +445,7 @@ make help       # 列出全部目标
 
 几条刻意的约束：
 
-- **零第三方依赖**：只用 `node:` 内置模块。空的 `dependencies` 是安装体验的核心 ——
-  一条 `npm i -g flow-one` 装完就能用，pnpm / bun 也不用放行安装脚本。
+- **No third-party runtime dependencies**: only Node built-ins are used at runtime.
 - **单包，不拆分**：约 4000 行、17 个模块，作为一个包完全够；拆成 workspace 或多个发布包
   只会把「装一个东西」变成「解析一堆包」，而且每新增一个包都要再过一次 npm 发布审核。
   规模问题用更小的函数与模块解决；文件超过 500 行 `make check` 会提示。

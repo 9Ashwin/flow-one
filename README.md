@@ -25,7 +25,7 @@ a generated JavaScript snapshot, so installation needs no build step or third-pa
 dependencies. Node ≥ 22.18 is required.
 
 ```bash
-npm i -g github:9Ashwin/flow-one      # installs the flow-one and fo commands
+npm i -g --install-links github:9Ashwin/flow-one      # installs the flow-one and fo commands
 ```
 
 If you would rather not install it globally, fetch it on each run:
@@ -41,9 +41,11 @@ git clone https://github.com/9Ashwin/flow-one.git
 cd flow-one && node cli.ts
 ```
 
-**Updating**: rerun the same `npm i -g github:9Ashwin/flow-one`.
-**Pinning a version**: `npm i -g github:9Ashwin/flow-one#v0.3.0`
-(Note: the two `v0.2.x` tags are the **deprecated Go implementation** — do not pin them.)
+**Updating**: rerun the same installation command.
+**Pinning**: use a commit containing `dist/`, for example
+`npm i -g --install-links github:9Ashwin/flow-one#<commit>`.
+The existing `v0.3.0` tag predates the JavaScript snapshot and does not work as a global install;
+the `v0.2.x` tags are the deprecated Go implementation.
 
 > Why not publish to npm: npm no longer allows publishing a new package directly with
 > credentials; it must be staged first and approved by the maintainer with 2FA
