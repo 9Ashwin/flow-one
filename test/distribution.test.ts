@@ -6,6 +6,17 @@ import path from 'node:path'
 import { execFileSync } from 'node:child_process'
 import { pathToFileURL } from 'node:url'
 
+test('Git install must not trigger npm preparation that links a temporary clone', () => {
+  const pkg = JSON.parse(fs.readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as {
+    scripts: Record<string, string>
+    workspaces?: unknown
+  }
+  for (const name of ['build', 'prepare', 'prepack', 'preinstall', 'install', 'postinstall']) {
+    assert.equal(pkg.scripts[name], undefined, `${name} causes npm to prepare the Git checkout`)
+  }
+  assert.equal(pkg.workspaces, undefined)
+})
+
 test('全局 node_modules 安装必须能运行 JS 入口，并让后台服务指向同一份快照', t => {
   const build = new URL('../dist/', import.meta.url)
   if (!fs.existsSync(build)) return t.skip('run make build to test the distribution')

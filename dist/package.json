@@ -14,7 +14,7 @@
   ],
   "scripts": {
     "start": "node cli.ts",
-    "build": "tsc -p tsconfig.build.json && node -e \"require('node:fs').copyFileSync('package.json', 'dist/package.json')\"",
+    "build:dist": "tsc -p tsconfig.build.json && node -e \"require('node:fs').copyFileSync('package.json', 'dist/package.json')\"",
     "test": "node --test",
     "check": "make check",
     "verify": "make verify",

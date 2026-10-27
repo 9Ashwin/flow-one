@@ -25,7 +25,7 @@ a generated JavaScript snapshot, so installation needs no build step or third-pa
 dependencies. Node ≥ 22.18 is required.
 
 ```bash
-npm i -g --install-links github:9Ashwin/flow-one      # installs the flow-one and fo commands
+npm i -g github:9Ashwin/flow-one      # installs the flow-one and fo commands
 ```
 
 If you would rather not install it globally, fetch it on each run:

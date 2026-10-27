@@ -26,7 +26,7 @@ verify: build check test
 
 ## build: produce the JavaScript snapshot installed from GitHub
 build: dev-deps
-	@npm run build
+	@npm run build:dist
 
 ## check: static checks only (no network, no tests)
 check: types lint modules format-check

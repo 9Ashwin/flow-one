@@ -23,7 +23,7 @@ Claude Code CLI ──► 本桥 127.0.0.1:8788 ──► WorkBuddy 国内版 co
 installed program needs no build step or third-party runtime dependencies. Node ≥ 22.18 is required.
 
 ```bash
-npm i -g --install-links github:9Ashwin/flow-one      # installs flow-one and fo
+npm i -g github:9Ashwin/flow-one      # installs flow-one and fo
 ```
 
 不想全局安装，也可以每次现取：
