@@ -422,7 +422,7 @@ export async function decideService({
   ask?: typeof confirm
 } = {}): Promise<boolean> {
   if (!state.supported) {
-    warn('这个平台没有实现后台常驻，跳过（服务相关命令在 macOS 与 Linux 上可用）')
+    warn('这个平台没有实现后台常驻，请在前台运行')
     return false
   }
   // The flag states intent for "this run" and is not recorded: scripts pass it every time,
@@ -823,7 +823,7 @@ export async function setupWizard(
       if (health === undefined) {
         warn('12 秒内没等到 /health 应答。看日志：')
         note(
-          `  ${gray(serviceState().kind === 'launchd' ? '~/.flow-one/bridge.err.log' : 'journalctl --user -u dev.flow-one')}`,
+          `  ${gray(serviceState().kind === 'systemd' ? 'journalctl --user -u dev.flow-one' : path.join(bridgeHome(), 'bridge.err.log'))}`,
         )
       }
     } else {
@@ -1049,7 +1049,7 @@ export async function statusFlow() {
   }
   note(`  配置文件  ${gray(readInstallState().claudeSettings?.file ?? '本工具未写入过')}`)
   note(`  凭据文件  ${gray(credentialFile())}`)
-  if (service.installed && service.kind === 'launchd')
+  if (service.installed && (service.kind === 'launchd' || service.kind === 'windows'))
     note(`  请求日志  ${gray(path.join(bridgeHome(), 'bridge.err.log'))} ${gray('（查看 model= 实际命中模型）')}`)
   else if (service.installed && service.kind === 'systemd')
     note(`  请求日志  ${gray('journalctl --user -u dev.flow-one')} ${gray('（查看 model= 实际命中模型）')}`)
@@ -1065,6 +1065,8 @@ export async function uninstallFlow() {
   else success(`已从 ${settings.file} 移除 ${settings.removed?.length ?? 0} 个键`)
   if (settings.backup !== undefined) note(`  ${gray(`还原前的备份：${settings.backup}`)}`)
   const service = uninstallService()
+  if ('ok' in service && service.ok === false)
+    throw configError(SUBTYPES.SERVICE_UNSUPPORTED, service.reason ?? 'could not remove the background service')
   if (service.skipped === true) note(`  后台服务：${service.reason}`)
   else success(`已卸载后台服务（${service.kind}）`)
   const dsh = removeDshConfig()

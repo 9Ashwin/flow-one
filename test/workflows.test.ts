@@ -70,6 +70,7 @@ test('服务重启失败不能修改客户端模型或声称客户端已更新',
 })
 
 test('服务加载失败时恢复原服务文件并保留旧账本', async t => {
+  if (process.platform === 'win32') return t.skip('Windows task rollback is covered by win32.test.ts')
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'fo-service-rollback-'))
   const keys = ['HOME', 'USERPROFILE', 'BRIDGE_HOME', 'XDG_CONFIG_HOME'] as const
   const previous = Object.fromEntries(keys.map(key => [key, process.env[key]]))

@@ -71,7 +71,7 @@ function platformRun(command, args, options = {}) {
     // skipped bootout, bootstrap hit `Bootstrap failed: 5: Input/output error` and returned
     // ok:false, **leaving the old process running with the old API key**: the user saw "the
     // config is clearly written, yet Claude Code keeps getting 401".
-    return commandOutput(execFileSync(command, args, options));
+    return commandOutput(execFileSync(command, args, command === 'schtasks.exe' ? { timeout: 10_000, ...options } : options));
 }
 export const SERVICE_LABEL = 'dev.flow-one';
 /**
@@ -396,6 +396,9 @@ function servicePathsFor(label) {
             logDir: path.join(home, '.local', 'state'),
         };
     }
+    if (process.platform === 'win32' && label === SERVICE_LABEL) {
+        return { kind: 'windows', path: path.join(bridgeHome(), 'service.json'), logDir: bridgeHome() };
+    }
     return { kind: 'unsupported', path: '', logDir: '' };
 }
 function servicePaths() {
@@ -625,6 +628,15 @@ export function removeLegacyService() {
 export function cliPathFromServiceFile(text, kind) {
     if (typeof text !== 'string' || text === '')
         return undefined;
+    if (kind === 'windows') {
+        try {
+            const config = JSON.parse(text);
+            return typeof config.cli === 'string' ? config.cli : undefined;
+        }
+        catch {
+            return undefined;
+        }
+    }
     if (kind === 'launchd') {
         const block = /<key>ProgramArguments<\/key>\s*<array>([\s\S]*?)<\/array>/.exec(text)?.[1];
         if (block === undefined)
@@ -655,6 +667,101 @@ export function serviceCliPath() {
 export function currentCliPath() {
     return CLI_PATH;
 }
+/** Task Scheduler reads credentials from a private configuration file, not its task definition. */
+export function windowsTaskXml({ node, runner, user }) {
+    return `<?xml version="1.0" encoding="UTF-16"?>
+<Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
+  <Triggers><LogonTrigger><Enabled>true</Enabled><UserId>${xmlEscape(user)}</UserId></LogonTrigger></Triggers>
+  <Principals><Principal id="Author"><UserId>${xmlEscape(user)}</UserId><LogonType>InteractiveToken</LogonType><RunLevel>LeastPrivilege</RunLevel></Principal></Principals>
+  <Settings><MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy><DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries><StopIfGoingOnBatteries>false</StopIfGoingOnBatteries><ExecutionTimeLimit>PT0S</ExecutionTimeLimit><RestartOnFailure><Interval>PT1M</Interval><Count>3</Count></RestartOnFailure></Settings>
+  <Actions Context="Author"><Exec><Command>${xmlEscape(node)}</Command><Arguments>"${xmlEscape(runner)}"</Arguments></Exec></Actions>
+</Task>`;
+}
+const WINDOWS_RUNNER = `const fs = require('node:fs');
+const path = require('node:path');
+const { spawn } = require('node:child_process');
+const config = JSON.parse(fs.readFileSync(path.join(__dirname, 'service.json'), 'utf8'));
+const out = fs.openSync(path.join(__dirname, 'bridge.log'), 'a');
+const err = fs.openSync(path.join(__dirname, 'bridge.err.log'), 'a');
+const child = spawn(config.node, [config.cli, 'serve'], { env: { ...process.env, ...config.env }, stdio: ['ignore', out, err], windowsHide: true });
+child.on('error', error => { fs.writeSync(err, String(error) + '\\n'); process.exitCode = 1; });
+child.on('exit', (code, signal) => { process.exitCode = code ?? (signal ? 1 : 0); });
+process.on('SIGTERM', () => child.kill());
+`;
+async function installWindowsService({ port, apiKey, env, file, }) {
+    const dir = path.dirname(file);
+    const runner = path.join(dir, 'service-runner.cjs');
+    const xml = path.join(dir, 'service-task.xml');
+    const previous = fs.existsSync(file) ? fs.readFileSync(file) : undefined;
+    const oldRunner = fs.existsSync(runner) ? fs.readFileSync(runner) : undefined;
+    const user = process.env.USERDOMAIN ? `${process.env.USERDOMAIN}\\${os.userInfo().username}` : os.userInfo().username;
+    const createTask = (node) => {
+        const task = windowsTaskXml({ node, runner, user });
+        fs.writeFileSync(xml, Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from(task, 'utf16le')]), { mode: 0o600 });
+        platformRun('schtasks.exe', ['/Create', '/TN', SERVICE_LABEL, '/XML', xml, '/F'], { stdio: 'pipe' });
+    };
+    try {
+        fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+        try {
+            platformRun('schtasks.exe', ['/End', '/TN', SERVICE_LABEL], { stdio: 'pipe' });
+        }
+        catch {
+            /* not running */
+        }
+        writeFileAtomic(runner, WINDOWS_RUNNER, 0o600);
+        writeFileAtomic(file, JSON.stringify({
+            node: process.execPath,
+            cli: CLI_PATH,
+            env: {
+                ...env,
+                BRIDGE_PORT: String(port),
+                BRIDGE_API_KEY: apiKey,
+                BRIDGE_HOME: dir,
+            },
+        }), 0o600);
+        createTask(process.execPath);
+        platformRun('schtasks.exe', ['/Run', '/TN', SERVICE_LABEL], { stdio: 'pipe' });
+        const state = readInstallState();
+        state.service = { kind: 'windows', path: file, port, env, cliPath: CLI_PATH };
+        writeInstallState(state);
+        return { ok: true, kind: 'windows', path: file, notes: ['Windows scheduled task registered and started'] };
+    }
+    catch (error) {
+        let recovery = '';
+        try {
+            if (previous === undefined) {
+                try {
+                    platformRun('schtasks.exe', ['/Delete', '/TN', SERVICE_LABEL, '/F'], { stdio: 'pipe' });
+                }
+                catch {
+                    /* absent */
+                }
+                fs.rmSync(file, { force: true });
+                fs.rmSync(runner, { force: true });
+            }
+            else {
+                fs.writeFileSync(file, previous, { mode: 0o600 });
+                if (oldRunner)
+                    fs.writeFileSync(runner, oldRunner, { mode: 0o600 });
+                const old = JSON.parse(previous.toString());
+                createTask(old.node);
+                platformRun('schtasks.exe', ['/Run', '/TN', SERVICE_LABEL], { stdio: 'pipe' });
+            }
+        }
+        catch (restoreError) {
+            recovery = `; restoring the previous task failed: ${restoreError instanceof Error ? restoreError.message : String(restoreError)}`;
+        }
+        return {
+            ok: false,
+            kind: 'windows',
+            path: file,
+            reason: `Windows scheduled task failed: ${error instanceof Error ? error.message : String(error)}${recovery}`,
+        };
+    }
+    finally {
+        fs.rmSync(xml, { force: true });
+    }
+}
 /**
  * Install the auto-start background service; return what it actually did, so the UI can
  * report it truthfully.
@@ -675,6 +782,8 @@ export async function installService({ port, apiKey, env = {}, }) {
             reason: `auto-start is not supported on ${process.platform}; put \`node ${CLI_PATH}\` into your startup items yourself`,
         };
     }
+    if (kind === 'windows')
+        return await installWindowsService({ port, apiKey, env, file });
     const logDir = bridgeHome();
     fs.mkdirSync(logDir, { recursive: true, mode: 0o700 });
     fs.mkdirSync(path.dirname(file), { recursive: true });
@@ -746,6 +855,26 @@ export async function installService({ port, apiKey, env = {}, }) {
 export function uninstallService() {
     const { kind, path: file } = servicePaths();
     assertScratchServicePath(servicePaths());
+    if (kind === 'windows' && fs.existsSync(file)) {
+        try {
+            try {
+                platformRun('schtasks.exe', ['/End', '/TN', SERVICE_LABEL], { stdio: 'pipe' });
+            }
+            catch {
+                /* not running */
+            }
+            platformRun('schtasks.exe', ['/Delete', '/TN', SERVICE_LABEL, '/F'], { stdio: 'pipe' });
+        }
+        catch (error) {
+            return {
+                ok: false,
+                kind,
+                path: file,
+                reason: `could not remove Windows scheduled task: ${error instanceof Error ? error.message : String(error)}`,
+            };
+        }
+        fs.rmSync(path.join(path.dirname(file), 'service-runner.cjs'), { force: true });
+    }
     // Take the pre-rename service along too: uninstall should leave nothing behind
     const legacy = removeLegacyService();
     // Forget the "install as an auto-start service" answer as well: the user came to
@@ -782,7 +911,7 @@ export function uninstallService() {
     try {
         if (kind === 'launchd')
             platformRun('launchctl', ['bootout', `gui/${process.getuid?.() ?? 0}/${SERVICE_LABEL}`], { stdio: 'pipe' });
-        else
+        else if (kind === 'systemd')
             systemctl(['disable', '--now', `${SERVICE_LABEL}.service`]);
     }
     catch {

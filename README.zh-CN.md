@@ -263,7 +263,8 @@ Codex 需要 Responses API，暂不支持。
    一个网关里不存在的别名。
    还原时**只删「值仍等于本工具写进去的那个」的键** —— 你自己改过的值会留着。
 2. **后台服务**：macOS 写 `~/Library/LaunchAgents/dev.flow-one.plist` 并 `launchctl bootstrap`；
-   Linux 写 `~/.config/systemd/user/` 下的 unit 并 `systemctl --user enable` + `restart`。
+   Linux 写 `~/.config/systemd/user/` 下的 unit 并 `systemctl --user enable` + `restart`；
+   Windows 注册当前用户的计划任务，在登录后启动并在失败后重试，无需管理员权限。
    模式、上游、模型都写进服务环境，所以服务不带参数启动也拿到同一份配置。
 3. **`~/.flow-one/`**：登录凭据（0600）、`install.json`（记录写过哪些键、装过哪个服务，
    供还原用）、服务日志。

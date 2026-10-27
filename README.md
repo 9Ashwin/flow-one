@@ -295,7 +295,9 @@ If you choose "write", the wizard touches only three places, all reversible:
    values you changed yourself are kept.
 2. **The background service**: on macOS it writes
    `~/Library/LaunchAgents/dev.flow-one.plist` and runs `launchctl bootstrap`; on Linux it writes
-   a unit under `~/.config/systemd/user/` and runs `systemctl --user enable` + `restart`. Mode,
+   a unit under `~/.config/systemd/user/` and runs `systemctl --user enable` + `restart`. On
+   Windows it registers an interactive user Task Scheduler task, starting at user logon and
+   restarting after failures; it does not require an administrator account. Mode,
    upstream, and model are written into the service environment, so the service gets the same
    configuration when started without arguments.
 3. **`~/.flow-one/`**: login credentials (0600), `install.json` (records which keys were written
