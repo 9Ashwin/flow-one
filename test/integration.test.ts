@@ -153,6 +153,107 @@ test('上游 429 的 Retry-After 必须原样传给客户端且不能自动重�
   assert.equal(calls, 1)
 })
 
+test('上游拒绝时服务端日志必须留下 status 与来源，否则「偶尔报错」无从定位', async t => {
+  const upstreamServer = http.createServer((req, res) => {
+    if (req.url === '/v1/models') {
+      res.writeHead(200, { 'content-type': 'application/json' })
+      res.end('{"data":[]}')
+      return
+    }
+    res.writeHead(429, { 'content-type': 'application/json', 'retry-after': '17' })
+    res.end('{"error":{"message":"slow down"}}')
+  })
+  const upstreamUrl = await listen(upstreamServer)
+  t.after(() => upstreamServer.close())
+  const logs: string[] = []
+  const upstream = createGatewayUpstream({ upstream: upstreamUrl, upstreamKey: 'test' })
+  const bridge = createBridgeServer({
+    config: baseConfig({ model: 'test' }),
+    upstream,
+    log: (line: string) => logs.push(line),
+  })
+  const address = await bridge.listen()
+  t.after(() => bridge.close())
+  const response = await fetch(`http://127.0.0.1:${address.port}/v1/messages`, {
+    method: 'POST',
+    body: JSON.stringify({ messages: [{ role: 'user', content: 'hi' }] }),
+  })
+  await response.text()
+  assert.equal(response.status, 429)
+  const line = logs.find(entry => entry.includes('failed'))
+  assert.ok(line, `a rejected turn must be logged, got: ${JSON.stringify(logs)}`)
+  assert.match(line, /status=429/)
+  assert.match(line, /slow down/)
+  assert.match(line, /req_[0-9a-f]+/)
+})
+
+test('transport failure keeps the underlying cause instead of a bare "fetch failed"', async t => {
+  const logs: string[] = []
+  const upstream = {
+    name: 'broken',
+    describe: () => 'broken',
+    loadModels: async () => [],
+    // `fetch` collapses every transport failure to "fetch failed" and hides the real
+    // code in `cause`; without it a failed turn says nothing actionable.
+    chat: async () => {
+      const cause = Object.assign(new Error('read ECONNRESET'), { code: 'ECONNRESET' })
+      throw new TypeError('fetch failed', { cause })
+    },
+  } as any
+  const bridge = createBridgeServer({
+    config: baseConfig({ model: 'test' }),
+    upstream,
+    log: (line: string) => logs.push(line),
+  })
+  const address = await bridge.listen()
+  t.after(() => bridge.close())
+  const response = await fetch(`http://127.0.0.1:${address.port}/v1/messages`, {
+    method: 'POST',
+    body: JSON.stringify({ messages: [{ role: 'user', content: 'hi' }] }),
+  })
+  const text = await response.text()
+  assert.equal(response.status, 502)
+  assert.match(text, /ECONNRESET/)
+  assert.ok(
+    logs.some(entry => entry.includes('ECONNRESET')),
+    `the log must carry the cause, got: ${JSON.stringify(logs)}`,
+  )
+})
+
+test('an in-stream failure is logged as failed, not as a normal turn that produced nothing', async t => {
+  const upstreamServer = http.createServer((req, res) => {
+    if (req.url === '/v1/models') {
+      res.writeHead(200, { 'content-type': 'application/json' })
+      res.end('{"data":[]}')
+      return
+    }
+    res.writeHead(200, { 'content-type': 'text/event-stream' })
+    // A cleanly closed but truncated stream: the client sees an error event, while the
+    // metrics line would otherwise read `out=0` exactly like a finished empty answer.
+    res.end('data: {"choices":[{"delta":{"content":"partial"}}]}\n\n')
+  })
+  const upstreamUrl = await listen(upstreamServer)
+  t.after(() => upstreamServer.close())
+  const logs: string[] = []
+  const upstream = createGatewayUpstream({ upstream: upstreamUrl, upstreamKey: 'test' })
+  const bridge = createBridgeServer({
+    config: baseConfig({ model: 'test' }),
+    upstream,
+    log: (line: string) => logs.push(line),
+  })
+  const address = await bridge.listen()
+  t.after(() => bridge.close())
+  const response = await fetch(`http://127.0.0.1:${address.port}/v1/messages`, {
+    method: 'POST',
+    body: JSON.stringify({ messages: [{ role: 'user', content: 'hi' }], stream: true }),
+  })
+  await response.text()
+  const line = logs.find(entry => entry.includes('stream=1'))
+  assert.ok(line)
+  assert.match(line, /failed=/)
+  assert.match(line, /upstream SSE ended before completion/)
+})
+
 test('网关模式：Anthropic 进、OpenAI 出，Claude 模型名兜底到上游模型', async t => {
   const seen: SeenRequest[] = []
   const upstreamServer = http.createServer(async (req: http.IncomingMessage, res: http.ServerResponse) => {

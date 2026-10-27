@@ -898,6 +898,10 @@ export function createStreamTranslator({
     /** Failure finish: Anthropic reports "failed after headers were sent" as an in-stream error event. */
     fail(message: unknown): void {
       if (finished) return
+      // Record the reason before emitting it: the server reads `failure` after the
+      // stream ends to log why the turn failed, and a reason that only travelled to
+      // the client left the server-side log unable to say anything.
+      error ??= String(message)
       start()
       finished = true
       send('error', { type: 'error', error: { type: 'api_error', message: String(message) } })

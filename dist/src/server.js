@@ -27,6 +27,10 @@
 // - **Model-name fallback.** Claude Code sends Claude model names while the
 //   upstream expects IDs such as `cn/deepseek-v4.1-flash`; an unmapped name falls
 //   back to the default model so the session stays usable.
+// - **Every turn leaves a line, including the failed ones.** The log used to record
+//   only completed turns, so a user reporting "it keeps erroring" had no server-side
+//   counterpart to point at; failures now carry the status, the source and the
+//   underlying cause.
 import http from 'node:http';
 import { validateListenAuth } from "./config.js";
 import crypto from 'node:crypto';
@@ -38,6 +42,23 @@ const MODEL_TTL_MS = 60_000;
 const isObject = (value) => value !== null && typeof value === 'object' && !Array.isArray(value);
 /** `catch (error)` gives `unknown`; this reads a message without assuming the shape. */
 const messageOf = (error) => error instanceof Error ? error.message : String(error?.message ?? error);
+/**
+ * `fetch` reports every transport failure as the bare message "fetch failed" and hides the
+ * real one (ECONNRESET, ENOTFOUND, TLS) in `cause`. Dropping it leaves a failed turn that
+ * says nothing, which is exactly what made "sometimes it just errors" undiagnosable.
+ */
+const causeOf = (error) => {
+    const parts = [];
+    let current = error?.cause;
+    for (let depth = 0; current !== undefined && current !== null && depth < 5; depth++) {
+        const record = current;
+        const code = typeof record.code === 'string' ? record.code : typeof record.errno === 'string' ? record.errno : '';
+        const message = messageOf(current);
+        parts.push(code === '' ? message : `${code}${message === '' ? '' : ` ${message}`}`);
+        current = current.cause;
+    }
+    return parts.join(' <- ');
+};
 const ERROR_TYPES = {
     400: 'invalid_request_error',
     401: 'authentication_error',
@@ -287,10 +308,11 @@ export function createBridgeServer({ config, upstream, log = () => { }, }) {
             if (signal.aborted)
                 throw error;
             const status = error?.statusCode;
+            const cause = causeOf(error);
             return {
                 ok: false,
                 status: typeof status === 'number' && Number.isInteger(status) && status >= 400 && status <= 599 ? status : 502,
-                message: messageOf(error),
+                message: cause === '' ? messageOf(error) : `${messageOf(error)} (${cause})`,
             };
         }
         if (result.ok === true)
@@ -361,13 +383,18 @@ export function createBridgeServer({ config, upstream, log = () => { }, }) {
         });
         if (translated.error !== undefined) {
             anthropicError(res, 400, translated.error, undefined, reqId);
+            log(`${reqId} model=${model} failed status=400 ms=${Date.now() - started} ${translated.error}`);
             return;
         }
         if (config.upstreamUsage === false)
             delete translated.body.stream_options;
         const result = await openWithTimeout(translated.body);
         if (!result.ok) {
-            anthropicError(res, result.status ?? 502, failureSummary(result), undefined, reqId, result.retryAfter);
+            const status = result.status ?? 502;
+            anthropicError(res, status, failureSummary(result), undefined, reqId, result.retryAfter);
+            // A failed turn used to leave no trace at all: the log only ever recorded completed
+            // ones, so "it errors sometimes" could not be tied to a source, a status or a time.
+            log(`${reqId} model=${model} failed status=${status} ms=${Date.now() - started} ${failureSummary(result)}`);
             return;
         }
         const prefixId = crypto
@@ -541,8 +568,13 @@ export function createBridgeServer({ config, upstream, log = () => { }, }) {
             if (!res.writableEnded)
                 res.end();
             const usage = translator.usage;
+            // A turn that ended with an in-stream error used to log exactly like a finished
+            // one (`out=0`), so a client-side complaint had no counterpart here. The reason
+            // is appended after the metrics so the existing log format still parses.
+            const failure = translator.failure;
             log(`${reqId} model=${model} stream=1 ms=${Date.now() - started} first_chunk_ms=${firstByteAt === undefined ? '-' : firstByteAt - started} ttft=${firstOutputAt === undefined ? '-' : firstOutputAt - started}` +
-                ` out=${usage.output_tokens} ${cacheLog(usage, translator.upstreamInputTokens)}`);
+                ` out=${usage.output_tokens} ${cacheLog(usage, translator.upstreamInputTokens)}` +
+                (failure === undefined ? '' : ` failed=${failure}`));
         }
     }
     async function handle(req, res) {

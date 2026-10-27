@@ -873,6 +873,10 @@ export function createStreamTranslator({ model, id, write, showThinking = false,
         fail(message) {
             if (finished)
                 return;
+            // Record the reason before emitting it: the server reads `failure` after the
+            // stream ends to log why the turn failed, and a reason that only travelled to
+            // the client left the server-side log unable to say anything.
+            error ??= String(message);
             start();
             finished = true;
             send('error', { type: 'error', error: { type: 'api_error', message: String(message) } });
