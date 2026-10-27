@@ -543,12 +543,22 @@ function assertScratchServicePath(paths: ServicePaths): void {
   // label to harm — letting it through is honest, not a missed check. On POSIX it must be
   // blocked.
   if (paths.path === '') return
-  // Compare by **string prefix** instead of realpath-ing the parent directory: the parent
+  // Compare paths instead of realpath-ing the parent directory: the parent
   // usually does not exist yet, realpathSync throws, and my first version treated that
   // exception as "safe" and let it through — so the guard was effectively a no-op.
   // On macOS /var and /private/var are two spellings of one place, so accept both roots.
-  const roots = [os.tmpdir(), fs.realpathSync(os.tmpdir())].map(root => (root.endsWith('/') ? root : `${root}/`))
-  if (!roots.some(root => paths.path.startsWith(root))) {
+  const normalize = (value: string) => {
+    const resolved = path.resolve(value)
+    return process.platform === 'win32' ? resolved.toLowerCase() : resolved
+  }
+  const target = normalize(paths.path)
+  const roots = [os.tmpdir(), fs.realpathSync(os.tmpdir())].map(normalize)
+  if (
+    !roots.some(root => {
+      const relative = path.relative(root, target)
+      return relative !== '' && relative !== '..' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative)
+    })
+  ) {
     // The message stays Chinese because test/migration.test.ts asserts this exact text
     // (the isolation-guard test); change both sides together if it is ever translated.
     throw new Error(`测试里不允许操作真实服务文件：${paths.path}\n` + '把 HOME（不只是 BRIDGE_HOME）指到临时目录再跑。')
