@@ -39,7 +39,8 @@ git clone https://github.com/9Ashwin/flow-one.git
 cd flow-one && node cli.ts
 ```
 
-**Updating**: rerun the installation command. To pin a version, use a commit containing `dist/`.
+**Updating**: rerun the installation command. To pin this version, use
+`npm i -g --install-links github:9Ashwin/flow-one#v0.3.1`.
 The existing `v0.3.0` tag predates the JavaScript snapshot and does not work as a global install;
 the `v0.2.x` tags are the deprecated Go implementation.
 

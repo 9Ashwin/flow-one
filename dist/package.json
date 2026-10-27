@@ -1,6 +1,6 @@
 {
   "name": "flow-one",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "private": false,
   "description": "把 WorkBuddy（国内版 CodeBuddy / 国际版）与 OpenCode 免费档接进 Claude Code CLI 的本地反代：Anthropic Messages ⇄ OpenAI Chat Completions，零依赖。",
   "type": "module",
