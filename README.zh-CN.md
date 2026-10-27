@@ -336,6 +336,9 @@ message_delta → message_stop` 成帧，工具参数走 `input_json_delta`，
 - **工具结果里的图片**按 OpenAI 的多段格式发，标准服务器可能不收。
 - **非流式请求也仍然走上游的流式**，本桥负责归并成单个 JSON 响应。
 - **`count_tokens` 是估算**（4 字符 ≈ 1 token；图片按固定值计）。
+- **The bridge does not automatically retry uncertain upstream failures.** It forwards
+  `Retry-After` when supplied; Tencent credential renewal on 401/403 remains supported.
+  Clients can still apply their own retry policy.
 - **`[claude-code:unrecognized_model]` 诊断行在 `-p` 模式下仍会出现。**
   官方给的消诊断办法是把 `modelOverrides` 的键写成 Claude 模型 ID —— 等于让 Claude Code
   以为自己在跑 Opus，随之套用那个模型的窗口与行为。不值得为一行 stderr 噪声付这个代价。

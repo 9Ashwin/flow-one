@@ -89,6 +89,70 @@ test('上游连接正常关闭但内容截断时，流式和非流式都必须�
   }
 })
 
+test('上游不完整工具参数必须通过 HTTP 或流内错误暴露，不能返回空输入', async t => {
+  const upstreamServer = http.createServer((_req, res) => {
+    res.writeHead(200, { 'content-type': 'text/event-stream' })
+    res.end(
+      sse([
+        {
+          choices: [
+            {
+              delta: { tool_calls: [{ index: 0, id: 'call', function: { name: 'Read', arguments: '{"x":' } }] },
+              finish_reason: 'tool_calls',
+            },
+          ],
+        },
+      ]),
+    )
+  })
+  const upstreamUrl = await listen(upstreamServer)
+  t.after(() => upstreamServer.close())
+  const upstream = createGatewayUpstream({ upstream: upstreamUrl, upstreamKey: 'test' })
+  const bridge = createBridgeServer({ config: baseConfig({ model: 'test' }), upstream })
+  const address = await bridge.listen()
+  t.after(() => bridge.close())
+  for (const stream of [false, true]) {
+    const response = await fetch(`http://127.0.0.1:${address.port}/v1/messages`, {
+      method: 'POST',
+      body: JSON.stringify({ messages: [{ role: 'user', content: 'hi' }], stream }),
+    })
+    const text = await response.text()
+    assert.equal(response.status, stream ? 200 : 502)
+    assert.match(text, /upstream tool arguments are not valid JSON/)
+    if (stream) {
+      assert.match(text, /event: error/)
+      assert.doesNotMatch(text, /event: message_delta/)
+    }
+  }
+})
+
+test('上游 429 的 Retry-After 必须原样传给客户端且不能自动重试', async t => {
+  let calls = 0
+  const upstreamServer = http.createServer((req, res) => {
+    if (req.url === '/v1/models') {
+      res.writeHead(200, { 'content-type': 'application/json' })
+      res.end('{"data":[]}')
+      return
+    }
+    calls++
+    res.writeHead(429, { 'content-type': 'application/json', 'retry-after': '17' })
+    res.end('{"error":{"message":"slow down"}}')
+  })
+  const upstreamUrl = await listen(upstreamServer)
+  t.after(() => upstreamServer.close())
+  const upstream = createGatewayUpstream({ upstream: upstreamUrl, upstreamKey: 'test' })
+  const bridge = createBridgeServer({ config: baseConfig({ model: 'test' }), upstream })
+  const address = await bridge.listen()
+  t.after(() => bridge.close())
+  const response = await fetch(`http://127.0.0.1:${address.port}/v1/messages`, {
+    method: 'POST',
+    body: JSON.stringify({ messages: [{ role: 'user', content: 'hi' }] }),
+  })
+  assert.equal(response.status, 429)
+  assert.equal(response.headers.get('retry-after'), '17')
+  assert.equal(calls, 1)
+})
+
 test('网关模式：Anthropic 进、OpenAI 出，Claude 模型名兜底到上游模型', async t => {
   const seen: SeenRequest[] = []
   const upstreamServer = http.createServer(async (req: http.IncomingMessage, res: http.ServerResponse) => {

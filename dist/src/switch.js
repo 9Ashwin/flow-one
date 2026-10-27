@@ -68,9 +68,25 @@ export function withSource(mounted, source) {
  *   keeps the old ones.
  *
  */
-export async function applySwitch({ port, apiKey, model, contextWindow, source, mounted, env = {}, settings = claudeSettingsPath(), }) {
+export async function applySwitch({ port, apiKey, model, contextWindow, source, mounted, env = {}, settings = claudeSettingsPath(), install = installService, healthy = waitForService, }) {
     const products = withSource(mounted, source);
     const written = clientConfigIsOurs({ port, file: settings });
+    const state = readInstallState();
+    const service = state.service?.path === undefined
+        ? undefined
+        : await install({ port, apiKey, env: serviceEnvFor({ env, model, products }) });
+    if (service !== undefined && !service.ok)
+        return { written: false, service };
+    if (service !== undefined && !(await healthy(port, model))) {
+        return {
+            written: false,
+            service: {
+                ...service,
+                ok: false,
+                reason: 'the service did not start with the selected model; check its logs and retry',
+            },
+        };
+    }
     if (written) {
         installClaudeSettings({
             file: settings,
@@ -80,11 +96,25 @@ export async function applySwitch({ port, apiKey, model, contextWindow, source, 
             contextWindow,
         });
     }
-    const state = readInstallState();
-    if (state.service?.path === undefined)
-        return { written, ...(written ? { file: settings } : {}), service: undefined };
-    const service = await installService({ port, apiKey, env: serviceEnvFor({ env, model, products }) });
     return { written, ...(written ? { file: settings } : {}), service };
+}
+async function waitForService(port, model) {
+    const deadline = Date.now() + 12_000;
+    while (Date.now() < deadline) {
+        try {
+            const response = await fetch(`http://127.0.0.1:${port}/health`, { signal: AbortSignal.timeout(1200) });
+            if (response.ok) {
+                const health = (await response.json());
+                if (health.service === 'flow-one' && health.model === model)
+                    return true;
+            }
+        }
+        catch {
+            /* the service may still be starting */
+        }
+        await new Promise(resolve => setTimeout(resolve, 500));
+    }
+    return false;
 }
 /**
  * The new service environment: carry the old one over, overriding only the keys that

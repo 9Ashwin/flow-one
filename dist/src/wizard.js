@@ -30,7 +30,7 @@ import { DEFAULT_DSH_REASONING, DSH_SOURCE_IDS, applyDshConfig, dshCurrentlyMana
 // arrow keys when no argument is given
 import { useFlow } from "./use.js";
 import { banner, blank, box, confirm, gray, green, heading, info, input, isInteractive, menu, note, section, select, password, spinner, style, success, warn, fail, dim, yellow, } from "./prompt.js";
-import { SUBTYPES, validationError } from "./errors.js";
+import { SUBTYPES, asBridgeError, configError, renderError, upstreamError, validationError } from "./errors.js";
 const DEFAULT_PORT = 8788;
 /** Recommended models for Claude Code: these were verified on a real machine. */
 const PREFERRED_MODELS = [
@@ -108,26 +108,29 @@ export async function probeBridge(port) {
     }
 }
 /** Port decision: reuse a running instance of this tool first, then take the first free port. */
-async function choosePort() {
+export async function choosePort(candidates = [DEFAULT_PORT, DEFAULT_PORT + 1, DEFAULT_PORT + 2, 18788]) {
     const installed = readInstallState().service?.port;
     if (installed !== undefined && installed > 0 && (await probeBridge(installed)) !== undefined)
         return installed;
-    for (const port of [DEFAULT_PORT, DEFAULT_PORT + 1, DEFAULT_PORT + 2, 18788]) {
+    for (const port of candidates) {
         if ((await probeBridge(port)) !== undefined)
             return port;
         if (await portAvailable(port))
             return port;
     }
-    return 0;
+    throw configError(SUBTYPES.INVALID_PORT, 'no available bridge port was found').withHint('free one of the candidate ports and run setup again');
 }
 /** Health check: confirm the service actually listens on the port, not just that a file was written. */
-async function waitHealthy(base, timeoutMs = 12_000) {
+async function waitHealthy(base, timeoutMs = 12_000, model) {
     const deadline = Date.now() + timeoutMs;
     while (Date.now() < deadline) {
         try {
             const response = await fetch(`${base}/health`, { signal: AbortSignal.timeout(1500) });
-            if (response.ok)
-                return (await response.json());
+            if (response.ok) {
+                const body = (await response.json());
+                if (HEALTH_SERVICE_NAMES.has(String(body.service ?? '')) && (model === undefined || body.model === model))
+                    return body;
+            }
         }
         catch {
             /* not up yet */
@@ -286,7 +289,8 @@ const GATEWAY = 'gateway';
  * OpenCode, and both stay mounted instead of the China edition being replaced.
  */
 function mountedSources(chosen) {
-    const recorded = readInstallState()?.service?.env?.BRIDGE_PRODUCTS;
+    const state = readInstallState();
+    const recorded = (state.service?.env ?? state.bridge?.serviceEnv)?.BRIDGE_PRODUCTS;
     const current = typeof recorded === 'string' && recorded.trim() !== ''
         ? recorded
             .split(',')
@@ -462,17 +466,15 @@ function printConnectionInfo(info) {
  * can also copy it into another client.
  */
 export async function clientFlow() {
-    heading('接入信息');
     const record = bridgeRecord();
     const settings = currentSettings();
     const port = record.port ?? Number(new URL(settings.env?.ANTHROPIC_BASE_URL ?? `http://127.0.0.1:${DEFAULT_PORT}`).port);
     const apiKey = record.apiKey ?? settings.env?.ANTHROPIC_AUTH_TOKEN;
     const model = record.model ?? String(settings.env?.ANTHROPIC_MODEL ?? '').replace(/\[[^\]]*\]$/, '');
     if (typeof apiKey !== 'string' || apiKey === '' || model === '') {
-        fail('还没有配置过：先跑 fo setup（只想配反代就加 --clients none）');
-        blank();
-        return 1;
+        throw configError(SUBTYPES.SETTINGS_MISSING, 'the bridge connection has not been configured').withHint('run fo setup first; use --clients none to configure only the bridge');
     }
+    heading('接入信息');
     printConnectionInfo(connectionInfo({ port, apiKey, model, contextWindow: record.contextWindow }));
     blank();
     // Also state which clients we configured for you, so nobody assumes none were
@@ -485,7 +487,7 @@ export async function clientFlow() {
         ? '  两个客户端都没配（按你的选择）；上面的信息可以直接填'
         : `  已帮你配：${managed.join('、')}`));
     blank();
-    info(`前台把桥跑起来：${serveCommand(port, apiKey)}`);
+    info(`前台把桥跑起来：${serveCommand(port, apiKey, model, record.serviceEnv ?? readInstallState().service?.env)}`);
     blank();
     return 0;
 }
@@ -499,8 +501,26 @@ export async function clientFlow() {
  * this step every time. The flag form works in all three shells, and port and key match
  * what `settings.json` pins.
  */
-export function serveCommand(port, apiKey) {
-    return `node cli.ts serve --port ${port} --api-key ${apiKey}`;
+export function serveCommand(port, apiKey, model, env = {}) {
+    const args = ['fo', 'serve', '--port', String(port), '--api-key', apiKey];
+    if (model)
+        args.push('--model', model);
+    if (env.BRIDGE_MODE === 'gateway') {
+        args.push('--mode', 'gateway');
+        if (env.UPSTREAM_BASE_URL)
+            args.push('--upstream', env.UPSTREAM_BASE_URL);
+        if (env.UPSTREAM_API_KEY)
+            args.push('--upstream-key', env.UPSTREAM_API_KEY);
+    }
+    else if (env.BRIDGE_PRODUCTS)
+        args.push('--products', env.BRIDGE_PRODUCTS);
+    return args
+        .map(value => {
+        if (/^[\w./:=,@+-]+$/.test(value))
+            return value;
+        return process.platform === 'win32' ? JSON.stringify(value) : `'${value.replace(/'/g, "'\\''")}'`;
+    })
+        .join(' ');
 }
 /**
  * One-shot setup.
@@ -581,8 +601,7 @@ export async function setupWizard(options = {}) {
         fail(`拿不到模型清单：${error instanceof Error ? error.message : String(error)}`);
     }
     if (rows.length === 0) {
-        fail('没有可用模型。先检查登录或上游地址，再重新运行一键配置。');
-        return;
+        throw configError(SUBTYPES.NO_SOURCES, 'no models are available').withHint('check the login or upstream address and run setup again');
     }
     success(`${rows.length} 个模型可用`);
     blank();
@@ -605,7 +624,7 @@ export async function setupWizard(options = {}) {
     const targets = await decideClientTargets({ clients: options.clients, ours });
     // Connection parameters are independent of "write client config": the ledger always
     // needs them, `fo client` and a foreground bridge rely on it
-    recordBridge({ port, apiKey, model, contextWindow: picked.contextWindow });
+    recordBridge({ port, apiKey, model, contextWindow: picked.contextWindow, serviceEnv });
     const applied = applyClientConfig({
         wantsClient: targets.includes('claude'),
         file: claudeSettingsPath(),
@@ -652,7 +671,7 @@ export async function setupWizard(options = {}) {
         if (service.ok) {
             success(`后台服务已装（${service.kind}）`);
             const spin = spinner('等待服务就绪…');
-            health = await waitHealthy(`http://127.0.0.1:${port}`);
+            health = await waitHealthy(`http://127.0.0.1:${port}`, 12_000, model);
             spin.stop();
             if (health === undefined) {
                 warn('12 秒内没等到 /health 应答。看日志：');
@@ -661,14 +680,14 @@ export async function setupWizard(options = {}) {
         }
         else {
             fail(String(service.reason ?? ''));
-            warn(`先手动跑起来：${serveCommand(port, apiKey)}`);
+            warn(`先手动跑起来：${serveCommand(port, apiKey, model, serviceEnv)}`);
         }
     }
     else if (running === undefined) {
         // Config already points at this port yet nothing is listening — say so on the spot,
         // otherwise the user goes back to Claude Code and sees nothing but ECONNREFUSED.
         fail(`端口 ${port} 上没有服务在跑，Claude Code 会连不上`);
-        warn(`先把桥跑起来：${serveCommand(port, apiKey)}`);
+        warn(`先把桥跑起来：${serveCommand(port, apiKey, model, serviceEnv)}`);
     }
     else if (running.model !== model) {
         warn(`端口 ${port} 上已有服务在跑，但它钉的模型是 ${running.model}；要换成 ${model} 需要重装服务`);
@@ -679,14 +698,14 @@ export async function setupWizard(options = {}) {
     blank();
     const mounted = chosen === GATEWAY ? ['上游网关'] : mountedSources(chosen).map(source => `${source.id}（${source.label}）`);
     box([
-        '配置完成',
+        wantsService && (service?.ok !== true || health === undefined) ? '配置已写入，服务未就绪' : '配置完成',
         `${gray('本次')}  ${chosen === GATEWAY ? '转发给已有网关' : `${chosen.id}（${chosen.label}）`}`,
         `${gray('模型')}  ${model}${picked.contextWindow === undefined ? '' : `  ${gray(`窗口 ${shortNumber(picked.contextWindow)}`)}`}`,
         `${gray('已挂')}  ${mounted.join('、')}`,
         `${gray('监听')}  http://127.0.0.1:${port}`,
-        `${gray('服务')}  ${wantsService ? (health === undefined ? '已安装' : '运行中') : running === undefined ? '未常驻' : '复用已有实例'}`,
+        `${gray('服务')}  ${wantsService ? (service?.ok !== true ? '安装失败' : health === undefined ? '已安装但未就绪' : '运行中') : running === undefined ? '未常驻' : '复用已有实例'}`,
         `${gray('客户端')}  ${targets.length === 0 ? '都没动（自己填接入信息）' : [applied.written ? 'Claude Code' : '', dsh.ok === true && targets.includes('dsh') ? 'DSH' : ''].filter(Boolean).join(' + ')}`,
-    ], { color: green });
+    ], { color: wantsService && (service?.ok !== true || health === undefined) ? yellow : green });
     if (targets.length === 0) {
         blank();
         note(style.bold('  把下面三项填到你自己的客户端里（本工具没有改任何配置文件）'));
@@ -694,7 +713,11 @@ export async function setupWizard(options = {}) {
         note(dim('  随时再看一眼：fo client'));
     }
     blank();
-    info(`现在直接在任意目录运行 ${style.bold('claude')} 即可`);
+    if (wantsService && (service?.ok !== true || health === undefined)) {
+        throw configError(SUBTYPES.SERVICE_UNSUPPORTED, 'the service is not ready').withHint(service?.reason ?? 'check the service logs and retry');
+    }
+    if (health !== undefined || (!wantsService && running?.model === model))
+        info(`现在直接在任意目录运行 ${style.bold('claude')} 即可`);
     note(dim('  再挂一家：菜单里再选一次「一键配置」   改模型：「切换模型」   还原：「还原配置」'));
     blank();
 }
@@ -705,6 +728,8 @@ export async function setupWizard(options = {}) {
  * variables, so it must be reinstalled before the change takes effect.
  */
 export async function switchModel() {
+    if (!isInteractive())
+        throw validationError(SUBTYPES.INVALID_REQUEST, 'switch needs an interactive terminal').withHint('run fo switch in a terminal');
     heading('切换模型');
     const installed = readInstallState();
     const settings = currentSettings();
@@ -713,7 +738,7 @@ export async function switchModel() {
     const record = bridgeRecord();
     const port = record.port ?? Number(new URL(settings.env?.ANTHROPIC_BASE_URL ?? `http://127.0.0.1:${DEFAULT_PORT}`).port);
     const apiKey = bridgeApiKey({ record, settings });
-    const env = installed.service?.env ?? {};
+    const env = installed.service?.env ?? record.serviceEnv ?? {};
     const upstream = env.BRIDGE_MODE === 'gateway'
         ? createGatewayUpstream({
             upstream: env.UPSTREAM_BASE_URL ?? 'http://127.0.0.1:8326',
@@ -726,12 +751,10 @@ export async function switchModel() {
         rows = await loadModels(upstream);
     }
     catch (error) {
-        fail(`拿不到模型清单：${error instanceof Error ? error.message : String(error)}`);
-        return;
+        throw configError(SUBTYPES.NO_SOURCES, 'the model catalogue could not be loaded').withHint(error instanceof Error ? error.message : String(error));
     }
     if (rows.length === 0) {
-        fail('没有可用模型；先跑一次一键配置把登录或上游修好。');
-        return 1;
+        throw configError(SUBTYPES.NO_SOURCES, 'no models are available').withHint('run fo setup to check the login or upstream');
     }
     const current = String(record.model ?? settings.env?.ANTHROPIC_MODEL ?? '').replace(/\[[^\]]*\]$/, '');
     const ranked = [...rows].sort((a, b) => rank(a.id) - rank(b.id));
@@ -744,7 +767,22 @@ export async function switchModel() {
     });
     const model = chosen;
     const contextWindow = shown.find(row => row.id === chosen)?.contextWindow;
-    recordBridge({ port, apiKey, model, contextWindow });
+    if (installed.service?.path !== undefined && fs.existsSync(installed.service.path)) {
+        const service = await installService({ port, apiKey, env: { ...env, BRIDGE_MODEL: model } });
+        if (!service.ok)
+            throw configError(SUBTYPES.SERVICE_UNSUPPORTED, 'the service could not be restarted').withHint(service.reason ?? 'check the service configuration and retry');
+        const spin = spinner('重启服务…');
+        const health = await waitHealthy(`http://127.0.0.1:${port}`, 12_000, model);
+        spin.stop();
+        if (health === undefined || health.model !== model) {
+            throw configError(SUBTYPES.SETTINGS_INCONSISTENT, 'the service did not start with the selected model').withHint('check the service logs and retry');
+        }
+        success(`服务已在 ${port} 上按新模型运行`);
+    }
+    else {
+        warn(`没有装后台服务，前台运行请使用：${serveCommand(port, apiKey, model, env)}`);
+    }
+    recordBridge({ port, apiKey, model, contextWindow, serviceEnv: { ...env, BRIDGE_MODEL: model } });
     // Config pointing at this bridge must be written back: change the key/model without
     // writing and the client keeps the old token and gets 401s.
     // Only config "not belonging to this bridge" is left untouched (that is the user's own).
@@ -760,23 +798,6 @@ export async function switchModel() {
     }
     else {
         note(dim(`  没动 Claude Code 的配置（按你上次的选择）；新模型 ID：${sizedModelId(model, contextWindow)}（fo client 可再看）`));
-    }
-    if (installed.service?.path !== undefined && fs.existsSync(installed.service.path)) {
-        const service = await installService({ port, apiKey, env: { ...env, BRIDGE_MODEL: model } });
-        if (service.ok) {
-            const spin = spinner('重启服务…');
-            const health = await waitHealthy(`http://127.0.0.1:${port}`);
-            spin.stop();
-            if (health === undefined)
-                warn('服务重启后 12 秒内没有应答，看看日志');
-            else
-                success(`服务已在 ${port} 上按新模型运行`);
-        }
-        else
-            fail(String(service.reason ?? ''));
-    }
-    else {
-        warn('没有装后台服务：下次启动会用新模型；已经在跑的实例要手动重启');
     }
     blank();
     return 0;
@@ -1007,7 +1028,13 @@ export async function doctorFlow() {
         `${gray('配置')}  ${issues.filter(issue => issue.level === 'fail').length} 项失败 / ${issues.length} 项提示`,
     ], { color: verdict ? yellow : green });
     blank();
-    return verdict ? 1 : 0;
+    if (issues.some(issue => issue.level === 'fail')) {
+        throw configError(SUBTYPES.SETTINGS_INCONSISTENT, 'the health check found configuration problems').withHint('review the diagnostic results above');
+    }
+    if (blocked || gate.tightened === true) {
+        throw upstreamError(blocked ? SUBTYPES.CONTENT_BLOCKED : SUBTYPES.SHAPE_REJECTED, 'the upstream rejected the health check').withHint('review the diagnostic results above');
+    }
+    return 0;
 }
 /** Entered when no arguments are given and the process runs in a terminal. */
 export async function mainMenu() {
@@ -1040,20 +1067,29 @@ export async function mainMenu() {
         });
         if (choice === 'Q')
             return 0;
-        if (choice === '1')
-            await useFlow();
-        if (choice === '2')
-            await setupWizard();
-        if (choice === '3')
-            await switchModel();
-        if (choice === '4')
-            await statusFlow();
-        if (choice === '5')
-            await loginFlow();
-        if (choice === '6')
-            await doctorFlow();
-        if (choice === '0')
-            await uninstallFlow();
+        try {
+            if (choice === '1')
+                await useFlow();
+            if (choice === '2')
+                await setupWizard();
+            if (choice === '3')
+                await switchModel();
+            if (choice === '4')
+                await statusFlow();
+            if (choice === '5')
+                await loginFlow();
+            if (choice === '6')
+                await doctorFlow();
+            if (choice === '0')
+                await uninstallFlow();
+        }
+        catch (error) {
+            const typed = asBridgeError(error);
+            if (typed === undefined)
+                throw error;
+            process.stderr.write(renderError(typed));
+            warn('操作未完成，已返回主菜单');
+        }
         // No more "press Enter to return to the menu": nothing clears the screen here, the
         // action's output stays above and the next banner merely appends — that pause was
         // just a wasted Enter press.

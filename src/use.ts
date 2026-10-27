@@ -19,7 +19,7 @@ import {
   recordBridge,
   sizedModelId,
 } from './install.ts'
-import { applySwitch, preferredModel } from './switch.ts'
+import { applySwitch, preferredModel, serviceEnvFor } from './switch.ts'
 import { SUBTYPES, configError, validationError } from './errors.ts'
 import { dim, gray, isInteractive, select, style } from './prompt.ts'
 import type { Source, UpstreamModel } from './types.ts'
@@ -43,6 +43,7 @@ export interface BridgeRecord {
   model?: string
   contextWindow?: number
   lastModels?: LastModels
+  serviceEnv?: Record<string, string>
 }
 
 /** The result of picking a model for a source; `model` is undefined when nothing is known. */
@@ -218,7 +219,7 @@ export async function useFlow(name?: string | Source): Promise<number> {
   const installed = readInstallState()
   const record = bridgeRecord() as BridgeRecord
   const { port, apiKey } = connectionOf({ record })
-  const env: Record<string, string> = installed.service?.env ?? {}
+  const env: Record<string, string> = installed.service?.env ?? record.serviceEnv ?? {}
 
   if (env.BRIDGE_MODE === 'gateway') {
     throw configError(
@@ -269,9 +270,21 @@ export async function useFlow(name?: string | Source): Promise<number> {
     env,
     settings: claudeSettingsPath(),
   })
+  if (apply.service !== undefined && apply.service.ok !== true) {
+    throw configError(SUBTYPES.SERVICE_UNSUPPORTED, 'the service could not be restarted').withHint(
+      apply.service.reason ?? 'check the service configuration and retry',
+    )
+  }
   // The ledger is written last: if any step throws mid-switch, do not leave a half state
   // that records the new model without having written it.
-  recordBridge({ port, apiKey, model: picked.model, contextWindow: picked.contextWindow, source: source.id })
+  recordBridge({
+    port,
+    apiKey,
+    model: picked.model,
+    contextWindow: picked.contextWindow,
+    source: source.id,
+    serviceEnv: serviceEnvFor({ env, model: picked.model, products: [...new Set([...mountedIds(env), source.id])] }),
+  })
 
   const model = sizedModelId(picked.model, picked.contextWindow)
   if (!apply.written) out(dim('  没动 Claude Code 的配置（按你上次的选择）'))
@@ -279,7 +292,7 @@ export async function useFlow(name?: string | Source): Promise<number> {
   out(`${style.green('✔')} 已切到 ${source.label}`)
   out(`  ${gray('模型')} ${style.bold(model)}`)
   out(`  ${gray('监听')} http://127.0.0.1:${port}`)
-  out(`  ${gray('服务')} ${describeService({ apply, installed, port, apiKey })}`)
+  out(`  ${gray('服务')} ${describeService({ apply, installed, port, apiKey, model: picked.model, env })}`)
   out(dim('  打开一个新的 claude 会话即可生效；接入信息：fo client'))
   out('')
   return 0
@@ -297,23 +310,28 @@ function describeService({
   installed,
   port,
   apiKey,
+  model,
+  env,
 }: {
   /** The `applySwitch` result; the service half is only present when it was reinstalled. */
   apply: { written: boolean; service?: { ok?: boolean; reason?: string } }
   installed: { service?: { path?: string } }
   port: number
   apiKey: string
+  model: string
+  env: Record<string, string>
 }): string {
   if (installed.service?.path === undefined) {
-    return `未常驻（前台跑着的话重启一下：${serveCommandLine(port, apiKey)}）`
+    return `未常驻（前台跑着的话重启一下：${serveCommandLine(port, apiKey, model, env)}）`
   }
   if (apply.service?.ok === true) return `已重启（${port}）`
   return `没重启成功：${apply.service?.reason ?? '未知原因'}`
 }
 
 /** A foreground command shown as a hint only; same shape as the one in `fo client`. */
-function serveCommandLine(port: number, apiKey: string): string {
-  return `fo serve --port ${port} --api-key ${apiKey}`
+function serveCommandLine(port: number, apiKey: string, model: string, env: Record<string, string>): string {
+  const products = [...new Set([...mountedIds(env), model.split('/')[0]])].join(',')
+  return `fo serve --port ${port} --api-key ${apiKey} --model ${model} --products ${products}`
 }
 
 /** Which sources are currently mounted; if the ledger has no record, assume all (matching the

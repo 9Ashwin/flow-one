@@ -46,6 +46,83 @@ const anthropicMessageOf = anthropicMessage as unknown as (
 
 const outcomeOf = createOutcome as unknown as () => any
 
+test('上游拒答文本在流式和非流式响应中都不能丢失', () => {
+  const chunks = [
+    { choices: [{ delta: { refusal: 'Cannot do that.' } }] },
+    { choices: [{ delta: {}, finish_reason: 'content_filter' }] },
+  ]
+  const outcome = createOutcome()
+  const frames: string[] = []
+  const stream = createStreamTranslator({ model: 'm', id: 'msg', write: frame => frames.push(frame) })
+  for (const chunk of chunks) {
+    foldChunk(outcome, chunk)
+    stream.push(chunk)
+  }
+  stream.end()
+  assert.match(JSON.stringify(anthropicMessage(outcome, { model: 'm', id: 'msg' }).content), /Cannot do that/)
+  assert.match(frames.join(''), /Cannot do that/)
+  assert.match(frames.join(''), /"stop_reason":"refusal"/)
+})
+
+test('无效或非对象工具参数不能伪装成空对象成功结束', () => {
+  for (const args of ['{"x":', '[]', 'null', '42']) {
+    const chunk = {
+      choices: [
+        {
+          delta: { tool_calls: [{ index: 0, id: 'call', function: { name: 'Read', arguments: args } }] },
+          finish_reason: 'tool_calls',
+        },
+      ],
+    }
+    const outcome = createOutcome()
+    foldChunk(outcome, chunk)
+    assert.throws(() => anthropicMessage(outcome, { model: 'm', id: 'msg' }), /tool arguments/)
+    const frames: string[] = []
+    const stream = createStreamTranslator({ model: 'm', id: 'msg', write: frame => frames.push(frame) })
+    stream.push(chunk)
+    stream.end()
+    assert.match(frames.join(''), /event: error/)
+    assert.doesNotMatch(frames.join(''), /event: message_delta/)
+  }
+})
+
+test('无索引的单工具分片必须合并，无法归属的并行分片必须报错', () => {
+  const frames: string[] = []
+  const stream = createStreamTranslator({ model: 'm', id: 'msg', write: frame => frames.push(frame) })
+  const outcome = createOutcome()
+  const chunks = [
+    { choices: [{ delta: { tool_calls: [{ id: 'call', function: { name: 'Read', arguments: '{"x":' } }] } }] },
+    { choices: [{ delta: { tool_calls: [{ function: { arguments: '1}' } }] } }] },
+  ]
+  for (const chunk of chunks) {
+    foldChunk(outcome, chunk)
+    assert.equal(stream.push(chunk), true)
+  }
+  stream.end()
+  assert.equal(frames.filter(frame => frame.includes('"type":"tool_use"')).length, 1)
+  assert.deepEqual(anthropicMessage(outcome, { model: 'm', id: 'msg' }).content[0], {
+    type: 'tool_use',
+    id: 'call',
+    name: 'Read',
+    input: { x: 1 },
+  })
+  const ambiguous = createStreamTranslator({ model: 'm', id: 'msg', write: () => {} })
+  ambiguous.push({
+    choices: [
+      {
+        delta: {
+          tool_calls: [
+            { index: 0, id: 'a', function: { name: 'A' } },
+            { index: 1, id: 'b', function: { name: 'B' } },
+          ],
+        },
+      },
+    ],
+  })
+  assert.equal(ambiguous.push({ choices: [{ delta: { tool_calls: [{ function: { arguments: '{}' } }] } }] }), false)
+  assert.match(ambiguous.failure ?? '', /parallel call/)
+})
+
 test('Anthropic 请求 → OpenAI 报文：system、块、工具、工具结果', () => {
   const { body, error } = openAiRequest(
     {

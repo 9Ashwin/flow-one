@@ -101,5 +101,6 @@ export async function failureOf(response: Response): Promise<ChatFailure> {
   } catch {
     /* no body to read; the status code is information enough */
   }
-  return { ok: false, status: response.status, message }
+  const retryAfter = response.headers.get('retry-after')
+  return { ok: false, status: response.status, message, ...(retryAfter === null ? {} : { retryAfter }) }
 }

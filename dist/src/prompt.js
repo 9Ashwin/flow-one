@@ -232,7 +232,7 @@ export async function select({ message, options, initial = 0, filterable = false
         let next = cursor;
         for (let i = 0; i < visible.length; i++) {
             next = (next + delta + visible.length) % visible.length;
-            if (isReal(visible[next])) {
+            if (isReal(visible[next]) && visible[next]?.disabled !== true) {
                 cursor = next;
                 return;
             }
@@ -296,7 +296,7 @@ export async function select({ message, options, initial = 0, filterable = false
             }
             else if (name === 'return' || name === 'enter') {
                 const option = visible[cursor];
-                if (option !== undefined && option.disabled !== true)
+                if (isReal(option) && option?.disabled !== true)
                     return done(option, finish);
             }
             else if (filterable) {
@@ -309,23 +309,23 @@ export async function select({ message, options, initial = 0, filterable = false
             }
             else if (name === 'left' || str === 'k') {
                 typed = '';
-                cursor = (cursor - 1 + visible.length) % visible.length;
+                step(-1);
             }
             else if (name === 'right' || str === 'j') {
                 typed = '';
-                cursor = (cursor + 1) % visible.length;
+                step(1);
             }
             else if (name === 'backspace')
                 typed = typed.slice(0, -1);
             else if (typeof str === 'string' && /^\d$/.test(str)) {
                 const next = typed + str;
                 const index = Number(next) - 1;
-                if (index < options.length && next.length <= numberWidth) {
+                if (index >= 0 && index < options.length && next.length <= numberWidth) {
                     typed = next;
                     cursor = index;
                     if (Number(next) * 10 > options.length) {
                         const option = options[index];
-                        if (option.disabled !== true)
+                        if (option.disabled !== true && option.separator !== true)
                             return done(option, finish);
                     }
                 }

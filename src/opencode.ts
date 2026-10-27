@@ -36,6 +36,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import crypto from 'node:crypto'
 import { bridgeHome, credentialFile } from './home.ts'
+import { resolveToolIndex } from './anthropic.ts'
 import { readStore, saveCredential } from './auth.ts'
 import type { ChatResult, OpenAiRequestBody, OpenAiTool, OpenCodeSource, UpstreamModel } from './types.ts'
 
@@ -389,6 +390,7 @@ export async function* restoreToolCalls(
   { rename, stubs }: { rename: Map<string, string>; stubs: Set<string> },
 ): AsyncGenerator<unknown> {
   const dropped = new Set<number>()
+  const seen = new Map<number, { id: string }>()
   for await (const chunk of chunks) {
     const record = (chunk !== null && typeof chunk === 'object' ? chunk : {}) as Record<string, unknown>
     const choices = Array.isArray(record.choices) ? (record.choices as Array<Record<string, unknown>>) : undefined
@@ -404,9 +406,21 @@ export async function* restoreToolCalls(
       >
       const calls = delta.tool_calls
       if (!Array.isArray(calls) || calls.length === 0) return choice
+      if (
+        calls.filter(call => call !== null && typeof call === 'object' && !Number.isInteger(call.index) && !call.id)
+          .length > 1
+      )
+        throw new Error('upstream tool fragments cannot be matched to parallel calls')
       const kept: unknown[] = []
       for (const call of calls) {
-        const index = Number.isInteger(call?.index) ? call.index : 0
+        if (call === null || typeof call !== 'object') continue
+        const index = resolveToolIndex(call, [...seen.entries()])
+        const slot = seen.get(index) ?? { id: '' }
+        if (typeof call.id === 'string' && call.id !== '') {
+          if (slot.id !== '' && slot.id !== call.id) throw new Error('upstream tool index changed identity')
+          slot.id = call.id
+        }
+        seen.set(index, slot)
         if (dropped.has(index)) {
           touched = true
           continue
@@ -419,11 +433,12 @@ export async function* restoreToolCalls(
         }
         const original = typeof name === 'string' ? rename.get(name.toLowerCase()) : undefined
         if (original === undefined) {
-          kept.push(call)
+          kept.push(Number.isInteger(call.index) ? call : { ...call, index })
+          if (!Number.isInteger(call.index)) touched = true
           continue
         }
         touched = true
-        kept.push({ ...call, function: { ...call.function, name: original } })
+        kept.push({ ...call, index, function: { ...call.function, name: original } })
       }
       return touched ? { ...choice, delta: { ...delta, tool_calls: kept.length === 0 ? [] : kept } } : choice
     })

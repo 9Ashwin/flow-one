@@ -11,7 +11,7 @@ import { createDirectUpstream } from "./upstreams.js";
 import { credentialStatus } from "./auth.js";
 import { hasGoCredential } from "./opencode.js";
 import { bridgeRecord, claudeSettingsPath, clientConfigIsOurs, readInstallState, recordBridge, sizedModelId, } from "./install.js";
-import { applySwitch, preferredModel } from "./switch.js";
+import { applySwitch, preferredModel, serviceEnvFor } from "./switch.js";
 import { SUBTYPES, configError, validationError } from "./errors.js";
 import { dim, gray, isInteractive, select, style } from "./prompt.js";
 /** Recommendation order for model picking (same intent as `PREFERRED_MODELS` in wizard). */
@@ -158,7 +158,7 @@ export async function useFlow(name) {
     const installed = readInstallState();
     const record = bridgeRecord();
     const { port, apiKey } = connectionOf({ record });
-    const env = installed.service?.env ?? {};
+    const env = installed.service?.env ?? record.serviceEnv ?? {};
     if (env.BRIDGE_MODE === 'gateway') {
         throw configError(SUBTYPES.SETTINGS_INCONSISTENT, 'currently in gateway mode, where there is no "source" to switch').withHint('to use a Tencent product line / OpenCode instead, run `fo setup` and pick a source');
     }
@@ -196,9 +196,19 @@ export async function useFlow(name) {
         env,
         settings: claudeSettingsPath(),
     });
+    if (apply.service !== undefined && apply.service.ok !== true) {
+        throw configError(SUBTYPES.SERVICE_UNSUPPORTED, 'the service could not be restarted').withHint(apply.service.reason ?? 'check the service configuration and retry');
+    }
     // The ledger is written last: if any step throws mid-switch, do not leave a half state
     // that records the new model without having written it.
-    recordBridge({ port, apiKey, model: picked.model, contextWindow: picked.contextWindow, source: source.id });
+    recordBridge({
+        port,
+        apiKey,
+        model: picked.model,
+        contextWindow: picked.contextWindow,
+        source: source.id,
+        serviceEnv: serviceEnvFor({ env, model: picked.model, products: [...new Set([...mountedIds(env), source.id])] }),
+    });
     const model = sizedModelId(picked.model, picked.contextWindow);
     if (!apply.written)
         out(dim('  没动 Claude Code 的配置（按你上次的选择）'));
@@ -206,7 +216,7 @@ export async function useFlow(name) {
     out(`${style.green('✔')} 已切到 ${source.label}`);
     out(`  ${gray('模型')} ${style.bold(model)}`);
     out(`  ${gray('监听')} http://127.0.0.1:${port}`);
-    out(`  ${gray('服务')} ${describeService({ apply, installed, port, apiKey })}`);
+    out(`  ${gray('服务')} ${describeService({ apply, installed, port, apiKey, model: picked.model, env })}`);
     out(dim('  打开一个新的 claude 会话即可生效；接入信息：fo client'));
     out('');
     return 0;
@@ -218,17 +228,18 @@ export async function useFlow(name) {
  * `BRIDGE_MODEL`, and a single "switched" line in the UI made it look effective. Say
  * honestly "which one is still running" and give the way to reinstall.
  */
-function describeService({ apply, installed, port, apiKey, }) {
+function describeService({ apply, installed, port, apiKey, model, env, }) {
     if (installed.service?.path === undefined) {
-        return `未常驻（前台跑着的话重启一下：${serveCommandLine(port, apiKey)}）`;
+        return `未常驻（前台跑着的话重启一下：${serveCommandLine(port, apiKey, model, env)}）`;
     }
     if (apply.service?.ok === true)
         return `已重启（${port}）`;
     return `没重启成功：${apply.service?.reason ?? '未知原因'}`;
 }
 /** A foreground command shown as a hint only; same shape as the one in `fo client`. */
-function serveCommandLine(port, apiKey) {
-    return `fo serve --port ${port} --api-key ${apiKey}`;
+function serveCommandLine(port, apiKey, model, env) {
+    const products = [...new Set([...mountedIds(env), model.split('/')[0]])].join(',');
+    return `fo serve --port ${port} --api-key ${apiKey} --model ${model} --products ${products}`;
 }
 /** Which sources are currently mounted; if the ledger has no record, assume all (matching the
  * service's startup default). */

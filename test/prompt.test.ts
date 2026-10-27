@@ -15,6 +15,30 @@ import type { PassThrough } from 'node:stream'
 /** 测试里假装 TTY 的流：`isTTY` / `setRawMode` 只有真 TTY 才有，用例补上。 */
 type FakeTty = PassThrough & { isTTY: boolean; setRawMode: (mode: boolean) => void }
 
+test('方向键应跳过禁用选项，回车直接选中下一个可用项', async () => {
+  const { PassThrough } = await import('node:stream')
+  const { select, setStdinForTest } = await import('../src/prompt.ts')
+  const fake = new PassThrough() as FakeTty
+  fake.isTTY = true
+  fake.setRawMode = () => {}
+  setStdinForTest(fake)
+  try {
+    const selection = select({
+      message: 'test',
+      options: [
+        { label: 'A', value: 'a' },
+        { label: 'disabled', value: 'x', disabled: true },
+        { label: 'B', value: 'b' },
+      ],
+    })
+    fake.emit('keypress', '', { name: 'down' })
+    fake.emit('keypress', '', { name: 'return' })
+    assert.equal(await selection, 'b')
+  } finally {
+    setStdinForTest(null)
+  }
+})
+
 test('列表挑选：方向键与编号都能选（短清单按数字立即选中，长清单两位数）', async () => {
   const { PassThrough } = await import('node:stream')
   const { select, setStdinForTest } = await import('../src/prompt.ts')

@@ -51,6 +51,13 @@ function launchdLoaded(label: string): boolean {
  * run outside a test process to actually execute.
  */
 export const serviceCalls: Array<{ command: string; args: string[] }> = []
+let serviceRunnerForTest: ((command: string, args: string[]) => string) | undefined
+
+/** Override service commands only inside a test process; never invoke real service managers. */
+export function setServiceRunnerForTest(runner?: (command: string, args: string[]) => string): void {
+  if (process.env.NODE_TEST_CONTEXT === undefined) throw new Error('service runner override is only available in tests')
+  serviceRunnerForTest = runner
+}
 
 /**
  * Normalise `execFileSync` output to a string.
@@ -65,7 +72,7 @@ export function commandOutput(result: unknown): string {
 function platformRun(command: string, args: string[], options: RunOptions = {}): string {
   if (process.env.NODE_TEST_CONTEXT !== undefined) {
     serviceCalls.push({ command, args })
-    return ''
+    return serviceRunnerForTest?.(command, args) ?? ''
   }
   // Hit on a real machine (2026-10-20): this used to be `execFileSync(...).toString()`.
   // `launchdLoaded` passes `stdio: 'ignore'` (a successful call returns null), so a
@@ -164,6 +171,7 @@ export interface InstallState {
     apiKey: string
     model: string
     contextWindow?: number
+    serviceEnv?: Record<string, string>
     lastModels?: Record<string, { model: string; contextWindow?: number }>
     savedAt: string
   }
@@ -656,12 +664,14 @@ export function recordBridge({
   model,
   contextWindow,
   source,
+  serviceEnv,
 }: {
   port: number
   apiKey: string
   model: string
   contextWindow?: number
   source?: string
+  serviceEnv?: Record<string, string>
 }): void {
   const state = readInstallState()
   const previous = bridgeRecord()
@@ -674,6 +684,7 @@ export function recordBridge({
     port,
     apiKey,
     model,
+    ...((serviceEnv ?? previous.serviceEnv) === undefined ? {} : { serviceEnv: serviceEnv ?? previous.serviceEnv }),
     ...(Number.isFinite(contextWindow) ? { contextWindow } : {}),
     ...(Object.keys(lastModels).length > 0 ? { lastModels } : {}),
     savedAt: new Date().toISOString(),
@@ -805,15 +816,14 @@ export async function installService({
   const logDir = bridgeHome()
   fs.mkdirSync(logDir, { recursive: true, mode: 0o700 })
   fs.mkdirSync(path.dirname(file), { recursive: true })
+  const previousFile = fs.existsSync(file)
+    ? { data: fs.readFileSync(file), mode: fs.statSync(file).mode & 0o777 }
+    : undefined
   fs.writeFileSync(
     file,
     kind === 'launchd' ? launchAgentPlist({ port, apiKey, env, logDir }) : systemdUnit({ port, apiKey, env }),
     { mode: 0o600 },
   )
-  const state = readInstallState()
-  state.service = { kind, path: file, port, env, cliPath: CLI_PATH }
-  writeInstallState(state)
-
   const notes = []
   // Clear the pre-rename service before installing the new one: both alive would fight over
   // the same port
@@ -852,8 +862,18 @@ export async function installService({
     }
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error)
-    return { ok: false, kind, path: file, reason: serviceLoadReason(message, file) }
+    let recovery = ' The previous service definition was restored; check whether the service is running.'
+    try {
+      if (previousFile === undefined) fs.rmSync(file, { force: true })
+      else fs.writeFileSync(file, previousFile.data, { mode: previousFile.mode })
+    } catch (restoreError) {
+      recovery = ` Restoring the previous service definition failed: ${restoreError instanceof Error ? restoreError.message : String(restoreError)}`
+    }
+    return { ok: false, kind, path: file, reason: serviceLoadReason(message, file) + recovery }
   }
+  const state = readInstallState()
+  state.service = { kind, path: file, port, env, cliPath: CLI_PATH }
+  writeInstallState(state)
   return { ok: true, kind, path: file, notes }
 }
 

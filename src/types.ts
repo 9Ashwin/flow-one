@@ -168,8 +168,8 @@ export interface ChatFailure {
   ok: false
   status?: number
   message: string
-  /** Only the server sets this: whether a retry before any byte is safe. */
-  retryable?: boolean
+  /** The upstream's retry delay, forwarded to the caller when present. */
+  retryAfter?: string
   /**
    * Which sources failed before this one answered.
    *

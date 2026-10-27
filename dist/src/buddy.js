@@ -397,10 +397,12 @@ export async function chat(product, openAiBody, { model, meta, signal, log = () 
             credential = await ensureCredential(product, { log, signal, file, force: true });
             continue;
         }
+        const retryAfter = response.headers.get('retry-after');
         return {
             ok: false,
             status: response.status,
             message: detail === '' ? `upstream returned ${response.status}` : detail,
+            ...(retryAfter === null ? {} : { retryAfter }),
         };
     }
     return { ok: false, status: 401, message: `${product.label}: login expired; run login ${product.id} again` };

@@ -94,6 +94,8 @@ export async function applySwitch({
   mounted,
   env = {},
   settings = claudeSettingsPath(),
+  install = installService,
+  healthy = waitForService,
 }: {
   port: number
   apiKey: string
@@ -103,6 +105,8 @@ export async function applySwitch({
   mounted?: string[]
   env?: Record<string, string>
   settings?: string
+  install?: typeof installService
+  healthy?: (port: number, model: string) => Promise<boolean>
 }): Promise<{
   written: boolean
   file?: string
@@ -110,6 +114,22 @@ export async function applySwitch({
 }> {
   const products = withSource(mounted, source)
   const written = clientConfigIsOurs({ port, file: settings })
+  const state = readInstallState()
+  const service =
+    state.service?.path === undefined
+      ? undefined
+      : await install({ port, apiKey, env: serviceEnvFor({ env, model, products }) })
+  if (service !== undefined && !service.ok) return { written: false, service }
+  if (service !== undefined && !(await healthy(port, model))) {
+    return {
+      written: false,
+      service: {
+        ...service,
+        ok: false,
+        reason: 'the service did not start with the selected model; check its logs and retry',
+      },
+    }
+  }
   if (written) {
     installClaudeSettings({
       file: settings,
@@ -119,10 +139,24 @@ export async function applySwitch({
       contextWindow,
     })
   }
-  const state = readInstallState()
-  if (state.service?.path === undefined) return { written, ...(written ? { file: settings } : {}), service: undefined }
-  const service = await installService({ port, apiKey, env: serviceEnvFor({ env, model, products }) })
   return { written, ...(written ? { file: settings } : {}), service }
+}
+
+async function waitForService(port: number, model: string): Promise<boolean> {
+  const deadline = Date.now() + 12_000
+  while (Date.now() < deadline) {
+    try {
+      const response = await fetch(`http://127.0.0.1:${port}/health`, { signal: AbortSignal.timeout(1200) })
+      if (response.ok) {
+        const health = (await response.json()) as { service?: string; model?: string }
+        if (health.service === 'flow-one' && health.model === model) return true
+      }
+    } catch {
+      /* the service may still be starting */
+    }
+    await new Promise(resolve => setTimeout(resolve, 500))
+  }
+  return false
 }
 
 /**

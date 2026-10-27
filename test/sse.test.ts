@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { readSse } from '../src/sse.ts'
+import { failureOf, readSse } from '../src/sse.ts'
 
 function stream(
   text: string,
@@ -90,4 +90,12 @@ test('截断的上游流不能当成完整回答，但 finish_reason 后 EOF 仍
   await strict('data: {"choices":[{"finish_reason":"stop"}]}\n\n')
   await strict('data: [DONE]\n\n')
   await assert.rejects(strict('data: invalid\n\n'), /invalid SSE JSON/)
+})
+
+test('上游限流的 Retry-After 不能在错误归一化时丢失', async () => {
+  const failure = await failureOf(
+    new Response('{"error":{"message":"slow down"}}', { status: 429, headers: { 'retry-after': '30' } }),
+  )
+  assert.equal(failure.retryAfter, '30')
+  assert.equal(failure.message, 'slow down')
 })

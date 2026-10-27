@@ -390,7 +390,7 @@ export async function chat(
     log?: (message: string) => void
     file?: string
   },
-): Promise<{ ok: true; response: Response } | { ok: false; status: number; message: string }> {
+): Promise<{ ok: true; response: Response } | { ok: false; status: number; message: string; retryAfter?: string }> {
   const wire = toBuddyBody(openAiBody, { meta, model })
   let credential = await ensureCredential(product, { log, signal, file })
   for (let attempt = 0; attempt < 2; attempt++) {
@@ -421,10 +421,12 @@ export async function chat(
       credential = await ensureCredential(product, { log, signal, file, force: true })
       continue
     }
+    const retryAfter = response.headers.get('retry-after')
     return {
       ok: false,
       status: response.status,
       message: detail === '' ? `upstream returned ${response.status}` : detail,
+      ...(retryAfter === null ? {} : { retryAfter }),
     }
   }
   return { ok: false, status: 401, message: `${product.label}: login expired; run login ${product.id} again` }

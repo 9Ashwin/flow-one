@@ -11,8 +11,8 @@
 // - **The upstream answers before any response header is written.** An upstream
 //   401/429/400 therefore reaches Claude Code as its real status code instead of
 //   a 200 followed by an apology inside the stream. Once headers are out, a
-//   failure can only surface as an in-stream `error` event — which is why retries
-//   and candidate exhaustion all happen before this point.
+//   failure can only surface as an in-stream `error` event. Uncertain network
+//   failures are not retried because the upstream may already have billed the turn.
 // - **`message_start` is emitted on connect.** A reasoning model can think for
 //   seventy seconds without emitting a byte, while the Anthropic contract starts
 //   the message at handshake time; waiting for the first chunk leaves the client
@@ -47,11 +47,12 @@ const ERROR_TYPES = {
     429: 'rate_limit_error',
     529: 'overloaded_error',
 };
-function json(res, status, payload) {
+function json(res, status, payload, headers = {}) {
     const body = JSON.stringify(payload);
     res.writeHead(status, {
         'content-type': 'application/json; charset=utf-8',
         'content-length': Buffer.byteLength(body),
+        ...headers,
     });
     res.end(body);
 }
@@ -79,6 +80,11 @@ function drained(res) {
 async function writeFrame(res, frame) {
     if (res.writableEnded || res.destroyed)
         return false;
+    if (res.writableNeedDrain) {
+        await drained(res);
+        if (res.writableEnded || res.destroyed)
+            return false;
+    }
     if (res.write(frame))
         return true;
     await drained(res);
@@ -160,8 +166,8 @@ function failureSummary(result) {
         .map(item => `${item.upstream}${item.status === undefined ? '' : ` ${item.status}`}: ${item.message}`)
         .join('; ');
 }
-function anthropicError(res, status, message, type = ERROR_TYPES[status] ?? 'api_error', requestId) {
-    json(res, status, errorBody(type, message, requestId));
+function anthropicError(res, status, message, type = ERROR_TYPES[status] ?? 'api_error', requestId, retryAfter) {
+    json(res, status, errorBody(type, message, requestId), retryAfter === undefined ? {} : { 'retry-after': retryAfter });
 }
 /** Constant-length comparison, so the response cannot leak how many key bytes matched. */
 function keyMatches(provided, expected) {
@@ -229,7 +235,7 @@ export function createBridgeServer({ config, upstream, log = () => { }, }) {
      * Pass the ID through when the upstream knows it; otherwise fall back to the
      * default model. Claude model names always take the fallback path.
      */
-    async function resolveModel(requested) {
+    async function resolveModel(requested, needsImageMetadata) {
         // Claude Code's `[1m]` suffix is supposed to be stripped before the request is
         // sent (2.1.301 does strip it), but treating it as part of the upstream model
         // name only costs a wasted fallback lookup, so it is removed here.
@@ -237,8 +243,19 @@ export function createBridgeServer({ config, upstream, log = () => { }, }) {
         const wanted = raw;
         if (wanted !== '' && Object.hasOwn(config.modelMap, wanted))
             return config.modelMap[wanted];
-        if (wanted !== '' && known.has(wanted))
+        if (wanted !== '' && known.has(wanted)) {
+            if (Date.now() - modelsFetchedAt > MODEL_TTL_MS)
+                void refreshModels().catch(() => { });
             return wanted;
+        }
+        const isDefault = wanted === '' || wanted === config.model || /^claude-/i.test(wanted);
+        // Tencent's model metadata also controls reasoning and output limits, even for text.
+        const needsMetadata = needsImageMetadata || /^(cn|intl)\//.test(config.model);
+        if (config.model !== '' && isDefault && (!needsMetadata || known.has(config.model))) {
+            if (Date.now() - modelsFetchedAt > MODEL_TTL_MS || known.size === 0)
+                void refreshModels().catch(() => { });
+            return config.model;
+        }
         if (Date.now() - modelsFetchedAt > MODEL_TTL_MS || known.size === 0)
             await refreshModels();
         if (wanted !== '' && known.has(wanted))
@@ -259,14 +276,7 @@ export function createBridgeServer({ config, upstream, log = () => { }, }) {
      * images silently loses information, while a rejected image is a visible 400.
      */
     const supportsImagesFor = (model) => known.get(model)?.supportsImages !== false;
-    /**
-     * Opening the upstream conversation.
-     *
-     * A 429 or 5xx is safe to retry once **before any byte has been produced**:
-     * the client has received nothing yet, so a retry cannot double-bill. Once a
-     * 2xx stream is in hand the request is never retried — that would spend the
-     * quota twice, and the client only accepts one stream anyway.
-     */
+    /** A missing response does not prove the upstream did not start or bill the turn. */
     async function openUpstream(body, { signal }) {
         let result;
         try {
@@ -275,12 +285,12 @@ export function createBridgeServer({ config, upstream, log = () => { }, }) {
         catch (error) {
             if (signal.aborted)
                 throw error;
-            return { ok: false, status: 502, message: messageOf(error), retryable: true };
+            return { ok: false, status: 502, message: messageOf(error) };
         }
         if (result.ok === true)
             return result;
         const status = Number(result.status) || 502;
-        return { ...result, status, retryable: status === 429 || status >= 500 };
+        return { ...result, status };
     }
     async function handleMessages(req, res, body) {
         const started = Date.now();
@@ -293,7 +303,16 @@ export function createBridgeServer({ config, upstream, log = () => { }, }) {
         if (res.destroyed)
             return;
         const inputTokens = estimateInputTokens(body);
-        const model = await resolveModel(isObject(body) ? body.model : undefined);
+        const containsImage = (value) => {
+            if (Array.isArray(value))
+                return value.some(containsImage);
+            if (!isObject(value))
+                return false;
+            return (value.type === 'image' ||
+                (value.type === 'tool_result' && containsImage(value.content)) ||
+                (Object.hasOwn(value, 'role') && containsImage(value.content)));
+        };
+        const model = await resolveModel(isObject(body) ? body.model : undefined, isObject(body) && containsImage(body.messages));
         if (controller.signal.aborted)
             return;
         const translated = toOpenAiRequest(body, {
@@ -310,7 +329,6 @@ export function createBridgeServer({ config, upstream, log = () => { }, }) {
         }
         const wantsStream = isObject(body) ? body.stream === true : false;
         const id = `msg_${crypto.randomBytes(12).toString('hex')}`;
-        const attempts = [];
         const openWithTimeout = async () => {
             const idleMs = config.upstreamIdleMs ?? 0;
             if (!(idleMs > 0))
@@ -321,7 +339,7 @@ export function createBridgeServer({ config, upstream, log = () => { }, }) {
                     openUpstream(translated.body, { signal: controller.signal }),
                     new Promise(resolve => {
                         timer = setTimeout(() => {
-                            resolve({ ok: false, status: 504, message: 'upstream did not respond before timeout', retryable: false });
+                            resolve({ ok: false, status: 504, message: 'upstream did not respond before timeout' });
                             controller.abort();
                         }, idleMs);
                     }),
@@ -331,19 +349,9 @@ export function createBridgeServer({ config, upstream, log = () => { }, }) {
                 clearTimeout(timer);
             }
         };
-        let result = await openWithTimeout();
+        const result = await openWithTimeout();
         if (result.ok !== true) {
-            attempts.push({ upstream: upstream.name ?? 'upstream', status: result.status, message: result.message });
-        }
-        if (result.ok !== true && result.retryable === true && !controller.signal.aborted) {
-            log(`${reqId} upstream ${result.status}, retrying once: ${result.message}`);
-            result = await openWithTimeout();
-            if (result.ok !== true) {
-                attempts.push({ upstream: upstream.name ?? 'upstream', status: result.status, message: result.message });
-            }
-        }
-        if (result.ok !== true) {
-            anthropicError(res, result.status ?? 502, failureSummary({ ...result, attempts }), undefined, reqId);
+            anthropicError(res, result.status ?? 502, failureSummary(result), undefined, reqId, result.retryAfter);
             return;
         }
         if (!wantsStream) {
@@ -388,7 +396,15 @@ export function createBridgeServer({ config, upstream, log = () => { }, }) {
                 anthropicError(res, 502, outcome.error, undefined, reqId);
                 return;
             }
-            json(res, 200, anthropicMessage(outcome, { model, id, inputTokens, showThinking: config.showThinking }));
+            let message;
+            try {
+                message = anthropicMessage(outcome, { model, id, inputTokens, showThinking: config.showThinking });
+            }
+            catch (error) {
+                anthropicError(res, 502, messageOf(error), undefined, reqId);
+                return;
+            }
+            json(res, 200, message);
             log(`${reqId} model=${model} stream=0 ms=${Date.now() - started} first_chunk_ms=${firstByteAt === undefined ? '-' : firstByteAt - started} ttft=${firstOutputAt === undefined ? '-' : firstOutputAt - started} out=${outcome.text.length}`);
             return;
         }
@@ -401,7 +417,7 @@ export function createBridgeServer({ config, upstream, log = () => { }, }) {
         let heartbeat;
         if (config.heartbeatMs !== undefined && config.heartbeatMs > 0) {
             heartbeat = setInterval(() => {
-                if (!res.writableEnded)
+                if (!res.writableEnded && !res.destroyed && !res.writableNeedDrain)
                     res.write('event: ping\ndata: {"type":"ping"}\n\n');
             }, config.heartbeatMs);
             heartbeat.unref?.();
@@ -454,11 +470,12 @@ export function createBridgeServer({ config, upstream, log = () => { }, }) {
             armIdle();
             for await (const chunk of untilAborted(result.chunks, controller.signal)) {
                 firstByteAt ??= Date.now();
-                armIdle();
+                clearTimeout(idleTimer);
                 if (!translator.push(chunk))
                     break;
                 if (!(await flush()))
                     return;
+                armIdle();
             }
             // `untilAborted` ends the loop silently when the signal fires, so an aborted
             // pull must be classified here rather than in the catch branch. A client that

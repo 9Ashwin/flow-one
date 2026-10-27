@@ -259,8 +259,11 @@ async function main() {
     // without walking the one-shot setup again.
     if (command === 'use')
         return await useFlow(commandArgs[0]);
-    if (command === 'doctor')
-        return await doctorFlow();
+    if (command === 'doctor') {
+        if ((await doctorFlow()) !== 0)
+            throw configError(SUBTYPES.SETTINGS_INCONSISTENT, 'the health check found problems').withHint('review the diagnostic results above');
+        return;
+    }
     if (command === 'login')
         return await commandLogin(config, commandArgs, log);
     if (command === 'status')

@@ -396,3 +396,16 @@ test('过滤桩工具后的稀疏/反序索引在非流式和流式都保留所�
     assert.ok(!JSON.stringify(frames).includes('stub'))
   }
 })
+
+test('免费档无索引工具分片必须按身份跟踪，桩工具不能误删真实工具', async () => {
+  const { restoreToolCalls } = await import('../src/opencode.ts')
+  const chunks = (async function* () {
+    yield { choices: [{ delta: { tool_calls: [{ id: 'stub', function: { name: 'grep', arguments: '{}' } }] } }] }
+    yield { choices: [{ delta: { tool_calls: [{ id: 'real', function: { name: 'bash', arguments: '{}' } }] } }] }
+  })()
+  const out = []
+  for await (const chunk of restoreToolCalls(chunks, { rename: new Map([['bash', 'Bash']]), stubs: new Set(['grep']) }))
+    out.push(chunk)
+  assert.match(JSON.stringify(out), /"name":"Bash"/)
+  assert.doesNotMatch(JSON.stringify(out), /"name":"grep"/)
+})

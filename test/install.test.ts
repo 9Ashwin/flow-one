@@ -470,7 +470,8 @@ test('「自己把桥跑起来」的命令：Windows 的 cmd / PowerShell 也得
 
   // 光有文本不够：这条命令得真能被解析成「前台起桥 + 同一个端口/密钥」
   const { resolveConfig } = loose(await import('../src/config.ts'))
-  const parsed = resolveConfig({ argv: command.split(' ').slice(2), env: {} })
+  assert.match(command, /^fo serve /)
+  const parsed = resolveConfig({ argv: command.split(' ').slice(1), env: {} })
   assert.equal(parsed.command, 'serve')
   assert.equal(parsed.config.port, 8788)
   assert.equal(parsed.config.apiKey, 'k-1')

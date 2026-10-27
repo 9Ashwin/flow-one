@@ -375,6 +375,9 @@ third-party clients such as Claude Code can be used (see the disclaimer at the e
   not accept.
 - **Non-streaming requests are still streamed upstream**, and this bridge consolidates them into
   a single JSON response.
+- **Upstream failures are not automatically retried by the bridge** when the result may be
+  uncertain; `Retry-After` is forwarded when supplied. Tencent credential renewal on 401/403
+  remains supported. Clients can have their own retry policy.
 - **`count_tokens` is an estimate** (4 characters ≈ 1 token; images count as a fixed value).
 - **The `[claude-code:unrecognized_model]` diagnostic line still appears in `-p` mode.**
   The official workaround is to key `modelOverrides` by Claude model IDs — which amounts to

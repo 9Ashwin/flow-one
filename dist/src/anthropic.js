@@ -29,6 +29,40 @@ const IMAGE_PLACEHOLDER = '[image omitted: the selected model does not accept im
 export const TRANSLATED_THINKING_SIGNATURE = 'AA==';
 /** A decoded JSON object; everything else (null, arrays, primitives) stays out. */
 const isObject = (value) => value !== null && typeof value === 'object' && !Array.isArray(value);
+function toolInput(argumentsJson) {
+    let input;
+    try {
+        input = argumentsJson === '' ? {} : JSON.parse(argumentsJson);
+    }
+    catch {
+        throw new Error('upstream tool arguments are not valid JSON');
+    }
+    if (!isObject(input))
+        throw new Error('upstream tool arguments must be a JSON object');
+    return input;
+}
+/** Match a tool fragment by index or id, refusing ambiguous parallel fragments. */
+export function resolveToolIndex(call, slots) {
+    if (Number.isInteger(call.index) && call.index >= 0)
+        return call.index;
+    const id = typeof call.id === 'string' ? call.id : '';
+    if (id !== '') {
+        const match = slots.find(([, slot]) => slot.id === id);
+        if (match !== undefined)
+            return match[0];
+        if (slots.length === 1 && slots[0][1].id === '')
+            return slots[0][0];
+        let index = 0;
+        while (slots.some(([key]) => key === index))
+            index++;
+        return index;
+    }
+    if (slots.length === 0)
+        return 0;
+    if (slots.length === 1)
+        return slots[0][0];
+    throw new Error('upstream tool fragment cannot be matched to a parallel call');
+}
 /** Accept both Anthropic's block array and its bare-string shorthand. */
 function blocksOf(content) {
     if (Array.isArray(content))
@@ -428,9 +462,15 @@ export function foldChunk(outcome, chunk) {
             outcome.text += delta.content;
         else if (Array.isArray(delta.content)) {
             for (const part of delta.content)
-                if (isObject(part) && typeof part.text === 'string')
-                    outcome.text += part.text;
+                if (isObject(part)) {
+                    if (typeof part.text === 'string')
+                        outcome.text += part.text;
+                    else if (typeof part.refusal === 'string')
+                        outcome.text += part.refusal;
+                }
         }
+        if (typeof delta.refusal === 'string')
+            outcome.text += delta.refusal;
         const reasoning = typeof delta.reasoning_content === 'string'
             ? delta.reasoning_content
             : typeof delta.reasoning === 'string'
@@ -438,17 +478,37 @@ export function foldChunk(outcome, chunk) {
                 : undefined;
         if (reasoning !== undefined)
             outcome.thinking += reasoning;
-        for (const call of Array.isArray(delta.tool_calls) ? delta.tool_calls : []) {
+        const calls = Array.isArray(delta.tool_calls) ? delta.tool_calls : [];
+        if (calls.filter(call => isObject(call) && !Number.isInteger(call.index) && !call.id).length > 1) {
+            outcome.error = 'upstream tool fragments cannot be matched to parallel calls';
+            return;
+        }
+        for (const call of calls) {
             if (!isObject(call))
                 continue;
-            const index = Number.isInteger(call.index)
-                ? call.index
-                : outcome.toolCalls.findIndex(slot => slot.id === call.id);
-            const at = index >= 0 ? index : outcome.toolCalls.length;
+            let at;
+            try {
+                at = resolveToolIndex(call, Object.entries(outcome.toolCalls).map(([index, slot]) => [Number(index), slot]));
+            }
+            catch (error) {
+                outcome.error = error instanceof Error ? error.message : String(error);
+                return;
+            }
             const slot = (outcome.toolCalls[at] ??= { id: '', name: '', arguments: '' });
+            if (typeof call.id === 'string' && call.id !== '' && slot.id !== '' && slot.id !== call.id) {
+                outcome.error = 'upstream tool index changed identity';
+                return;
+            }
             if (typeof call.id === 'string' && call.id !== '')
                 slot.id = call.id;
             if (isObject(call.function)) {
+                if (typeof call.function.name === 'string' &&
+                    call.function.name !== '' &&
+                    slot.name !== '' &&
+                    slot.name !== call.function.name) {
+                    outcome.error = 'upstream tool fragment changed name';
+                    return;
+                }
                 if (typeof call.function.name === 'string' && call.function.name !== '' && slot.name === '')
                     slot.name = call.function.name;
                 if (typeof call.function.arguments === 'string')
@@ -483,15 +543,9 @@ export function anthropicMessage(outcome, { model, id, inputTokens = 0, showThin
     if (outcome.text !== '')
         content.push({ type: 'text', text: outcome.text });
     for (const call of outcome.toolCalls.filter(Boolean)) {
-        // Malformed arguments become an empty input rather than failing the turn: the
-        // tool call itself is still worth surfacing to the client.
-        let input;
-        try {
-            input = call.arguments === '' ? {} : JSON.parse(call.arguments);
-        }
-        catch {
-            input = {};
-        }
+        if (call.name === '')
+            throw new Error('upstream tool call has no name');
+        const input = toolInput(call.arguments);
         content.push({ type: 'tool_use', id: call.id || 'toolu_0', name: call.name, input });
     }
     return {
@@ -647,7 +701,7 @@ export function createStreamTranslator({ model, id, write, showThinking = false,
         send('content_block_start', {
             type: 'content_block_start',
             index: slot.block,
-            content_block: { type: 'tool_use', id: slot.id, name: slot.name, input: {} },
+            content_block: { type: 'tool_use', id: slot.id || `toolu_${slot.block}`, name: slot.name, input: {} },
         });
         if (slot.buffer !== '') {
             send('content_block_delta', {
@@ -661,25 +715,31 @@ export function createStreamTranslator({ model, id, write, showThinking = false,
     function toolDelta(call) {
         closeThinking();
         closeText();
-        const key = Number.isInteger(call.index) ? call.index : toolSlots.size;
+        const key = resolveToolIndex(call, [...toolSlots.entries()]);
         let slot = toolSlots.get(key);
         if (slot === undefined) {
             slot = {
                 block: -1,
-                id: typeof call.id === 'string' && call.id !== '' ? call.id : `toolu_${key}`,
+                id: typeof call.id === 'string' && call.id !== '' ? call.id : '',
                 name: '',
                 open: false,
                 buffer: '',
+                arguments: '',
             };
             toolSlots.set(key, slot);
         }
         else if (typeof call.id === 'string' && call.id !== '') {
+            if (slot.id !== '' && slot.id !== call.id)
+                throw new Error('upstream tool index changed identity');
             slot.id = call.id;
         }
         const fn = isObject(call.function) ? call.function : {};
+        if (typeof fn.name === 'string' && fn.name !== '' && slot.name !== '' && slot.name !== fn.name)
+            throw new Error('upstream tool fragment changed name');
         if (typeof fn.name === 'string' && fn.name !== '' && slot.name === '')
             slot.name = fn.name;
         const args = typeof fn.arguments === 'string' ? fn.arguments : '';
+        slot.arguments += args;
         if (args !== '') {
             if (slot.open)
                 send('content_block_delta', {
@@ -723,12 +783,30 @@ export function createStreamTranslator({ model, id, write, showThinking = false,
                     textDelta(delta.content);
                 else if (Array.isArray(delta.content)) {
                     for (const part of delta.content)
-                        if (isObject(part) && typeof part.text === 'string')
-                            textDelta(part.text);
+                        if (isObject(part)) {
+                            if (typeof part.text === 'string')
+                                textDelta(part.text);
+                            else if (typeof part.refusal === 'string')
+                                textDelta(part.refusal);
+                        }
                 }
-                for (const call of Array.isArray(delta.tool_calls) ? delta.tool_calls : []) {
-                    if (isObject(call))
+                if (typeof delta.refusal === 'string')
+                    textDelta(delta.refusal);
+                const calls = Array.isArray(delta.tool_calls) ? delta.tool_calls : [];
+                if (calls.filter(call => isObject(call) && !Number.isInteger(call.index) && !call.id).length > 1) {
+                    error = 'upstream tool fragments cannot be matched to parallel calls';
+                    return false;
+                }
+                for (const call of calls) {
+                    if (!isObject(call))
+                        continue;
+                    try {
                         toolDelta(call);
+                    }
+                    catch (cause) {
+                        error = cause instanceof Error ? cause.message : String(cause);
+                        return false;
+                    }
                 }
             }
             return true;
@@ -737,6 +815,17 @@ export function createStreamTranslator({ model, id, write, showThinking = false,
         end() {
             if (finished)
                 return;
+            try {
+                for (const slot of toolSlots.values()) {
+                    if (slot.name === '')
+                        throw new Error('upstream tool call has no name');
+                    toolInput(slot.arguments);
+                }
+            }
+            catch (cause) {
+                this.fail(cause instanceof Error ? cause.message : String(cause));
+                return;
+            }
             start();
             finished = true;
             closeThinking();

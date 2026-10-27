@@ -127,7 +127,14 @@ function runCli(args: string[]) {
   const cli = fileURLToPath(new URL('../cli.ts', import.meta.url))
   // 本机导出的 BRIDGE_* / UPSTREAM_* 会改变解析结果（例如 BRIDGE_MODE=gateway），
   // 清掉才可复现；BRIDGE_HOME 指到临时目录，绝不碰真实家目录。
-  const env: NodeJS.ProcessEnv = { ...process.env, BRIDGE_HOME: home }
+  const env: NodeJS.ProcessEnv = {
+    ...process.env,
+    HOME: home,
+    USERPROFILE: home,
+    CLAUDE_CONFIG_DIR: home,
+    XDG_CONFIG_HOME: home,
+    BRIDGE_HOME: home,
+  }
   for (const key of Object.keys(env)) {
     if (key !== 'BRIDGE_HOME' && (key.startsWith('BRIDGE_') || key.startsWith('UPSTREAM_'))) delete env[key]
   }
@@ -172,6 +179,15 @@ test('--json 只管错误：成功路径的 stdout 照旧、stderr 空着', asyn
   assert.equal(code, 0)
   assert.match(stdout, /^Usage:/m)
   assert.equal(stderr, '', '没有错误就不该出现信封')
+})
+
+test('未配置时 fo client 必须返回 config 错误，而不是打印失败后退出 0', async () => {
+  const result = await runCli(['client', '--json'])
+  assert.equal(result.code, 4)
+  assert.equal(result.stdout, '')
+  const error = JSON.parse(result.stderr).error
+  assert.equal(error.type, 'config')
+  assert.equal(error.subtype, 'settings_missing')
 })
 
 test('--version / -v：版本号一行走 stdout、退出码 0，且只有 package.json 一处真值', async () => {

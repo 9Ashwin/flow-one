@@ -35,6 +35,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { bridgeHome, credentialFile } from "./home.js";
+import { resolveToolIndex } from "./anthropic.js";
 import { readStore, saveCredential } from "./auth.js";
 const BASE62 = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz';
 /** Gate tool names: the server recognises the official client shape by these four names. */
@@ -355,6 +356,7 @@ export function applyFreeTierGate(body) {
  */
 export async function* restoreToolCalls(chunks, { rename, stubs }) {
     const dropped = new Set();
+    const seen = new Map();
     for await (const chunk of chunks) {
         const record = (chunk !== null && typeof chunk === 'object' ? chunk : {});
         const choices = Array.isArray(record.choices) ? record.choices : undefined;
@@ -368,9 +370,21 @@ export async function* restoreToolCalls(chunks, { rename, stubs }) {
             const calls = delta.tool_calls;
             if (!Array.isArray(calls) || calls.length === 0)
                 return choice;
+            if (calls.filter(call => call !== null && typeof call === 'object' && !Number.isInteger(call.index) && !call.id)
+                .length > 1)
+                throw new Error('upstream tool fragments cannot be matched to parallel calls');
             const kept = [];
             for (const call of calls) {
-                const index = Number.isInteger(call?.index) ? call.index : 0;
+                if (call === null || typeof call !== 'object')
+                    continue;
+                const index = resolveToolIndex(call, [...seen.entries()]);
+                const slot = seen.get(index) ?? { id: '' };
+                if (typeof call.id === 'string' && call.id !== '') {
+                    if (slot.id !== '' && slot.id !== call.id)
+                        throw new Error('upstream tool index changed identity');
+                    slot.id = call.id;
+                }
+                seen.set(index, slot);
                 if (dropped.has(index)) {
                     touched = true;
                     continue;
@@ -383,11 +397,13 @@ export async function* restoreToolCalls(chunks, { rename, stubs }) {
                 }
                 const original = typeof name === 'string' ? rename.get(name.toLowerCase()) : undefined;
                 if (original === undefined) {
-                    kept.push(call);
+                    kept.push(Number.isInteger(call.index) ? call : { ...call, index });
+                    if (!Number.isInteger(call.index))
+                        touched = true;
                     continue;
                 }
                 touched = true;
-                kept.push({ ...call, function: { ...call.function, name: original } });
+                kept.push({ ...call, index, function: { ...call.function, name: original } });
             }
             return touched ? { ...choice, delta: { ...delta, tool_calls: kept.length === 0 ? [] : kept } } : choice;
         });
