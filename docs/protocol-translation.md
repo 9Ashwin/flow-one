@@ -40,6 +40,12 @@ upstreams differ on whether they care.
 the OpenAI shape; some upstreams reject it with a 400. The translation drops the
 tool definitions in that case, keeping the `none` choice.
 
+Explicit named tools must be declared. On Tencent, `required` is forwarded
+(International was measured to accept it on 2026-10-27); named selection is
+rejected before sending because International rejected it. Auto mode can move
+to a source that supports named selection. The China edition was quota-limited
+on the probe date, so `required` there remains unverified.
+
 ### Thinking budget → effort
 
 `thinking.budget_tokens` is mapped to `reasoning_effort`, not forwarded:
@@ -59,12 +65,11 @@ Getting these boundaries wrong shifts every level up by one, which is what the
 
 ### Images
 
-Image blocks become `image_url` parts (base64 or URL source). When the resolved
-model is known **not** to accept image input, the block degrades to a text
-placeholder instead: an upstream rejects the whole request with a 400 when an
-`image_url` part is present, and losing the turn is worse than losing the image.
-Unknown capability means "assume it works" — degrading a capable model silently
-loses information.
+Image blocks become `image_url` parts (base64 or URL source). The server waits
+for model metadata when it can; a model known not to support images is skipped
+in auto mode, or rejected with HTTP 400 when explicitly selected. Unknown
+capability means "assume it works" so stale metadata does not silently discard
+images.
 
 ## Response direction
 
@@ -103,9 +108,10 @@ wins:
 
 The cache fields are written **only when the upstream reported them**: Anthropic
 uses `null` for "not applicable", and a literal `0` reads as "caching exists but
-never hit". An upstream that reports more cached tokens than `prompt_tokens` is
-clamped rather than rejected — one miscalibrated usage block should not turn a
-whole turn into a 500.
+never hit". When the upstream's total proves that cached tokens are reported outside
+`prompt_tokens`, the translator preserves that exclusive convention. Otherwise,
+inconsistent cache counters are clamped rather than turning a whole turn into a
+500. Both streaming and non-streaming paths merge partial usage chunks.
 
 Every upstream request sets `stream_options.include_usage`, including when the
 client requests a non-streaming response: the bridge still streams from upstream

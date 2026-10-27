@@ -140,3 +140,20 @@ test('推理档位：客户端要的档位不在模型表里时就近归一化�
   assert.equal(nearestEffort('medium', []), 'medium')
   assert.equal(nearestEffort('medium', undefined), 'medium')
 })
+
+test('Tencent required tool choice is forwarded and named choice is rejected explicitly', async () => {
+  const { toBuddyBody, chat } = await import('../src/buddy.ts')
+  const body = {
+    messages: [{ role: 'user', content: 'hi' }],
+    tools: [{ type: 'function' as const, function: { name: 'Read', parameters: { type: 'object' } } }],
+    tool_choice: 'required',
+  }
+  assert.equal(toBuddyBody(body, { model: 'test' }).tool_choice, 'required')
+  const named = await chat(
+    CN,
+    { ...body, tool_choice: { type: 'function', function: { name: 'Read' } } },
+    { model: 'test', file: path.join(os.tmpdir(), 'fo-no-credentials-needed') },
+  )
+  assert.equal(named.ok, false)
+  if (!named.ok) assert.equal(named.status, 400)
+})

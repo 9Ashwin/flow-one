@@ -112,29 +112,27 @@ export function createDirectUpstream(
   }
 
   async function loadAll(): Promise<UpstreamModel[]> {
-    const rows: UpstreamModel[] = []
-    for (const product of products) {
-      try {
-        // The free tier needs no credential — the right shape is enough; the two
-        // Tencent lines must log in first.
-        const models =
-          product.kind === 'openai'
-            ? await opencodeListModels(product)
-            : await buddyListModels(product, await ensureCredential(product, { log, file: config.credentialFile }), {
-                log,
-              })
-        for (const model of models) {
-          meta.set(`${product.id}/${model.id}`, model)
-          // The prefix must be applied after the spread: the bare `id` inside
-          // `...model` would otherwise overwrite the prefixed one.
-          rows.push({ ...model, id: `${product.id}/${model.id}`, name: model.name ?? model.id, product: product.id })
+    const groups = await Promise.all(
+      products.map(async product => {
+        try {
+          const models =
+            product.kind === 'openai'
+              ? await opencodeListModels(product)
+              : await buddyListModels(product, await ensureCredential(product, { log, file: config.credentialFile }), {
+                  log,
+                })
+          return models.map(model => {
+            meta.set(`${product.id}/${model.id}`, model)
+            return { ...model, id: `${product.id}/${model.id}`, name: model.name ?? model.id, product: product.id }
+          })
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error)
+          log(`${product.label}: model catalogue unavailable — ${message}`)
+          return []
         }
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error)
-        log(`${product.label}: model catalogue unavailable — ${message}`)
-      }
-    }
-    return rows
+      }),
+    )
+    return groups.flat()
   }
 
   async function loadModels(): Promise<UpstreamModel[]> {

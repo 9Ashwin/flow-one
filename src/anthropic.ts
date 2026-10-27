@@ -310,6 +310,13 @@ export function toOpenAiRequest(
       },
     }))
 
+  if (isObject(request.tool_choice) && request.tool_choice.type === 'tool') {
+    const name = request.tool_choice.name
+    if (typeof name !== 'string' || name === '' || !tools.some(tool => tool.function.name === name))
+      return { error: 'tool_choice names an undeclared tool' }
+  }
+  if (isObject(request.tool_choice) && request.tool_choice.type === 'any' && tools.length === 0)
+    return { error: 'tool_choice any requires at least one tool' }
   // The upstream treats "tool_choice: none together with tools" as inexpressible and
   // rejects it with a 400, so the tools are dropped here instead.
   const choice = toolChoiceFor(request.tool_choice, tools.length > 0)
@@ -412,9 +419,9 @@ export function estimateInputTokens(request: unknown): number {
  * | cache read | `prompt_tokens_details.cached_tokens` (OpenAI / vLLM / Gemini compat layer), `prompt_cache_hit_tokens` (DeepSeek), `cached_tokens` (Moonshot) |
  * | cache write | `prompt_tokens_details.cache_creation_input_tokens`, `prompt_tokens_details.cache_write_tokens` (OpenRouter) |
  *
- * An upstream that reports more cached tokens than `prompt_tokens` is not an
- * error: the counts are clamped, because one miscalibrated usage block should
- * not turn a whole turn into a 500.
+ * Some gateways report cache buckets outside `prompt_tokens`. When `total_tokens`
+ * proves that convention, preserve all buckets; otherwise use the OpenAI inclusive
+ * convention and clamp inconsistent counters rather than failing the turn.
  */
 function anthropicUsageFrom(
   openAiUsage: unknown,
@@ -430,30 +437,50 @@ function anthropicUsageFrom(
   const prompt = pick(usage.prompt_tokens)
   const cacheRead = pick(details.cached_tokens, usage.prompt_cache_hit_tokens, usage.cached_tokens)
   const cacheWrite = pick(details.cache_creation_input_tokens, details.cache_write_tokens)
-  const output = pick(usage.completion_tokens) ?? fallback.outputTokens
+  const reportedOutput = pick(usage.completion_tokens)
+  const output = reportedOutput ?? fallback.outputTokens
+  const total = pick(usage.total_tokens)
+  const buckets = (cacheRead ?? 0) + (cacheWrite ?? 0)
+  const exclusive =
+    prompt !== undefined &&
+    reportedOutput !== undefined &&
+    total !== undefined &&
+    buckets > 0 &&
+    prompt + reportedOutput + buckets === total &&
+    prompt + reportedOutput !== total
   const reasoning = pick(
     isObject(usage.completion_tokens_details) ? usage.completion_tokens_details.reasoning_tokens : undefined,
   )
 
   const result: AnthropicUsage = {
     input_tokens:
-      prompt === undefined
-        ? (fallback.inputTokens ?? 0)
-        : prompt - Math.min(prompt, (cacheRead ?? 0) + (cacheWrite ?? 0)),
+      prompt === undefined ? (fallback.inputTokens ?? 0) : exclusive ? prompt : prompt - Math.min(prompt, buckets),
     output_tokens: output ?? 0,
   }
   // The cache fields are written only when the upstream reported them: Anthropic uses
   // `null` for "not applicable", and a literal 0 would read as "caching exists but
   // never hit".
-  if (cacheRead !== undefined) result.cache_read_input_tokens = Math.min(cacheRead, prompt ?? cacheRead)
+  if (cacheRead !== undefined)
+    result.cache_read_input_tokens = exclusive ? cacheRead : Math.min(cacheRead, prompt ?? cacheRead)
   if (cacheWrite !== undefined) {
     // Read and write are disjoint input buckets; together they cannot exceed the
     // upstream's total even if its counters are inconsistent.
-    const remaining = prompt === undefined ? cacheWrite : Math.max(0, prompt - (result.cache_read_input_tokens ?? 0))
+    const remaining =
+      exclusive || prompt === undefined ? cacheWrite : Math.max(0, prompt - (result.cache_read_input_tokens ?? 0))
     result.cache_creation_input_tokens = Math.min(cacheWrite, remaining)
   }
   if (reasoning !== undefined) result.output_tokens_details = { thinking_tokens: reasoning }
   return result
+}
+
+function mergeUsageFields(existing: Record<string, unknown>, incoming: unknown): Record<string, unknown> {
+  if (!isObject(incoming)) return existing
+  const merged = { ...existing }
+  for (const [key, value] of Object.entries(incoming)) {
+    if (value === undefined || value === null) continue
+    merged[key] = isObject(value) ? mergeUsageFields(isObject(merged[key]) ? merged[key] : {}, value) : value
+  }
+  return merged
 }
 
 /** OpenAI chunk → accumulated outcome. Streaming and non-streaming share this fold. */
@@ -463,7 +490,7 @@ export function createOutcome(): Outcome {
 
 export function foldChunk(outcome: Outcome, chunk: unknown): void {
   if (!isObject(chunk)) return
-  if (isObject(chunk.usage)) outcome.usage = chunk.usage
+  if (isObject(chunk.usage)) outcome.usage = mergeUsageFields(isObject(outcome.usage) ? outcome.usage : {}, chunk.usage)
   if (isObject(chunk.error)) {
     outcome.error = typeof chunk.error.message === 'string' ? chunk.error.message : JSON.stringify(chunk.error)
     return
@@ -632,13 +659,7 @@ export function createStreamTranslator({
   const usageNow = (): AnthropicUsage => anthropicUsageFrom(upstreamUsage, { inputTokens, outputTokens: 0 })
 
   function mergeUsage(incoming: unknown): void {
-    if (!isObject(incoming)) return
-    for (const [key, value] of Object.entries(incoming)) {
-      if (value === undefined || value === null) continue
-      upstreamUsage[key] = isObject(value)
-        ? { ...(isObject(upstreamUsage[key]) ? (upstreamUsage[key] as Record<string, unknown>) : {}), ...value }
-        : value
-    }
+    Object.assign(upstreamUsage, mergeUsageFields(upstreamUsage, incoming))
   }
 
   function start() {
@@ -890,7 +911,11 @@ export function createStreamTranslator({
     },
     get upstreamInputTokens(): number | undefined {
       const value = upstreamUsage.prompt_tokens
-      return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : undefined
+      return typeof value === 'number' && Number.isFinite(value) && value >= 0
+        ? usageNow().input_tokens +
+            (usageNow().cache_read_input_tokens ?? 0) +
+            (usageNow().cache_creation_input_tokens ?? 0)
+        : undefined
     },
   }
 }

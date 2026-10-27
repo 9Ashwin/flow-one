@@ -114,13 +114,11 @@ test('默认文本请求不能被清单刷新阻塞，但图片请求仍等待�
     release = resolve
   })
   let calls = 0
-  let lastBody: any
   const upstream: Upstream = {
     describe: () => 'test',
     loadModels: () => catalogue,
-    chat: async body => {
+    chat: async () => {
       calls++
-      lastBody = body
       return {
         ok: true,
         chunks: (async function* () {
@@ -150,9 +148,10 @@ test('默认文本请求不能被清单刷新阻塞，但图片请求仍等待�
   await new Promise(resolve => setTimeout(resolve, 50))
   assert.equal(calls, 1, '图片需要等到模型能力已知')
   release([{ id: 'default', supportsImages: false }])
-  assert.equal((await image).status, 200)
-  assert.equal(calls, 2)
-  assert.match(lastBody.messages[0].content, /image omitted/)
+  const unsupported = await image
+  assert.equal(unsupported.status, 400)
+  assert.match(await unsupported.text(), /does not support image input/)
+  assert.equal(calls, 1)
 })
 
 test('腾讯模型冷启动仍等待元数据，不能丢失输出上限和推理档位', { timeout: 5000 }, async t => {

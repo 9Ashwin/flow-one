@@ -30,7 +30,8 @@ fo serve --model auto --fallback intl/model-a,cn/model-b,ocg/model-c
 ```
 
 Fallback happens only on a definite HTTP 429, authentication rejection, or a
-recognized quota rejection, or an explicit model-unavailable rejection before generated output. Tencent may send a quota
+recognized quota rejection, an explicit model-unavailable rejection, or a
+known unsupported named-tool choice before generated output. Tencent may send a quota
 error in the first SSE frames even with HTTP 200; metadata is buffered until
 output starts, then forwarded normally. Once output has started, the bridge
 surfaces any later error instead of replaying the request and risking duplicate

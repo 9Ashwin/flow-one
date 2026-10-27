@@ -282,12 +282,12 @@ export function createBridgeServer({
     // name only costs a wasted fallback lookup, so it is removed here.
     const raw = typeof requested === 'string' ? requested.trim().replace(/\[[^\]]*\]$/, '') : ''
     const wanted = raw
+    if (wanted !== '' && Object.hasOwn(config.modelMap, wanted)) return config.modelMap[wanted]
     if (
       config.fallbackModels?.length &&
       (wanted === 'auto' || ((wanted === '' || /^claude-/i.test(wanted)) && config.model === 'auto'))
     )
       return 'auto'
-    if (wanted !== '' && Object.hasOwn(config.modelMap, wanted)) return config.modelMap[wanted]
     if (
       config.fallbackModels?.length &&
       wanted.includes('/') &&
@@ -369,6 +369,8 @@ export function createBridgeServer({
     if (controller.signal.aborted) return
     const candidates =
       requestedModel === 'auto' && config.fallbackModels?.length ? config.fallbackModels : [requestedModel]
+    if (hasImages && (known.size === 0 || Date.now() - modelsFetchedAt > MODEL_TTL_MS)) await refreshModels()
+    if (controller.signal.aborted) return
     const wantsStream = isObject(body) ? body.stream === true : false
     const id = `msg_${crypto.randomBytes(12).toString('hex')}`
     const attempts: Array<{ upstream: string; status?: number; message: string }> = []
@@ -415,7 +417,7 @@ export function createBridgeServer({
         continue
       }
       if (until > 0) fallbackCooldown.delete(model)
-      if (candidates.length > 1 && hasImages && !supportsImagesFor(model)) {
+      if (hasImages && !supportsImagesFor(model)) {
         result = { ok: false, status: 400, message: 'model does not support image input' }
         attempts.push({ upstream: model, status: 400, message: result.message })
         continue
@@ -512,7 +514,9 @@ export function createBridgeServer({
         /unknown model|no such model|model.{0,80}(not available|unavailable|not found|does not exist|unsupported|not supported)/i.test(
           result.message,
         )
-      const retryable = limited || unavailable
+      const unsupportedToolChoice =
+        result.status === 400 && result.message.includes('named tool choice is not supported by this source')
+      const retryable = limited || unavailable || unsupportedToolChoice
       if (candidates.length > 1 && limited && result.status !== 401) {
         const seconds = Number(result.retryAfter)
         const date = result.retryAfter === undefined ? NaN : Date.parse(result.retryAfter)
@@ -608,7 +612,7 @@ export function createBridgeServer({
       }
       json(res, 200, message)
       log(
-        `${reqId} model=${model} stream=0 ms=${Date.now() - started} first_chunk_ms=${firstByteAt === undefined ? '-' : firstByteAt - started} ttft=${firstOutputAt === undefined ? '-' : firstOutputAt - started} out=${outcome.text.length} ${cacheLog(message.usage, isObject(outcome.usage) ? outcome.usage.prompt_tokens : undefined)}`,
+        `${reqId} model=${model} stream=0 ms=${Date.now() - started} first_chunk_ms=${firstByteAt === undefined ? '-' : firstByteAt - started} ttft=${firstOutputAt === undefined ? '-' : firstOutputAt - started} out=${outcome.text.length} ${cacheLog(message.usage, isObject(outcome.usage) && typeof outcome.usage.prompt_tokens === 'number' ? message.usage.input_tokens + (message.usage.cache_read_input_tokens ?? 0) + (message.usage.cache_creation_input_tokens ?? 0) : undefined)}`,
       )
       return
     }

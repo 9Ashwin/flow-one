@@ -347,3 +347,101 @@ test('numeric quota SSE codes trigger fallback even when the upstream omits a me
   assert.match(await response.text(), /success/)
   assert.equal(attempts, 2)
 })
+
+test('explicit Claude model mappings take priority over auto routing', async t => {
+  const seen: string[] = []
+  const upstream: Upstream = {
+    describe: () => 'test',
+    loadModels: async () => [],
+    chat: async body => {
+      seen.push(body.model ?? '')
+      return ok()
+    },
+  }
+  const bridge = createBridgeServer({ config: { ...config, modelMap: { 'claude-special': 'ocg/custom' } }, upstream })
+  const address = (await bridge.listen()) as AddressInfo
+  t.after(() => bridge.close())
+  const response = await fetch(`http://127.0.0.1:${address.port}/v1/messages`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ ...requestBody, model: 'claude-special' }),
+  })
+  assert.equal(response.status, 200)
+  await response.text()
+  assert.deepEqual(seen, ['ocg/custom'])
+})
+
+test('named tool choice skips unsupported Tencent candidates and reaches Go unchanged', async t => {
+  const seen: OpenAiRequestBody[] = []
+  const { url } = await bridgeWith(t, async body => {
+    seen.push(body)
+    return body.model?.startsWith('ocg/')
+      ? ok()
+      : { ok: false, status: 400, message: 'named tool choice is not supported by this source' }
+  })
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      ...requestBody,
+      tools: [{ name: 'Read', input_schema: { type: 'object' } }],
+      tool_choice: { type: 'tool', name: 'Read' },
+    }),
+  })
+  assert.equal(response.status, 200)
+  await response.text()
+  assert.deepEqual(
+    seen.map(body => body.model),
+    candidates,
+  )
+  assert.deepEqual(seen[2].tool_choice, { type: 'function', function: { name: 'Read' } })
+})
+
+test('image requests wait for candidate metadata and skip models that cannot read images', async t => {
+  const seen: OpenAiRequestBody[] = []
+  let release: (rows: import('../src/types.ts').UpstreamModel[]) => void = () => {}
+  const catalogue = new Promise<import('../src/types.ts').UpstreamModel[]>(resolve => {
+    release = resolve
+  })
+  const upstream: Upstream = {
+    describe: () => 'test',
+    loadModels: () => catalogue,
+    chat: async body => {
+      seen.push(body)
+      return ok()
+    },
+  }
+  const bridge = createBridgeServer({ config, upstream })
+  const address = (await bridge.listen()) as AddressInfo
+  t.after(() => {
+    release([])
+    return bridge.close()
+  })
+  const pending = fetch(`http://127.0.0.1:${address.port}/v1/messages`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      model: 'auto',
+      messages: [
+        {
+          role: 'user',
+          content: [{ type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'AAAA' } }],
+        },
+      ],
+    }),
+  })
+  await new Promise(resolve => setTimeout(resolve, 30))
+  assert.equal(seen.length, 0)
+  release([
+    { id: 'intl/test', supportsImages: false },
+    { id: 'cn/test', supportsImages: true },
+  ])
+  const response = await pending
+  assert.equal(response.status, 200)
+  await response.text()
+  assert.deepEqual(
+    seen.map(item => item.model),
+    ['cn/test'],
+  )
+  assert.ok(JSON.stringify(seen[0].messages).includes('data:image/png;base64,AAAA'))
+})

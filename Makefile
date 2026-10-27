@@ -10,8 +10,8 @@
 # intended split: installing this package must not pull a build toolchain, so
 # `node cli.ts` and `make test` stay dependency-free.
 #
-# The source is TypeScript and is executed directly: Node 22.18+ strips the
-# types, so there is no build step and no dist/ directory. `tsc` only checks.
+# Development executes TypeScript directly. `make build` produces the committed
+# JavaScript snapshot installed from GitHub; `make types` only checks.
 
 NODE   ?= node
 SOURCES := $(wildcard cli.ts src/*.ts scripts/*.ts test/*.ts)

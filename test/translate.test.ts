@@ -683,3 +683,62 @@ test('Anthropic fast mode 转成上游的 priority 通道（2026-10-27 实测 oc
   const plain = toOpenAiRequest({ messages: [{ role: 'user', content: 'hi' }] }, { model: 'm' })
   assert.equal(plain.body?.service_tier, undefined, '没说要快就别加')
 })
+
+test('non-streaming usage must retain input and cache across partial chunks', () => {
+  const outcome = outcomeOf()
+  foldChunk(outcome, { usage: { prompt_tokens: 100, prompt_tokens_details: { cached_tokens: 80 } }, choices: [] })
+  foldChunk(outcome, {
+    usage: { completion_tokens: 5, prompt_tokens_details: { cached_tokens: null } },
+    choices: [{ delta: { content: 'ok' }, finish_reason: 'stop' }],
+  })
+  const usage = anthropicMessageOf(outcome, { model: 'test', id: 'msg', inputTokens: 25 }).usage
+  assert.equal(usage.input_tokens, 20)
+  assert.equal(usage.cache_read_input_tokens, 80)
+  assert.equal(usage.output_tokens, 5)
+})
+
+test('exclusive cache counts must be retained when total_tokens proves the convention', () => {
+  const outcome = outcomeOf()
+  foldChunk(outcome, {
+    choices: [{ delta: { content: 'ok' }, finish_reason: 'stop' }],
+    usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 105, prompt_tokens_details: { cached_tokens: 90 } },
+  })
+  const usage = anthropicMessageOf(outcome, { model: 'test', id: 'msg' }).usage
+  assert.equal(usage.input_tokens, 10)
+  assert.equal(usage.cache_read_input_tokens, 90)
+  assert.equal(usage.output_tokens, 5)
+})
+
+test('named or required tool choices reject undeclared or missing tools', () => {
+  const messages = [{ role: 'user', content: 'hi' }]
+  assert.match(
+    toOpenAiRequest({
+      messages,
+      tools: [{ name: 'Read', input_schema: {} }],
+      tool_choice: { type: 'tool', name: 'Write' },
+    }).error ?? '',
+    /undeclared tool/,
+  )
+  assert.match(toOpenAiRequest({ messages, tool_choice: { type: 'any' } }).error ?? '', /requires at least one tool/)
+})
+
+test('streaming exclusive cache usage reports normalized input total for diagnostics', () => {
+  const frames: string[] = []
+  const stream = createStreamTranslator({
+    model: 'test',
+    id: 'msg',
+    inputTokens: 25,
+    write: frame => frames.push(frame),
+  })
+  stream.begin()
+  stream.push({ choices: [], usage: { prompt_tokens: 10, prompt_tokens_details: { cached_tokens: 90 } } })
+  stream.push({
+    choices: [{ delta: { content: 'ok' }, finish_reason: 'stop' }],
+    usage: { completion_tokens: 5, total_tokens: 105, prompt_tokens_details: { cached_tokens: null } },
+  })
+  stream.end()
+  assert.equal(stream.usage.input_tokens, 10)
+  assert.equal(stream.usage.cache_read_input_tokens, 90)
+  assert.equal(stream.upstreamInputTokens, 100)
+  assert.ok(frames.some(frame => frame.includes('"cache_read_input_tokens":90')))
+})

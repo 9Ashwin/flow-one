@@ -144,8 +144,8 @@ unchanged**. Any change to this path must come with a regression test.
 - Always use `path.join` + `os.homedir()` for paths; never hard-code platform paths.
 - Platform-specific assertions go in separate files or are skipped via `process.platform`;
   shared test cases must never actually touch the local launchd/systemd.
-- Verify by hand on both macOS and Linux (there is no CI to do it; testing one side is the same
-  as testing neither).
+- Verify by hand on both macOS and Linux; CI is a backstop, not a substitute for
+  real-machine verification.
 
 ## 6. Never ask the same question twice
 
@@ -166,8 +166,9 @@ before the rename is still running".
 - Test cases **must not touch the real home directory**: always point `BRIDGE_HOME` (and
   `HOME` / `CLAUDE_CONFIG_DIR` when necessary) at a temporary directory created by
   `fs.mkdtempSync`; they must never actually invoke launchd/systemd.
-- Run `make verify` before committing (= `make build` + `make check` + `make test`). **There is no CI
-  backstop** (the repository has no `.github/workflows`), so the gates can only be run by hand.
+- Run `make verify` before committing (= `make build` + `make check` + `make test`). The GitHub
+  Actions matrix also checks macOS, Linux and Windows, Node 22.18 / 24, the committed distribution
+  snapshot and an isolated npm global installation.
 - `make check` is types (`tsc --noEmit`) + lint (ESLint) + formatting (Prettier) + module
   contracts. It needs `npm install` once for the dev toolchain; `make test` does not.
 - Lint findings are graded on purpose: dead bindings are **warnings** (see §1 — point out, do

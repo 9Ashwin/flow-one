@@ -70,37 +70,52 @@ export const OPENCODE = {
  * makes it compact at 1M and then hit the model's real limit.
  */
 let capabilityCache = { at: 0, byId: new Map() };
+let capabilityLoading;
 async function opencodeCapabilities({ signal } = {}) {
     const now = Date.now();
     const ttl = OPENCODE.modelsDevTtlMs ?? 0;
     if (now - capabilityCache.at < ttl && capabilityCache.byId.size > 0)
         return capabilityCache.byId;
-    try {
-        const response = await fetch(OPENCODE.modelsDevUrl ?? '', { signal: signal ?? AbortSignal.timeout(20_000) });
-        if (!response.ok)
-            return capabilityCache.byId;
-        const payload = (await response.json());
-        const opencode = payload.opencode;
-        const models = opencode?.models;
-        if (models === null || typeof models !== 'object')
-            return capabilityCache.byId;
-        const byId = new Map();
-        for (const [id, entry] of Object.entries(models)) {
-            const meta = (entry !== null && typeof entry === 'object' ? entry : {});
-            const limit = (meta.limit !== null && typeof meta.limit === 'object' ? meta.limit : {});
-            byId.set(id, {
-                ...(typeof limit.context === 'number' ? { contextWindow: limit.context } : {}),
-                ...(typeof limit.output === 'number' ? { maxOutputTokens: limit.output } : {}),
-                ...(meta.attachment === true ? { supportsImages: true } : {}),
-                ...(typeof meta.name === 'string' && meta.name !== '' ? { name: meta.name } : {}),
-            });
+    if (signal === undefined && capabilityLoading !== undefined)
+        return capabilityLoading;
+    const load = (async () => {
+        try {
+            const response = await fetch(OPENCODE.modelsDevUrl ?? '', { signal: signal ?? AbortSignal.timeout(20_000) });
+            if (!response.ok)
+                return capabilityCache.byId;
+            const payload = (await response.json());
+            const opencode = payload.opencode;
+            const models = opencode?.models;
+            if (models === null || typeof models !== 'object')
+                return capabilityCache.byId;
+            const byId = new Map();
+            for (const [id, entry] of Object.entries(models)) {
+                const meta = (entry !== null && typeof entry === 'object' ? entry : {});
+                const limit = (meta.limit !== null && typeof meta.limit === 'object' ? meta.limit : {});
+                byId.set(id, {
+                    ...(typeof limit.context === 'number' ? { contextWindow: limit.context } : {}),
+                    ...(typeof limit.output === 'number' ? { maxOutputTokens: limit.output } : {}),
+                    ...(meta.attachment === true ? { supportsImages: true } : {}),
+                    ...(typeof meta.name === 'string' && meta.name !== '' ? { name: meta.name } : {}),
+                });
+            }
+            capabilityCache = { at: now, byId };
         }
-        capabilityCache = { at: now, byId };
+        catch {
+            /* falling back to "no metadata", which is what keeps the [1m] suffix off */
+        }
+        return capabilityCache.byId;
+    })();
+    if (signal !== undefined)
+        return load;
+    capabilityLoading = load;
+    try {
+        return await load;
     }
-    catch {
-        /* falling back to "no metadata", which is what keeps the [1m] suffix off */
+    finally {
+        if (capabilityLoading === load)
+            capabilityLoading = undefined;
     }
-    return capabilityCache.byId;
 }
 /**
  * The Go plan (paid / subscription): **not the same path** as the free tier.

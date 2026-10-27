@@ -214,18 +214,19 @@ export function parseModels(body) {
     return parsed;
 }
 /**
- * Fetch the model catalogue: the enterprise endpoint (richest metadata) first,
- * falling back to `/v3/config` when it is empty or fails, and only using the
- * product's static list when both are unavailable.
+ * Fetch both model catalogues concurrently, keeping enterprise entries first and
+ * filling gaps from `/v3/config`; use the static list when neither is available.
  */
 export async function listModels(product, credential, { signal, log = () => { } } = {}) {
     const headers = headersFor(product, credential);
-    const scoped = await getJson(`${product.endpoint}/console/enterprises/${ENTERPRISE_SCOPE}/models`, headers, signal)
-        .then(result => (result.status === 200 ? parseModels(result.body) : []))
-        .catch(() => []);
-    const config = await getJson(`${product.endpoint}/v3/config`, headers, signal)
-        .then(result => (result.status === 200 ? parseModels(result.body) : []))
-        .catch(() => []);
+    const [scoped, config] = await Promise.all([
+        getJson(`${product.endpoint}/console/enterprises/${ENTERPRISE_SCOPE}/models`, headers, signal)
+            .then(result => (result.status === 200 ? parseModels(result.body) : []))
+            .catch(() => []),
+        getJson(`${product.endpoint}/v3/config`, headers, signal)
+            .then(result => (result.status === 200 ? parseModels(result.body) : []))
+            .catch(() => []),
+    ]);
     const merged = [...scoped];
     const known = new Set(scoped.map(model => model.id));
     for (const model of config)
@@ -301,9 +302,9 @@ export function cacheKeyFor(messages, model) {
  * Rewrite the bridge's internal OpenAI body into the shape this upstream really
  * accepts.
  *
- * Fields known to be unusable are **dropped** here rather than forwarded: the
- * official client never sends `tool_choice` or `top_p`, and forwarding an
- * unverified parameter only earns a 400.
+ * `top_p` is omitted because it is not in the official client shape. The
+ * `required` tool choice is forwarded after a live International probe; named
+ * tool selection is rejected by `chat` instead of silently weakening it.
  */
 export function toBuddyBody(openAiBody, { meta, model }) {
     const messages = Array.isArray(openAiBody.messages) ? [...openAiBody.messages] : [];
@@ -320,6 +321,10 @@ export function toBuddyBody(openAiBody, { meta, model }) {
     };
     if (Array.isArray(openAiBody.tools) && openAiBody.tools.length > 0)
         body.tools = openAiBody.tools;
+    // Measured 2026-10-27: International accepts and enforces `required`; named
+    // function selection is rejected there, and is rejected explicitly below.
+    if (openAiBody.tool_choice === 'required')
+        body.tool_choice = 'required';
     if (typeof openAiBody.temperature === 'number')
         body.temperature = openAiBody.temperature;
     if (Array.isArray(openAiBody.stop) && openAiBody.stop.length > 0)
@@ -366,6 +371,8 @@ export function toBuddyBody(openAiBody, { meta, model }) {
  * over it is not acceptable.
  */
 export async function chat(product, openAiBody, { model, meta, signal, log = () => { }, file, }) {
+    if (typeof openAiBody.tool_choice === 'object' && openAiBody.tool_choice !== null)
+        return { ok: false, status: 400, message: 'named tool choice is not supported by this source' };
     const wire = toBuddyBody(openAiBody, { meta, model });
     let credential = await ensureCredential(product, { log, signal, file });
     for (let attempt = 0; attempt < 2; attempt++) {
