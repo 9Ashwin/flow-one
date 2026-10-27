@@ -116,20 +116,7 @@ export function validateListenAuth({ host, apiKey }: { host?: string; apiKey?: s
  */
 const GATEWAY_DEFAULT_MODEL = 'workbuddy/deepseek-v4.1-flash'
 
-export const DEFAULT_FALLBACK_MODELS = ['intl/deepseek-v4.1-flash', 'cn/deepseek-v4.1-flash', 'ocg/deepseek-v4.1-flash']
-
-const SUBCOMMANDS = new Set([
-  'auto',
-  'login',
-  'status',
-  'models',
-  'setup',
-  'uninstall',
-  'switch',
-  'use',
-  'doctor',
-  'client',
-])
+const SUBCOMMANDS = new Set(['login', 'status', 'models', 'setup', 'uninstall', 'switch', 'use', 'doctor', 'client'])
 
 /**
  * The data directory location lives in `home.ts` (which imports nothing from this project, to
@@ -164,8 +151,7 @@ Usage:
   flow-one status             show login status
   flow-one models             list available model IDs
   flow-one switch             pick a backend model (keeps the unified entry when available)
-  flow-one auto               configure automatic fallback for Claude Code
-  flow-one use <auto|cn|intl|oc|ocg>  enable fallback or prioritize a configured source
+  flow-one use <cn|intl|oc|ocg>  switch to a configured source
                               when multiple sources are available
   flow-one doctor             self-check: config / login / both gates (really sends requests)
   flow-one setup              interactive one-shot setup (login → pick model → configure the proxy
@@ -179,7 +165,6 @@ Options:
   --host <address>          listen address (default ${DEFAULTS.host})
   --port <port>             listen port (default ${DEFAULTS.port})
   --model <ID>              default model ID; in direct mode the upstream catalogue decides when omitted
-  --fallback <source/model,...> ordered model candidates for auto mode
   --map <A=B,C=D>           explicit map from Claude model name → upstream model ID
   --api-key <KEY>           this bridge's own gate key (no check when omitted, loopback only)
                             setup writes the fixed default flow-one-local on first run and reuses it
@@ -208,7 +193,7 @@ Gateway mode only:
                            $DSH_HOME/openai-gateway/api-key in that order
 
 Environment: BRIDGE_MODE / BRIDGE_PRODUCTS / BRIDGE_HOST / BRIDGE_PORT / BRIDGE_MODEL /
-BRIDGE_API_KEY / BRIDGE_FALLBACK_MODELS / BRIDGE_MODEL_MAP / BRIDGE_MAX_TOKENS_CAP / BRIDGE_SHOW_THINKING /
+BRIDGE_API_KEY / BRIDGE_MODEL_MAP / BRIDGE_MAX_TOKENS_CAP / BRIDGE_SHOW_THINKING /
 BRIDGE_HEARTBEAT_MS / BRIDGE_UPSTREAM_USAGE / BRIDGE_FINGERPRINT_REWRITE / BRIDGE_HOME / UPSTREAM_BASE_URL /
 UPSTREAM_API_KEY
 `
@@ -263,7 +248,6 @@ function resolveSources(names: { name: string; env: boolean }[]): Source[] {
 }
 
 const FLAGS: Record<string, string> = {
-  '--fallback': 'fallbackModels',
   '--mode': 'mode',
   '--host': 'host',
   '--port': 'port',
@@ -317,10 +301,6 @@ export function resolveConfig({
     target[key] =
       key === 'port' || key === 'heartbeatMs' || key === 'upstreamIdleMs' ? Number(value) : String(value).trim()
   }
-  if (String(env.BRIDGE_FALLBACK_MODELS ?? '').trim() !== '')
-    config.fallbackModels = String(env.BRIDGE_FALLBACK_MODELS)
-      .split(',')
-      .map(value => value.trim())
   if (String(env.BRIDGE_MODEL_MAP ?? '').trim() !== '') config.modelMap = parseModelMap(env.BRIDGE_MODEL_MAP)
   if (String(env.BRIDGE_MAX_TOKENS_CAP ?? '').trim() !== '') config.maxTokensCap = Number(env.BRIDGE_MAX_TOKENS_CAP)
   if (env.BRIDGE_SHOW_THINKING !== undefined) config.showThinking = truthy(env.BRIDGE_SHOW_THINKING)
@@ -432,8 +412,6 @@ export function resolveConfig({
       config.fingerprintRewrite = truthy(value)
     } else if (field === 'modelMap') {
       config.modelMap = { ...config.modelMap, ...parseModelMap(value) }
-    } else if (field === 'fallbackModels') {
-      config.fallbackModels = value.split(',').map(item => item.trim())
     } else if (field === 'product' || field === 'products') {
       productNames.push(
         ...String(value)
@@ -475,33 +453,21 @@ export function resolveConfig({
     ).withParam(explicit.has('mode') ? '--mode' : 'BRIDGE_MODE')
   }
   config.products = resolveSources(productNames)
-  if (config.fallbackModels !== undefined) {
-    const fail = explicit.has('fallbackModels') ? validationError : configError
-    const param = explicit.has('fallbackModels') ? '--fallback' : 'BRIDGE_FALLBACK_MODELS'
-    if (
-      config.mode !== 'direct' ||
-      config.fallbackModels.length < 2 ||
-      new Set(config.fallbackModels).size !== config.fallbackModels.length
-    ) {
-      throw fail(
-        SUBTYPES.INVALID_FLAG,
-        'fallback requires at least two distinct direct source/model entries',
-      ).withParam(param)
+  // Existing services can still start after upgrade, but use only their former first candidate.
+  if (config.mode === 'direct' && config.model === 'auto') {
+    const first = env.BRIDGE_FALLBACK_MODELS?.split(',')[0]?.trim()
+    const separator = first?.indexOf('/') ?? -1
+    const source = separator > 0 ? sourceByName(first?.slice(0, separator)) : undefined
+    if (!first || !source || source.id !== first.slice(0, separator) || separator === first.length - 1) {
+      const error = (explicit.has('model') ? validationError : configError)(
+        SUBTYPES.INVALID_MODEL,
+        'the previous automatic route has no valid first model',
+      )
+      if (explicit.has('model')) error.withParam('--model')
+      throw error.withHint('run fo setup or fo use to select a model')
     }
-    for (const id of config.fallbackModels) {
-      const at = id.indexOf('/')
-      const source = at > 0 ? sourceByName(id.slice(0, at)) : undefined
-      if (
-        !source ||
-        source.id !== id.slice(0, at) ||
-        at === id.length - 1 ||
-        id.slice(at + 1).trim() !== id.slice(at + 1)
-      ) {
-        throw fail(SUBTYPES.INVALID_MODEL, `invalid fallback model: ${id}`).withParam(param)
-      }
-      if (!config.products.includes(source)) config.products.push(source)
-    }
-    if (config.model === '') config.model = 'auto'
+    config.model = first
+    if (!config.products.includes(source)) config.products.push(source)
   }
   config.credentialFile = credentialFile(env, home)
   config.home = bridgeHome(env, home)

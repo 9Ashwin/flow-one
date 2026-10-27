@@ -127,7 +127,6 @@ export interface BridgeConfig {
   model: string
   apiKey: string
   modelMap: Record<string, string>
-  fallbackModels?: string[]
   maxTokensCap?: number
   showThinking?: boolean
   heartbeatMs?: number

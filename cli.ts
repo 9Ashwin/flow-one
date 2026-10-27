@@ -30,7 +30,7 @@ import { createBridgeServer } from './src/server.ts'
 import { isInteractive } from './src/prompt.ts'
 import { installService, serviceState } from './src/install.ts'
 import { clientFlow, doctorFlow, mainMenu, setupWizard, statusFlow, switchModel, uninstallFlow } from './src/wizard.ts'
-import { autoFlow, useFlow } from './src/use.ts'
+import { useFlow } from './src/use.ts'
 import type { Config } from './src/config.ts'
 import type { Source, Upstream } from './src/types.ts'
 
@@ -214,7 +214,6 @@ async function commandServe(config: Config, log: (message: string) => void): Pro
             }
           : { BRIDGE_PRODUCTS: config.products.map(product => product.id).join(',') }),
         ...(config.model === '' ? {} : { BRIDGE_MODEL: config.model }),
-        ...(config.fallbackModels === undefined ? {} : { BRIDGE_FALLBACK_MODELS: config.fallbackModels.join(',') }),
       },
     })
     if (!installed.ok) {
@@ -296,7 +295,6 @@ async function main() {
       dshReasoning: config.dshReasoning,
       upstreamUsage: config.upstreamUsage,
     })
-  if (command === 'auto') return await autoFlow(config.fallbackModels)
   if (command === 'uninstall') return await uninstallFlow()
   if (command === 'switch') return await switchModel()
   // Channel switch only: `fo use intl` — an already-configured source switches directly

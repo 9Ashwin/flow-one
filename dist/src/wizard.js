@@ -29,7 +29,7 @@ import { HOME_DIR, LEGACY_HOME_DIR, bridgeHome, legacyHomeInUse } from "./home.j
 import { DEFAULT_DSH_REASONING, DSH_SOURCE_IDS, applyDshConfig, dshCurrentlyManaged, removeDshConfig } from "./dsh.js";
 // The menu's "switch source" entry runs the same flow as `fo use`, just picked with
 // arrow keys when no argument is given
-import { autoFlow, configuredFallbackModels, fallbackContextWindow, updateFallbackModels, useFlow } from "./use.js";
+import { useFlow } from "./use.js";
 import { banner, blank, box, confirm, gray, green, heading, info, input, isInteractive, menu, note, section, select, password, spinner, style, success, warn, fail, dim, yellow, } from "./prompt.js";
 import { SUBTYPES, asBridgeError, configError, renderError, upstreamError, validationError } from "./errors.js";
 const DEFAULT_PORT = 8788;
@@ -181,10 +181,6 @@ async function statusLine() {
     note(`  ${gray('来源')} ${gray(SOURCES.map(source => loggedInLabel(source)).join(' · '))}`);
     const clients = clientChoice();
     note(`  ${gray('代码工具')} ${clients.asked ? labelOfClients(clients.clients) : gray('尚未选择')}`);
-    const installed = readInstallState();
-    const order = (installed.service?.env ?? installed.bridge?.serviceEnv)?.BRIDGE_FALLBACK_MODELS;
-    if (model.replace(/\[[^\]]*\]$/, '') === 'auto' && order)
-        note(`  ${gray('回退顺序')} ${gray(order.split(',').join(' → '))}`);
 }
 /** Log in source by source; skip sources that need no login, and skip ones already logged in unless `force`. */
 export async function ensureLoggedIn(products, { force = false } = {}) {
@@ -452,12 +448,16 @@ export async function clientFlow() {
     const settings = currentSettings();
     const port = record.port ?? Number(new URL(settings.env?.ANTHROPIC_BASE_URL ?? `http://127.0.0.1:${DEFAULT_PORT}`).port);
     const apiKey = record.apiKey ?? settings.env?.ANTHROPIC_AUTH_TOKEN;
-    const model = record.model ?? String(settings.env?.ANTHROPIC_MODEL ?? '').replace(/\[[^\]]*\]$/, '');
+    const recorded = record.model ?? String(settings.env?.ANTHROPIC_MODEL ?? '').replace(/\[[^\]]*\]$/, '');
+    const env = readInstallState().service?.env ?? record.serviceEnv ?? {};
+    const model = recorded === 'auto' ? env.BRIDGE_FALLBACK_MODELS?.split(',')[0]?.trim() || '' : recorded;
+    const last = record.lastModels?.[model.split('/')[0]];
+    const contextWindow = recorded === 'auto' ? (last?.model === model ? last.contextWindow : undefined) : record.contextWindow;
     if (typeof apiKey !== 'string' || apiKey === '' || model === '') {
         throw configError(SUBTYPES.SETTINGS_MISSING, 'the bridge connection has not been configured').withHint('run fo setup first; use --clients none to configure only the bridge');
     }
     heading('接入信息');
-    printConnectionInfo(connectionInfo({ port, apiKey, model, contextWindow: record.contextWindow }));
+    printConnectionInfo(connectionInfo({ port, apiKey, model, contextWindow }));
     blank();
     // Also state which clients we configured for you, so nobody assumes none were
     const managed = [];
@@ -469,9 +469,7 @@ export async function clientFlow() {
         ? '  两个客户端都没配（按你的选择）；上面的信息可以直接填'
         : `  已帮你配：${managed.join('、')}`));
     blank();
-    if (record.serviceEnv?.BRIDGE_FALLBACK_MODELS)
-        info(`回退顺序：${record.serviceEnv.BRIDGE_FALLBACK_MODELS.split(',').join(' → ')}`);
-    info(`前台把桥跑起来：${serveCommand(port, apiKey, model, record.serviceEnv ?? readInstallState().service?.env)}`);
+    info(`前台把桥跑起来：${serveCommand(port, apiKey, model, env)}`);
     blank();
     return 0;
 }
@@ -488,11 +486,9 @@ export async function clientFlow() {
 export function serveCommand(port, apiKey, model, env = {}) {
     const args = ['fo', 'serve', '--port', String(port), '--api-key', apiKey];
     if (model)
-        args.push('--model', model);
+        args.push('--model', model === 'auto' ? env.BRIDGE_FALLBACK_MODELS?.split(',')[0]?.trim() || model : model);
     if (env.BRIDGE_UPSTREAM_USAGE === '0')
         args.push('--no-upstream-usage');
-    if (env.BRIDGE_FALLBACK_MODELS)
-        args.push('--fallback', env.BRIDGE_FALLBACK_MODELS);
     if (env.BRIDGE_MODE === 'gateway') {
         args.push('--mode', 'gateway');
         if (env.UPSTREAM_BASE_URL)
@@ -599,26 +595,8 @@ export async function setupWizard(options = {}) {
     blank();
     section('第 3 步 · 模型');
     const picked = await pickModel(rows);
-    const previous = readInstallState();
-    const previousEnv = previous.service?.env ?? previous.bridge?.serviceEnv ?? {};
-    const configured = previousEnv.BRIDGE_MODE === 'gateway' ? undefined : previousEnv.BRIDGE_FALLBACK_MODELS?.split(',').filter(Boolean);
-    const candidates = chosen === GATEWAY
-        ? []
-        : updateFallbackModels(configured?.length ? configured : configuredFallbackModels(picked.id, previous.bridge?.lastModels), picked.id);
-    const automatic = candidates.length >= 2;
-    const model = automatic ? 'auto' : picked.id;
-    const contextWindow = automatic
-        ? fallbackContextWindow(candidates, previous.bridge?.lastModels, {
-            model: picked.id,
-            contextWindow: picked.contextWindow,
-        })
-        : picked.contextWindow;
-    if (automatic) {
-        serviceEnv.BRIDGE_FALLBACK_MODELS = candidates.join(',');
-        const mounted = (serviceEnv.BRIDGE_PRODUCTS ?? '').split(',').filter(Boolean);
-        serviceEnv.BRIDGE_PRODUCTS = [...new Set([...mounted, ...candidates.map(value => value.split('/')[0])])].join(',');
-        note(dim(`  统一入口 auto，后台顺序：${candidates.join(' → ')}`));
-    }
+    const model = picked.id;
+    const contextWindow = picked.contextWindow;
     serviceEnv.BRIDGE_MODEL = model;
     blank();
     section('第 4 步 · 写入并常驻');
@@ -634,9 +612,6 @@ export async function setupWizard(options = {}) {
         apiKey,
         model,
         contextWindow,
-        ...(automatic
-            ? { source: picked.id.split('/')[0], sourceModel: picked.id, sourceContextWindow: picked.contextWindow }
-            : {}),
         serviceEnv,
     });
     const applied = applyClientConfig({
@@ -752,7 +727,8 @@ export async function switchModel() {
     const record = bridgeRecord();
     const port = record.port ?? Number(new URL(settings.env?.ANTHROPIC_BASE_URL ?? `http://127.0.0.1:${DEFAULT_PORT}`).port);
     const apiKey = bridgeApiKey({ record, settings });
-    const env = installed.service?.env ?? record.serviceEnv ?? {};
+    const env = { ...(installed.service?.env ?? record.serviceEnv ?? {}) };
+    delete env.BRIDGE_FALLBACK_MODELS;
     const upstream = env.BRIDGE_MODE === 'gateway'
         ? createGatewayUpstream({
             upstream: env.UPSTREAM_BASE_URL ?? 'http://127.0.0.1:8326',
@@ -781,16 +757,6 @@ export async function switchModel() {
     });
     const model = chosen;
     const contextWindow = shown.find(row => row.id === chosen)?.contextWindow;
-    const configured = env.BRIDGE_FALLBACK_MODELS?.split(',').filter(Boolean);
-    const candidates = configured?.length ? configured : configuredFallbackModels(model, record.lastModels);
-    if (env.BRIDGE_MODE !== 'gateway' &&
-        record.port !== undefined &&
-        candidates.length >= 2 &&
-        clientConfigIsOurs({ port })) {
-        await autoFlow(updateFallbackModels(candidates, model), { model, contextWindow });
-        success('后台模型已更新，Claude Code 继续使用统一入口 auto');
-        return 0;
-    }
     if (installed.service?.path !== undefined && fs.existsSync(installed.service.path)) {
         const service = await installService({ port, apiKey, env: { ...env, BRIDGE_MODEL: model } });
         if (!service.ok)
@@ -1080,9 +1046,9 @@ export async function mainMenu(options = {}) {
                     items: [
                         // Switching source is first: the most frequent daily action is "switch to
                         // another source and keep working", not reconfiguring.
-                        { key: '1', label: '选择渠道', hint: '选择自动回退或配置优先渠道' },
+                        { key: '1', label: '选择渠道', hint: '切换到该渠道上次使用的模型' },
                         { key: '2', label: '一键配置', hint: '接哪一家 → 选模型 → 写 Claude Code 配置 → 后台常驻' },
-                        { key: '3', label: '配置后台模型', hint: '调整候选模型，保持统一入口' },
+                        { key: '3', label: '切换模型', hint: '选择模型并更新配置' },
                         { key: '4', label: '查看状态', hint: '登录有效期 / 服务 / 文件位置' },
                         { key: 'T', label: '切换代码工具', hint: '记住客户端选择，下次配置时自动使用' },
                     ],

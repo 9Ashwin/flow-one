@@ -98,6 +98,10 @@ client, or auto-start** — those are already configured. It switches to **the m
 last used** (or the recommended order if none is recorded), so switching back and forth does not
 reset you to the default every time.
 
+There is no automatic channel failover: a rejected request is returned to the client. After
+upgrading from an older automatic route, the bridge uses its first configured model until you
+choose a source with `fo use`. Reopen Claude Code after changing its model.
+
 The menu is localized in Chinese; the following is the actual terminal output.
 
 ```

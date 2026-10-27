@@ -42,8 +42,7 @@ tool definitions in that case, keeping the `none` choice.
 
 Explicit named tools must be declared. On Tencent, `required` is forwarded
 (International was measured to accept it on 2026-10-27); named selection is
-rejected before sending because International rejected it. Auto mode can move
-to a source that supports named selection. The China edition was quota-limited
+rejected before sending because International rejected it. The China edition was quota-limited
 on the probe date, so `required` there remains unverified.
 
 ### Thinking budget → effort
@@ -66,8 +65,8 @@ Getting these boundaries wrong shifts every level up by one, which is what the
 ### Images
 
 Image blocks become `image_url` parts (base64 or URL source). The server waits
-for model metadata when it can; a model known not to support images is skipped
-in auto mode, or rejected with HTTP 400 when explicitly selected. Unknown
+for model metadata when it can; a model known not to support images is rejected
+with HTTP 400. Unknown
 capability means "assume it works" so stale metadata does not silently discard
 images.
 

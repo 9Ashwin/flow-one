@@ -20,7 +20,7 @@ import { createBridgeServer } from "./src/server.js";
 import { isInteractive } from "./src/prompt.js";
 import { installService, serviceState } from "./src/install.js";
 import { clientFlow, doctorFlow, mainMenu, setupWizard, statusFlow, switchModel, uninstallFlow } from "./src/wizard.js";
-import { autoFlow, useFlow } from "./src/use.js";
+import { useFlow } from "./src/use.js";
 /**
  * Progress and warnings always go to stderr — stdout carries success data only
  * (AGENTS.md, "output split"). Mixing logs into stdout turns `fo models | jq`
@@ -180,7 +180,6 @@ async function commandServe(config, log) {
                     }
                     : { BRIDGE_PRODUCTS: config.products.map(product => product.id).join(',') }),
                 ...(config.model === '' ? {} : { BRIDGE_MODEL: config.model }),
-                ...(config.fallbackModels === undefined ? {} : { BRIDGE_FALLBACK_MODELS: config.fallbackModels.join(',') }),
             },
         });
         if (!installed.ok) {
@@ -258,8 +257,6 @@ async function main() {
             dshReasoning: config.dshReasoning,
             upstreamUsage: config.upstreamUsage,
         });
-    if (command === 'auto')
-        return await autoFlow(config.fallbackModels);
     if (command === 'uninstall')
         return await uninstallFlow();
     if (command === 'switch')
