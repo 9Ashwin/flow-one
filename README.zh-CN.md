@@ -348,6 +348,11 @@ message_delta → message_stop` 成帧，工具参数走 `input_json_delta`，
 
 ## 已知限制
 
+- **Auto mode 的服务端分类检查关掉了。** 那项检查挂在 Anthropic 形状的请求字段上、结果也从
+  Anthropic 形状的响应里返回；而本桥的上游全是 OpenAI 形状，没有地方可以透传。所以写 Claude
+  Code 配置时会带上 `CLAUDE_CODE_AUTO_MODE_SERVER=0`：auto mode 照常工作，用的仍是 Claude Code
+  自己的分类器请求、计费与以前一样，也不会再弹「this session isn't eligible」。还原配置时这个
+  键会一并删掉。
 - **网关模式依赖那个网关在跑。** 默认指向 DSH 的 `127.0.0.1:8326`，那是桌面应用进程里的
   监听：DSH 关掉，桥就没有上游。要完全独立请用直连模式。
 - **推理默认不渲染给客户端**（只）在 `--thinking` 时输出）。

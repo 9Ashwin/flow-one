@@ -64,6 +64,9 @@ test('写 Claude Code 配置：合并而不是覆盖，写前先备份', async (
   )
   // 不写 modelOverrides：那要靠把自己伪装成 Claude 的模型 ID 才能消诊断，代价太大
   assert.equal(written.modelOverrides, undefined)
+  // 上游全是 OpenAI 形状，拿不到 Anthropic 的服务端检查结果；不关掉的话 Claude Code
+  // 会一直退回自费分类器请求，并弹「this session isn't eligible」。
+  assert.equal(written.env.CLAUDE_CODE_AUTO_MODE_SERVER, '0', '要明确告诉 Claude Code 别在这里要服务端检查')
   assertMode(path.join(home, 'install.json'), 0o600, '账本与凭据同目录，权限不能松')
 })
 

@@ -339,6 +339,15 @@ export function installClaudeSettings(options: {
     ANTHROPIC_DEFAULT_HAIKU_MODEL: sized,
     ANTHROPIC_DEFAULT_SONNET_MODEL: sized,
     ANTHROPIC_DEFAULT_OPUS_MODEL: sized,
+    // Auto mode's server-side classifier review cannot work through this bridge: the
+    // check rides on Anthropic-shaped request fields and comes back in Anthropic-shaped
+    // response fields, and every upstream here speaks the OpenAI wire, so there is
+    // nothing to forward them to. Left alone, Claude Code asks for the server's verdict,
+    // never gets one, and falls back to paying for its own classifier requests — which
+    // is what produces the "this session isn't eligible" notice. Telling Claude Code not
+    // to ask is the documented remedy for a gateway that cannot provide the checks, and
+    // it costs nothing: auto mode still works, billed exactly as before.
+    CLAUDE_CODE_AUTO_MODE_SERVER: '0',
   }
   settings.env = { ...settings.env, ...env }
   // Pin the top-level `model` field as well: which of it and env.ANTHROPIC_MODEL wins is

@@ -384,6 +384,12 @@ third-party clients such as Claude Code can be used (see the disclaimer at the e
 
 ## Known limitations
 
+- **Auto mode's server-side classifier review is off.** That review rides on Anthropic-shaped
+  request fields and answers in Anthropic-shaped response fields; every upstream here speaks the
+  OpenAI wire, so there is nothing to pass them through to. Writing the Claude Code config
+  therefore sets `CLAUDE_CODE_AUTO_MODE_SERVER=0`: auto mode keeps working with Claude Code's own
+  classifier requests, billed exactly as before, and the "this session isn't eligible" notice
+  never appears. Restoring the config removes the key again.
 - **Gateway mode depends on that gateway running.** It points at DSH's `127.0.0.1:8326` by
   default, which is a listener inside the desktop app process: if DSH is closed, the bridge has
   no upstream. Use direct mode for full independence.
