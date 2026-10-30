@@ -49,9 +49,10 @@ export function preferredModel({
     const at = fallback.findIndex(name => bare === name)
     return at === -1 ? fallback.length : at
   }
-  // Free tier first (then recommendation order within the group): ranking OpenCode's free models first is deliberate
-  return [...models].sort((a, b) => (b.free === true ? 1 : 0) - (a.free === true ? 1 : 0) || rank(a.id) - rank(b.id))[0]
-    ?.id
+  const goOnly = models.length > 0 && models.every(model => model.id.startsWith('ocg/'))
+  return [...models].sort(
+    (a, b) => ((b.free === true ? 1 : 0) - (a.free === true ? 1 : 0)) * (goOnly ? -1 : 1) || rank(a.id) - rank(b.id),
+  )[0]?.id
 }
 
 /** Model ID prefix → source id; returns an empty string for an unknown source (the caller reports an error on that). */

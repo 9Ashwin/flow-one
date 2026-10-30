@@ -238,6 +238,7 @@ export async function pickModel(rows) {
     const ranked = rankRows(rows);
     const free = ranked.filter(row => row.free === true);
     const paid = ranked.filter(row => row.free !== true);
+    const goOnly = rows.length > 0 && rows.every(row => row.id.startsWith('ocg/'));
     const toOption = (row, index) => ({
         label: row.id,
         hint: modelHint(row, index === 0 && row.free !== true),
@@ -247,14 +248,26 @@ export async function pickModel(rows) {
         message: '用哪个模型？',
         filterable: true,
         options: [
-            // Free-tier models come first as their own group: see at a glance what costs
-            // nothing, without scrolling through 88 oc models
-            ...(free.length > 0 ? [{ label: `免费模型（${free.length} 个）`, value: '__free__', separator: true }] : []),
-            ...free.map(toOption),
+            ...(goOnly
+                ? []
+                : [
+                    ...(free.length > 0
+                        ? [{ label: `免费模型（${free.length} 个）`, value: '__free__', separator: true }]
+                        : []),
+                    ...free.map(toOption),
+                ]),
             ...(paid.length > 0
                 ? [{ label: `其余模型（${paid.length} 个，按量计费 / 订阅）`, value: '__paid__', separator: true }]
                 : []),
             ...paid.map(toOption),
+            ...(goOnly
+                ? [
+                    ...(free.length > 0
+                        ? [{ label: `免费模型（${free.length} 个）`, value: '__free__', separator: true }]
+                        : []),
+                    ...free.map(toOption),
+                ]
+                : []),
             { label: '手动输入模型 ID', hint: '清单里没有的模型', value: '__manual__' },
         ],
     });
@@ -269,11 +282,11 @@ export async function pickModel(rows) {
     // Return the whole row: the context window decides whether Claude Code gets `[1m]`, so the id alone is not enough
     return ranked.find(row => row.id === picked) ?? { id: picked };
 }
-/** Recommended models first, the rest in remote order. */
-/** Free first, then by recommendation order; within a group keep the order the remote returned. */
+/** Keep free models last for Go, while retaining free-first ordering for other sources. */
 function rankRows(rows) {
+    const goOnly = rows.length > 0 && rows.every(row => row.id.startsWith('ocg/'));
     return [...rows].sort((a, b) => {
-        const free = (b.free === true ? 1 : 0) - (a.free === true ? 1 : 0);
+        const free = ((b.free === true ? 1 : 0) - (a.free === true ? 1 : 0)) * (goOnly ? -1 : 1);
         return free !== 0 ? free : rank(a.id) - rank(b.id);
     });
 }
@@ -747,7 +760,8 @@ export async function switchModel() {
         throw configError(SUBTYPES.NO_SOURCES, 'no models are available').withHint('run fo setup to check the login or upstream');
     }
     const current = String(record.model ?? settings.env?.ANTHROPIC_MODEL ?? '').replace(/\[[^\]]*\]$/, '');
-    const ranked = [...rows].sort((a, b) => rank(a.id) - rank(b.id));
+    const ranked = [...rows].sort((a, b) => Number(a.id.startsWith('ocg/') && a.free === true) - Number(b.id.startsWith('ocg/') && b.free === true) ||
+        rank(a.id) - rank(b.id));
     // Only the first 12 are shown, so the index of the "current model" must be computed on the **truncated** list.
     const shown = ranked.slice(0, 12);
     const chosen = await select({

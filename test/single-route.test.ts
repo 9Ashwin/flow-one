@@ -24,6 +24,10 @@ test('switching back to Go keeps the remembered model instead of choosing an unu
     contextWindow: 1_000_000,
   })
   assert.deepEqual(modelForSource({ source: OPENCODE_GO, rows, lastModels: {} }), {
+    model: 'ocg/deepseek-v4.1-flash',
+    contextWindow: 1_000_000,
+  })
+  assert.deepEqual(modelForSource({ source: OPENCODE_GO, rows, lastModels: { ocg: { model: 'ocg/beam-free' } } }), {
     model: 'ocg/beam-free',
     contextWindow: 500_000,
   })

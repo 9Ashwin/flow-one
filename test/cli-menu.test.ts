@@ -8,6 +8,44 @@ import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import type { AddressInfo } from 'node:net'
 
+test('Go 模型选择器付费模型应排在免费模型之前，其他渠道保留免费优先', { timeout: 5000 }, async t => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'fo-model-order-'))
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }))
+  const env = {
+    ...process.env,
+    HOME: home,
+    USERPROFILE: home,
+    BRIDGE_HOME: home,
+    CLAUDE_CONFIG_DIR: home,
+    XDG_CONFIG_HOME: home,
+  }
+  const prompt = new URL('../src/prompt.ts', import.meta.url).href
+  const wizard = new URL('../src/wizard.ts', import.meta.url).href
+  for (const [source, expected] of [
+    ['ocg', 'paid'],
+    ['oc', 'free'],
+  ] as const) {
+    const script = `
+      import { PassThrough } from 'node:stream';
+      import { setStdinForTest } from ${JSON.stringify(prompt)};
+      import { pickModel } from ${JSON.stringify(wizard)};
+      const input = new PassThrough(); input.isTTY = true; input.setRawMode = () => {};
+      setStdinForTest(input);
+      setTimeout(() => input.emit('keypress', '', { name: 'return' }), 100);
+      const picked = await pickModel([{id: '${source}/free', free: true}, {id: '${source}/paid', free: false}]);
+      console.log('SELECTED=' + picked.id);
+    `
+    const { stdout } = await promisify(execFile)(process.execPath, ['--input-type=module', '-e', script], {
+      env,
+      timeout: 4000,
+    })
+    assert.ok(
+      stdout.indexOf(`${source}/${expected}`) < stdout.indexOf(`${source}/${expected === 'free' ? 'paid' : 'free'}`),
+    )
+    assert.match(stdout, new RegExp(`SELECTED=${source}/${expected}`))
+  }
+})
+
 test('退出主菜单不能启动前台服务，即使服务端口已被占用也应成功退出', { timeout: 5000 }, async t => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'fo-menu-exit-'))
   t.after(() => fs.rmSync(home, { recursive: true, force: true }))
