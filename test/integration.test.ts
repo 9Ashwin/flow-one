@@ -218,6 +218,37 @@ test('transport failure keeps the underlying cause instead of a bare "fetch fail
     logs.some(entry => entry.includes('ECONNRESET')),
     `the log must carry the cause, got: ${JSON.stringify(logs)}`,
   )
+  // 传输失败和上游明确拒绝都可能是 502。日志必须能一眼分开，否则「有时 502」
+  // 永远只能靠猜：带 network=1 的是根本没拿到应答。
+  const line = logs.find(entry => entry.includes('failed status=502'))
+  assert.ok(line, `a transport failure must be logged, got: ${JSON.stringify(logs)}`)
+  assert.match(line, /network=1/)
+})
+
+test('上游明确拒绝的 502 不带 network 标记（同是 502，成因必须可区分）', async t => {
+  const logs: string[] = []
+  const upstream = {
+    name: 'refusing',
+    describe: () => 'refusing',
+    loadModels: async () => [],
+    chat: async () => ({ ok: false, status: 502, message: 'bad gateway from the real upstream' }),
+  } as any
+  const bridge = createBridgeServer({
+    config: baseConfig({ model: 'test' }),
+    upstream,
+    log: (line: string) => logs.push(line),
+  })
+  const address = await bridge.listen()
+  t.after(() => bridge.close())
+  const response = await fetch(`http://127.0.0.1:${address.port}/v1/messages`, {
+    method: 'POST',
+    body: JSON.stringify({ messages: [{ role: 'user', content: 'hi' }] }),
+  })
+  await response.text()
+  assert.equal(response.status, 502)
+  const line = logs.find(entry => entry.includes('failed status=502'))
+  assert.ok(line, `a rejected turn must be logged, got: ${JSON.stringify(logs)}`)
+  assert.doesNotMatch(line, /network=1/)
 })
 
 test('an in-stream failure is logged as failed, not as a normal turn that produced nothing', async t => {

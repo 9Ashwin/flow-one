@@ -130,7 +130,13 @@ function contentParts(
   for (const block of blocks) {
     if (block.type === 'text' && typeof block.text === 'string' && block.text !== '')
       parts.push({ type: 'text', text: block.text })
-    else if (block.type === 'image') {
+    else if (block.type === 'tool_reference') {
+      // Named tool from Claude Code's MCP tool search. OpenAI has no field for it;
+      // rendering the name keeps the model aware the tool exists instead of
+      // leaving the tool result empty.
+      const name = typeof block.tool_name === 'string' ? block.tool_name : ''
+      if (name !== '') parts.push({ type: 'text', text: `[tool available: ${name}]` })
+    } else if (block.type === 'image') {
       if (!supportsImages) {
         parts.push({ type: 'text', text: IMAGE_PLACEHOLDER })
         continue
@@ -255,6 +261,10 @@ export function toOpenAiRequest(
         return { error: 'unsupported image source' }
       if (block.type === 'tool_result' && Array.isArray(block.content)) {
         for (const part of blocksOf(block.content)) {
+          // `tool_reference` (Claude Code hands one to the MCP tool-search result)
+          // names an available tool and carries no output; OpenAI has no equivalent
+          // field for it, so it is dropped here rather than failing the whole turn.
+          if (part.type === 'tool_reference') continue
           if (part.type !== 'text' && part.type !== 'image')
             return { error: `unsupported tool result content: ${String(part.type)}` }
           if (part.type === 'image' && supportsImages && imagePart(part) === undefined)

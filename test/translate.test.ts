@@ -192,6 +192,77 @@ test('Anthropic 请求 → OpenAI 报文：system、块、工具、工具结果'
   assert.deepEqual(body.stop, ['STOP'])
 })
 
+test('tool_result 里的 tool_reference 不能整轮 400：转成可读的工具名提示', () => {
+  // Claude Code（2.1.317 实测）会在 MCP 工具搜索的结果里塞 tool_reference，
+  // 只带 tool_name、没有实际输出。此前白名单只认 text/image，整轮请求被拒成
+  // 400 unsupported tool result content: tool_reference（真机日志里 28 次）。
+  const { body, error } = openAiRequest(
+    {
+      messages: [
+        { role: 'user', content: '看看有哪些 GoLand 工具' },
+        {
+          role: 'assistant',
+          content: [{ type: 'tool_use', id: 'toolu_1', name: 'mcp__goland__search_symbol', input: {} }],
+        },
+        {
+          role: 'user',
+          content: [
+            {
+              type: 'tool_result',
+              tool_use_id: 'toolu_1',
+              content: [
+                { type: 'text', text: '可用工具：' },
+                { type: 'tool_reference', tool_name: 'mcp__goland__git_status' },
+                { type: 'tool_reference', tool_name: 'mcp__goland__get_file_problems' },
+              ],
+            },
+          ],
+        },
+      ],
+    },
+    { model: 'ocg/deepseek-v4.1-flash' },
+  )
+
+  assert.equal(error, undefined)
+  const tool = body.messages.find(message => message.role === 'tool')
+  assert.equal(tool.tool_call_id, 'toolu_1')
+  assert.equal(typeof tool.content, 'string')
+  assert.match(tool.content, /可用工具：/)
+  assert.match(tool.content, /mcp__goland__git_status/)
+  assert.match(tool.content, /mcp__goland__get_file_problems/)
+})
+
+test('tool_reference 缺 tool_name 时整轮照常通过，不能留下空工具结果', () => {
+  const { body, error } = openAiRequest(
+    {
+      messages: [
+        { role: 'assistant', content: [{ type: 'tool_use', id: 'toolu_1', name: 'Read', input: {} }] },
+        {
+          role: 'user',
+          content: [{ type: 'tool_result', tool_use_id: 'toolu_1', content: [{ type: 'tool_reference' }] }],
+        },
+      ],
+    },
+    { model: 'ocg/deepseek-v4.1-flash' },
+  )
+
+  assert.equal(error, undefined)
+  const tool = body.messages.find(message => message.role === 'tool')
+  assert.equal(tool.tool_call_id, 'toolu_1')
+  assert.equal(tool.content, '')
+})
+
+test('未知的 tool_result 内容类型仍然是 400，不能被 tool_reference 的放行带偏', () => {
+  const { error } = openAiRequest(
+    {
+      messages: [{ role: 'user', content: [{ type: 'tool_result', tool_use_id: 'x', content: [{ type: 'bogus' }] }] }],
+    },
+    { model: 'ocg/deepseek-v4.1-flash' },
+  )
+
+  assert.match(error, /unsupported tool result content: bogus/)
+})
+
 test('tool_choice:none 时连工具一起摘掉（上游不接受这个组合）', () => {
   const { body } = openAiRequest(
     {

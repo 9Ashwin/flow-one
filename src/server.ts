@@ -348,6 +348,9 @@ export function createBridgeServer({
       return {
         ok: false,
         status: typeof status === 'number' && Number.isInteger(status) && status >= 400 && status <= 599 ? status : 502,
+        // No HTTP status means no answer: a socket-level failure, not an upstream
+        // refusal. The 502 is only the wire-level placeholder the client needs.
+        network: true,
         message: cause === '' ? messageOf(error) : `${messageOf(error)} (${cause})`,
       }
     }
@@ -421,10 +424,16 @@ export function createBridgeServer({
     const result = await openWithTimeout(translated.body)
     if (!result.ok) {
       const status = result.status ?? 502
+      // The envelope keeps the standard `api_error` type: Anthropic's error types are a
+      // closed set, and an invented one would be less useful to the client than the
+      // message it already carries. The distinction that matters — no answer arrived,
+      // so this is not an upstream refusal — goes into the log line below.
       anthropicError(res, status, failureSummary(result), undefined, reqId, result.retryAfter)
       // A failed turn used to leave no trace at all: the log only ever recorded completed
       // ones, so "it errors sometimes" could not be tied to a source, a status or a time.
-      log(`${reqId} model=${model} failed status=${status} ms=${Date.now() - started} ${failureSummary(result)}`)
+      log(
+        `${reqId} model=${model} failed status=${status}${result.network === true ? ' network=1' : ''} ms=${Date.now() - started} ${failureSummary(result)}`,
+      )
       return
     }
     const prefixId = crypto

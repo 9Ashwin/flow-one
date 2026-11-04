@@ -169,6 +169,15 @@ export interface ChatFailure {
   ok: false
   status?: number
   message: string
+  /**
+   * No answer ever arrived: connect refused, TLS reset, read failed.
+   *
+   * The distinction must survive the adapters, because the HTTP status cannot
+   * carry it — a transport failure has no status, and the server used to invent
+   * 502 for every one of them, making it indistinguishable from an upstream that
+   * genuinely answered 502. The server records it in the turn's log line.
+   */
+  network?: boolean
   /** The upstream's retry delay, forwarded to the caller when present. */
   retryAfter?: string
   /**
