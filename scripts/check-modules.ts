@@ -51,6 +51,9 @@ const LAYERS = new Map<string, number>([
   ['src/auth.ts', 1],
   ['src/buddy.ts', 1],
   ['src/opencode.ts', 1],
+  // The channel-block fallback: reads the learned ledger, plans a request. Depends only on
+  // layer 0 (fingerprint + atomic), so the server can own the decision to resend.
+  ['src/degrade.ts', 1],
   // Layer 2 — source table and configuration. `config` is a *consumer* of the
   // source table (it derives default models per source), hence 2 → 2.
   ['src/sources.ts', 2],

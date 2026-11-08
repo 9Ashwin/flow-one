@@ -255,7 +255,7 @@ test('直接使用服务 API 也不能绕过非回环鉴权校验，拒绝发生
   assert.equal(bind.mock.callCount(), 0)
 })
 
-test('上游限流或网络异常不应自动重发，限流等待时间必须透传', async t => {
+test('已给出响应的上游失败（429/400）不重发，未给出响应的连接失败才重发两次', async t => {
   const attempts: string[] = []
   const upstream: Upstream = {
     describe: () => 'test',
@@ -266,7 +266,13 @@ test('上游限流或网络异常不应自动重发，限流等待时间必须�
         return { ok: false, status: 429, message: 'slow down', retryAfter: '30' }
       }
       if (body.messages[0].content === 'bad') return { ok: false, status: 400, message: 'bad request' }
-      if (body.messages[0].content === 'network') throw new Error('connection reset after request')
+      // No response ever arrived, so the upstream cannot have accepted the turn:
+      // this is the one failure a retry cannot double-bill (see src/server.ts).
+      if (body.messages[0].content === 'network')
+        throw Object.assign(new Error('read ECONNRESET'), { code: 'ECONNRESET' })
+      if (body.messages[0].content === 'dead') {
+        throw Object.assign(new Error('request body exceeds 32 MiB'), { statusCode: 413 })
+      }
       return {
         ok: true,
         chunks: (async function* () {
@@ -292,9 +298,18 @@ test('上游限流或网络异常不应自动重发，限流等待时间必须�
   const rejected = await call('bad')
   assert.equal(rejected.status, 400, '400 不该重试，直接透传')
   assert.equal(attempts.filter(item => item === 'bad').length, 1)
+
   const network = await call('network')
   assert.equal(network.status, 502)
-  assert.equal(attempts.filter(item => item === 'network').length, 1)
+  assert.equal(
+    attempts.filter(item => item === 'network').length,
+    3,
+    '无响应的连接失败必须重试到上限（首次 + 2 次重试），否则 502 直接中断 Claude Code',
+  )
+
+  const declared = await call('dead')
+  assert.equal(declared.status, 413, '我们自己标注了 statusCode 的失败是有信息的失败，不重试')
+  assert.equal(attempts.filter(item => item === 'dead').length, 1)
 })
 
 test('流式响应在首个上游分片之前就发出 message_start', { timeout: 5000 }, async t => {

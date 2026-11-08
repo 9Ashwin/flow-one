@@ -41,6 +41,7 @@ whole sentence to begin with).
 | 3 | `Main branch (you will usually use this for PRs)` | Changed to `Main branch (PRs usually go here)` | 2026-10-16: Claude Code injects this sentence **only in git repositories**; the whole sentence is blocked; 200 after the rewrite (measured on four models including `intl/deepseek-v4.1-flash` and `cn/hy4-preview`) |
 | 4 | `You are an AI agent powered by DeepSeek Harness` (DSH's persona first sentence) | Changed to `…powered by a DeepSeek harness` | 2026-10-22: the whole sentence is blocked character for character (splitting it into `DeepSeek Harness` / `You are an AI agent`, or removing the period, is not blocked); 200 after the rewrite (`cn/deepseek-v4.1-flash`; `intl` is unaffected) |
 | 5 | `through the DeepSeek Harness Web GUI` **co-occurring with** the immediately following "this page / this GUI / this app" sentence | Changed to `through the harness Web GUI` | 2026-10-22: each sentence alone yields 200, only co-occurrence is blocked; changing just this one spot → 200 (`cn/deepseek-v4.1-flash`) |
+| 6 | `Tokens prefixed with @ …` **co-occurring with** the next sentence `Relative paths resolve from the workspace root` | `explicitly referenced` → `named explicitly` | 2026-11-08: each sentence alone yields 200; joined by one space → 400 + 11128; reversed order, a newline between them, and separate `system` blocks all pass; rewriting one word → 200 (`cn/` and `intl/deepseek-v4.1-flash`) |
 
 Additional facts:
 
@@ -57,6 +58,33 @@ Additional facts:
 
 **Re-verification**: `fo doctor` puts these literals into a minimal request and actually sends
 it. Quota/rate limiting is reported separately (that is not a gate problem).
+
+### The fallback: drop client self-description and resend once
+
+Rule 6 is the sixth literal in a row, and every client release can add another one. Hand-writing
+a literal per release loses that race, so the bridge also carries a **structural fallback**:
+
+1. The literal rules above are applied first (unchanged, byte-for-byte when nothing matches).
+2. If the turn is still rejected with `11128`, the system prompt is split on blank lines and the
+   sections that only **describe the client** are dropped — `You are an AI agent powered by…`,
+   `You are a coding agent powered by…`, `You are interacting with the user through…`, and
+   `Tokens prefixed with @…` — and the turn is resent **once**.
+3. What survived is remembered by section hash in `<bridge home>/degrade.json`, so later turns
+   drop it before sending and pay no extra round trip.
+4. If the resend is still rejected, the original `11128` reaches the client unchanged.
+
+Task instructions, tool guidance, and runtime facts are never in the list: a degraded turn must
+not turn into a degraded agent. The resend is safe because `11128` is a refusal — no status line
+of a *billed* turn is ever retried (see `src/server.ts`).
+
+Measured 2026-11-08: with the real DSH system prompt (9.6 KB, 33 sections) the unmodified request
+→ 400 + 11128; the same request after the literal rule → 200; with the literal rules removed, the
+fallback dropped the self-description sections and the resend → 200.
+
+**Re-verification**: `fo doctor` puts these literals into a minimal request and actually sends
+it. Quota/rate limiting is reported separately (that is not a gate problem). To exercise the
+fallback itself, delete `<bridge home>/degrade.json`, force a channel block, and watch for
+`channel block (11128): dropped N client-description section(s) and retried` in the log.
 
 ### Variant: conversation identity headers (since 2026-10-21, unrelated to content)
 

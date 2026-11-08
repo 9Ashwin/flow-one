@@ -593,6 +593,29 @@ test('腾讯内容指纹：DSH 的 persona 与 Web GUI 两处也要改写（2026
     assert.equal(rewriteTencentFingerprints(untouched), untouched)
 })
 
+test('腾讯内容指纹：DSH 的 @ 路径说明段只在两句同现时改写（2026-11-08 起 cn 侧拦）', async () => {
+  const { rewriteTencentFingerprints } = await import('../src/fingerprint.ts')
+  // DSH 真实 system 里的这两句（2026-11-08 从会话记录取的原文）。
+  const first = 'Tokens prefixed with @ are paths the user explicitly referenced.'
+  const second =
+    'Relative paths resolve from the workspace root; absolute paths identify files or directories on the host.'
+  const real = [first, '', second, '', 'Anything else is a file: use the read tool.'].join('\n')
+
+  const out = rewriteTencentFingerprints(real)
+  assert.match(out, /paths the user named explicitly/, '两句同现是判据，命中就要改写')
+  assert.doesNotMatch(out, /the user explicitly referenced/)
+  // 第二句与无关行必须逐字符不变（腾讯侧按前缀缓存，无谓改动会让每轮都算新前缀）
+  assert.ok(out.includes(second))
+  assert.ok(out.includes('Anything else is a file: use the read tool.'))
+
+  // 只出现第一句时实测 200，所以不改写 —— 否则白白破坏前缀缓存
+  assert.equal(rewriteTencentFingerprints(first), first)
+  // 只出现第二句时同样 200
+  assert.equal(rewriteTencentFingerprints(second), second)
+  // 大小写同样要命中（判据不区分大小写；替换文本是固定的小写改写）
+  assert.match(rewriteTencentFingerprints(`${first.toUpperCase()} ${second}`), /@ are paths the user named explicitly/)
+})
+
 test('非腾讯 system 保留首尾空白，字符串与块数组都不 trim', () => {
   for (const system of ['  keep\n', [{ type: 'text', text: '  keep\n' }]]) {
     const result = openAiRequest({ system, messages: [{ role: 'user', content: 'hi' }] }, { model: 'oc/model' })
@@ -812,4 +835,37 @@ test('streaming exclusive cache usage reports normalized input total for diagnos
   assert.equal(stream.usage.cache_read_input_tokens, 90)
   assert.equal(stream.upstreamInputTokens, 100)
   assert.ok(frames.some(frame => frame.includes('"cache_read_input_tokens":90')))
+})
+
+test('渠道校验降级：只剥掉自述/输入约定段，任务指令与运行时事实逐字符保留', async () => {
+  const { stripClientSections } = await import('../src/fingerprint.ts')
+  const real = [
+    'You are an AI agent powered by DeepSeek Harness.',
+    'You are a coding agent powered by the cn/deepseek-v4.1-flash model.',
+    'Tokens prefixed with @ are paths the user explicitly referenced.',
+    'Relative paths resolve from the workspace root.',
+    'Read an existing file before overwriting it.',
+    'The runtime context names the DeepSeek Harness implementation checkout.',
+  ].join('\n\n')
+
+  const stripped = stripClientSections(real)
+  // 三个自述/输入约定段被剥掉
+  assert.equal(stripped.removed.length, 3)
+  assert.doesNotMatch(stripped.text, /You are an AI agent powered by/)
+  assert.doesNotMatch(stripped.text, /Tokens prefixed with @/)
+  // 任务指令与运行时事实必须原样留着：降级不能把 agent 变傻
+  assert.match(stripped.text, /Read an existing file before overwriting it\./)
+  assert.match(stripped.text, /The runtime context names the DeepSeek Harness implementation checkout\./)
+
+  // 没有可剥的段时逐字节不变（不能让本来能过的 prompt 被动一下）
+  const clean = 'Read an existing file before overwriting it.\n\nUse the grep tool.'
+  assert.equal(stripClientSections(clean).text, clean)
+  assert.deepEqual(stripClientSections(clean).removed, [])
+  assert.equal(stripClientSections('').text, '')
+
+  // 只剥调用方认可的段（已知段，预剥离阶段用）
+  const onlyKnown = stripClientSections(real, section => section.startsWith('Tokens prefixed with @'))
+  assert.equal(onlyKnown.removed.length, 1)
+  assert.match(onlyKnown.text, /You are an AI agent powered by DeepSeek Harness\./)
+  assert.doesNotMatch(onlyKnown.text, /Tokens prefixed with @/)
 })

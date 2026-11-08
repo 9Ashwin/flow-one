@@ -251,6 +251,73 @@ test('上游明确拒绝的 502 不带 network 标记（同是 502，成因必�
   assert.doesNotMatch(line, /network=1/)
 })
 
+test('响应头到达前的传输失败必须同源重试，否则 Claude Code 直接吃到 502 中断', async t => {
+  let calls = 0
+  const logs: string[] = []
+  const upstream = {
+    name: 'flaky',
+    describe: () => 'flaky',
+    loadModels: async () => [],
+    // 2026-10-28 measured against OpenCode Go: a ~2.6 MB payload died before the
+    // response headers in 5–8 of every 20 requests, and every one succeeded on retry.
+    chat: async () => {
+      calls++
+      if (calls === 1) {
+        const cause = Object.assign(new Error('other side closed'), { code: 'UND_ERR_SOCKET' })
+        throw new TypeError('fetch failed', { cause })
+      }
+      return {
+        ok: true as const,
+        chunks: (async function* () {
+          yield { choices: [{ delta: { content: 'ok' }, finish_reason: 'stop' }] }
+        })(),
+      }
+    },
+  } as any
+  const bridge = createBridgeServer({
+    config: baseConfig({ model: 'test' }),
+    upstream,
+    log: (line: string) => logs.push(line),
+  })
+  const address = await bridge.listen()
+  t.after(() => bridge.close())
+  const response = await fetch(`http://127.0.0.1:${address.port}/v1/messages`, {
+    method: 'POST',
+    body: JSON.stringify({ messages: [{ role: 'user', content: 'hi' }] }),
+  })
+  const text = await response.text()
+  assert.equal(response.status, 200, `a dead connection must be retried, got ${response.status}: ${text}`)
+  assert.equal(calls, 2, 'one dead connection costs exactly one retry')
+  assert.ok(
+    logs.some(entry => /retrying \(1\/2\)/.test(entry)),
+    `the retry must be visible in the log, got: ${JSON.stringify(logs)}`,
+  )
+})
+
+test('上游已经给出响应（4xx/5xx）时绝不重试，避免同一轮被计费两次', async t => {
+  let calls = 0
+  const upstream = {
+    name: 'rejecting',
+    describe: () => 'rejecting',
+    loadModels: async () => [],
+    chat: async () => {
+      calls++
+      return { ok: false as const, status: 429, message: 'slow down', retryAfter: '17' }
+    },
+  } as any
+  const bridge = createBridgeServer({ config: baseConfig({ model: 'test' }), upstream, log: () => {} })
+  const address = await bridge.listen()
+  t.after(() => bridge.close())
+  const response = await fetch(`http://127.0.0.1:${address.port}/v1/messages`, {
+    method: 'POST',
+    body: JSON.stringify({ messages: [{ role: 'user', content: 'hi' }] }),
+  })
+  await response.text()
+  assert.equal(response.status, 429)
+  assert.equal(response.headers.get('retry-after'), '17')
+  assert.equal(calls, 1, 'an answered rejection is final')
+})
+
 test('an in-stream failure is logged as failed, not as a normal turn that produced nothing', async t => {
   const upstreamServer = http.createServer((req, res) => {
     if (req.url === '/v1/models') {
@@ -747,4 +814,75 @@ test('login 是独立命令：轮询期间进程不能自己退出（子进程�
   assert.equal(code, 0, `子进程应当正常退出（err: ${err}）`)
   assert.match(out, /LOGGED_IN/, '等待期间进程必须活着，否则拿不到令牌')
   assert.equal(JSON.parse(fs.readFileSync(file, 'utf8')).cn.accessToken, 'at-x')
+})
+
+test('被 11128 拦时自动剥掉客户端自述段重发一次，并把结果落盘供重启后直接预剥离', async t => {
+  // 服务的降级记忆写在 bridgeHome() 下，用例必须隔离真实家目录
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'flow-one-degrade-'))
+  const previous = process.env.BRIDGE_HOME
+  process.env.BRIDGE_HOME = home
+  t.after(() => {
+    if (previous === undefined) delete process.env.BRIDGE_HOME
+    else process.env.BRIDGE_HOME = previous
+  })
+
+  const system = [
+    'You are an AI agent powered by DeepSeek Harness.',
+    'Tokens prefixed with @ are paths the user explicitly referenced.',
+    'Read an existing file before overwriting it.',
+  ].join('\n\n')
+  const bodies: any[] = []
+  const upstream = {
+    name: 'channel-check',
+    describe: () => 'channel-check',
+    loadModels: async () => [],
+    chat: async (body: any) => {
+      bodies.push(body)
+      // 第一次带着自述段 → 真实上游的渠道校验拒绝；剥掉后 → 200
+      const prompt = body.messages.map((message: any) => message.content).join('\n')
+      if (prompt.includes('You are an AI agent powered by')) {
+        return {
+          ok: false as const,
+          status: 400,
+          message:
+            'cn 400: upstream 11128: 请求被拦截，请重新发送 / 这次调用没通过渠道校验，可能不是官方客户端发出的。请用官方版本重新发送。',
+        }
+      }
+      return {
+        ok: true as const,
+        chunks: (async function* () {
+          yield { choices: [{ delta: { content: 'ok' }, finish_reason: 'stop' }] }
+        })(),
+      }
+    },
+  } as any
+  const send = async (port: number) => {
+    const response = await fetch(`http://127.0.0.1:${port}/v1/messages`, {
+      method: 'POST',
+      body: JSON.stringify({ model: 'cn/test', system, messages: [{ role: 'user', content: 'hi' }] }),
+    })
+    return { status: response.status, text: await response.text() }
+  }
+
+  const first = createBridgeServer({ config: baseConfig({ model: 'cn/test' }), upstream, log: () => {} })
+  const firstAddress = await first.listen()
+  const firstResult = await send(firstAddress.port)
+  await first.close()
+  assert.equal(firstResult.status, 200, `被拦后应自动降级重发，实际：${firstResult.status} ${firstResult.text}`)
+  assert.equal(bodies.length, 2, '一次拦截只该多花一次往返')
+  const retriedPrompt = bodies[1].messages.map((message: any) => message.content).join('\n')
+  assert.doesNotMatch(retriedPrompt, /You are an AI agent powered by/)
+  assert.match(retriedPrompt, /Read an existing file before overwriting it\./, '任务指令不能被一起剥掉')
+
+  // 落盘了：新进程（新 bridge）第一发就预剥离，不再先挨一次 11128
+  const ledger = JSON.parse(fs.readFileSync(path.join(home, 'degrade.json'), 'utf8'))
+  assert.ok(Array.isArray(ledger.sections) && ledger.sections.length > 0, '学到的段必须落盘')
+
+  bodies.length = 0
+  const second = createBridgeServer({ config: baseConfig({ model: 'cn/test' }), upstream, log: () => {} })
+  const secondAddress = await second.listen()
+  const secondResult = await send(secondAddress.port)
+  await second.close()
+  assert.equal(secondResult.status, 200)
+  assert.equal(bodies.length, 1, '学过的段该在首轮就剥掉，不再多一次往返')
 })

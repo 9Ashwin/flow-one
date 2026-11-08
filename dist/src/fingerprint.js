@@ -85,6 +85,19 @@ const RULES = [
         replace: 'through the harness Web GUI',
         note: 'measured 2026-10-22: together with the next sentence → 400 + 11128, rewriting only this spot → 200 (cn/deepseek-v4.1-flash)',
     },
+    {
+        // DSH's "@ path" paragraph. Measured 2026-11-08: the first sentence alone → 200, the
+        // second alone → 200, but the two joined by a single space → 400 + 11128. The boundary
+        // is narrow in a way that matters for how the rule is written: reversed order, a
+        // newline instead of the space, and the two sentences in separate `system` blocks all
+        // pass, and rewriting **one word** in either sentence passes. So the criterion is again
+        // a co-occurrence, and only the first sentence (the one that names `@`) is rewritten —
+        // the rewrite keeps the instruction intact.
+        find: 'Tokens prefixed with @ are paths the user explicitly referenced.',
+        replace: 'Tokens prefixed with @ are paths the user named explicitly.',
+        requires: 'Relative paths resolve from the workspace root',
+        note: 'measured 2026-11-08: each sentence 200, both joined 400 + 11128, one-word rewrite 200 (cn/deepseek-v4.1-flash and intl/deepseek-v4.1-flash)',
+    },
 ];
 /**
  * Rules that delete a whole line. The matching line is removed together with its newline,
@@ -103,9 +116,60 @@ const LINE_RULES = [
 function escapeRegExp(literal) {
     return literal.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
+/**
+ * Opening lines of prose that only describes **the client itself**: who it is, how the
+ * user sees it, and how it treats its own input.
+ *
+ * This is the fallback list, used when a turn is rejected even though the literal rules
+ * above were applied. The point of matching a section's **opening** rather than a whole
+ * sentence is that a new harness release rewords sentences all the time, while a section
+ * that introduces the client stays recognisable — that is what keeps this mechanism from
+ * needing another hand-written literal for every upstream change.
+ *
+ * Sections carrying task instructions, tool guidance, or runtime facts are deliberately
+ * absent: dropping those would trade a blocked turn for a degraded agent.
+ */
+const CLIENT_SECTION_PATTERNS = [
+    /^You are an AI agent powered by\b/i,
+    /^You are a coding agent powered by\b/i,
+    /^You are interacting with the user through\b/i,
+    /^Tokens (?:prefixed with|beginning with) @/i,
+];
+/**
+ * Drop client self-description sections, optionally only the ones a caller recognises.
+ *
+ * `shouldStrip` receives the section verbatim so a caller can decide by content hash; the
+ * default accepts every matching section (the learning pass). When nothing matches, the
+ * input is returned **unchanged and byte for byte**, so a caller cannot accidentally
+ * disturb a prompt that was fine.
+ */
+export function stripClientSections(text, shouldStrip = () => true) {
+    const source = String(text ?? '');
+    if (source === '')
+        return { text: source, removed: [] };
+    const kept = [];
+    const removed = [];
+    for (const section of source.split(/\n[ \t]*\n/)) {
+        if (CLIENT_SECTION_PATTERNS.some(pattern => pattern.test(section.trimStart())) && shouldStrip(section)) {
+            removed.push(section);
+            continue;
+        }
+        kept.push(section);
+    }
+    return removed.length === 0 ? { text: source, removed } : { text: kept.join('\n\n'), removed };
+}
+/**
+ * Whether an upstream failure is the channel check (`400` + `code 11128`), in either of its
+ * two wordings shipped so far ("Illegal API invocation from an unapproved channel" and the
+ * newer "did not pass channel verification").
+ */
+export function isChannelBlock(message) {
+    return /11128|请求被拦截|渠道校验|Illegal API invocation|unapproved channel/i.test(String(message ?? ''));
+}
 const COMPILED = RULES.map(rule => ({
     ...rule,
     findLower: rule.find.toLowerCase(),
+    requiresLower: rule.requires?.toLowerCase(),
     pattern: new RegExp(escapeRegExp(rule.find), 'gi'),
 }));
 /** Whether this model goes through Tencent's backend. Decided by prefix, aliases (`buddy`/`workbuddy`) included. */
@@ -125,7 +189,10 @@ export function rewriteTencentFingerprints(text) {
         return text;
     let out = text;
     for (const rule of COMPILED) {
-        if (!out.toLowerCase().includes(rule.findLower))
+        const lower = out.toLowerCase();
+        if (!lower.includes(rule.findLower))
+            continue;
+        if (rule.requiresLower !== undefined && !lower.includes(rule.requiresLower))
             continue;
         out = out.replace(rule.pattern, rule.replace);
     }

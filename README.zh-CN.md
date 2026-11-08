@@ -344,6 +344,12 @@ message_delta → message_stop` 成帧，工具参数走 `input_json_delta`，
 | `You are an AI agent powered by DeepSeek Harness` | 改成 `… powered by a DeepSeek harness` | DSH 的 persona 首句；拆成片段不拦，所以判据是整句 |
 | `through the DeepSeek Harness Web GUI` | 改成 `through the harness Web GUI` | 与上一条**同现**时才拦 |
 | 整行 `x-anthropic-billing-header: …`（Claude Code 2.1.x 拼在 system 首行） | 删掉整行 | 键名是判据（大小写不敏感、值任意）；改名或删除即 200 |
+| `Tokens prefixed with @ …` 与 `Relative paths resolve from the workspace root` 同现 | 把 `explicitly referenced` 改成 `named explicitly` | 单独出现都不拦；只隔一个空格连起来才拦，改一个词即 200 |
+
+这些字面量后面还有一层**结构化兜底**，上游再出新规则不必再发版：请求仍被 `11128` 拒绝时，
+桥会把只描述客户端本身的段落（`You are an AI agent powered by…`、`You are interacting with
+the user through…`、`Tokens prefixed with @…`）剥掉重发一次，并把生效的段落记进
+`degrade.json`，之后不再多一次往返。任务指令、工具指引与运行时事实一律不剥。
 
 关掉：`--no-fingerprint-rewrite` 或 `BRIDGE_FINGERPRINT_REWRITE=0`。
 **请自行权衡**：这是绕过厂商侧的一条内容控制，只为让 Claude Code 这类第三方客户端
@@ -363,9 +369,12 @@ message_delta → message_stop` 成帧，工具参数走 `input_json_delta`，
 - **工具结果里的图片**按 OpenAI 的多段格式发，标准服务器可能不收。
 - **非流式请求也仍然走上游的流式**，本桥负责归并成单个 JSON 响应。
 - **`count_tokens` 是估算**（4 字符 ≈ 1 token；图片按固定值计）。
-- **The bridge does not automatically retry uncertain upstream failures.** It forwards
-  `Retry-After` when supplied; Tencent credential renewal on 401/403 remains supported.
-  Clients can still apply their own retry policy.
+- **没有拿到响应的传输层失败会按同渠道、同模型重试两次。** 这不是回退：连接死掉时请求
+  根本没到上游，重试不会重复计费，选中的路由也保持不变。2026-10-28 实测 OpenCode Go，
+  约 2.6 MB 的 Claude Code 级负载下每 20 次有 5–8 次在响应头到达前断开
+  （`UND_ERR_SOCKET other side closed`、`EPIPE`、TLS alert），而它们全部一次重试就成功。
+  **已经给出响应**的失败（4xx/5xx，或响应头之后流被截断）不会重试，因为它可能已经被计费；
+  `Retry-After` 有则原样转发；腾讯 401/403 的凭据续期照旧。客户端仍可用自己的重试策略。
 - **`[claude-code:unrecognized_model]` 诊断行在 `-p` 模式下仍会出现。**
   官方给的消诊断办法是把 `modelOverrides` 的键写成 Claude 模型 ID —— 等于让 Claude Code
   以为自己在跑 Opus，随之套用那个模型的窗口与行为。不值得为一行 stderr 噪声付这个代价。

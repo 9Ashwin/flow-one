@@ -118,7 +118,11 @@ and folds the result. Some OpenAI-compatible providers require this flag to send
 usage. Tencent and OpenCode Go accepted it in the 2026-10-27 live checks.
 If an incompatible gateway rejects the option, restart with `--no-upstream-usage`
 (or `BRIDGE_UPSTREAM_USAGE=0`); that option is preserved in background service
-configuration. The bridge does not automatically retry a rejected request.
+configuration. The bridge does not automatically retry a rejected request: an answered
+4xx/5xx is final. The only thing that is retried is a transport failure that never
+produced a response at all (see `src/server.ts`): `fetch` threw, so no status line
+arrived and the upstream never accepted the turn. That is retried twice on the same
+source and model, never across sources.
 
 Successful request logs include `cache_read`, `cache_write`, and `cache_ratio`.
 `unknown` means the upstream did not report the field; it is not a zero. The

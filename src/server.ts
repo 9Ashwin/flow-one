@@ -11,8 +11,17 @@
 // - **The upstream answers before any response header is written.** An upstream
 //   401/429/400 therefore reaches Claude Code as its real status code instead of
 //   a 200 followed by an apology inside the stream. Once headers are out, a
-//   failure can only surface as an in-stream `error` event. Uncertain network
-//   failures are not retried because the upstream may already have billed the turn.
+//   failure can only surface as an in-stream `error` event.
+// - **Only a transport failure that never produced a response is retried, twice.** A thrown
+//   `fetch` means no status line arrived, so the upstream never accepted the turn and a
+//   resend cannot double-bill it; anything that *did* answer (4xx/5xx) is never retried.
+// - **A channel-check rejection is retried once with client self-description dropped.**
+//   Tencent's `400 + 11128` ("this call did not pass channel verification") fires on
+//   sentences that merely describe the client — every new harness release produces one
+//   more of them, and hand-writing a literal for each was the old, losing game. Instead the
+//   bridge drops the sections that introduce the client (`stripClientSections`) and resends
+//   once; what worked is remembered on disk so the next turn pays no extra round trip.
+//   Task instructions, tool guidance, and runtime facts are never dropped.
 // - **`message_start` is emitted on connect.** A reasoning model can think for
 //   seventy seconds without emitting a byte, while the Anthropic contract starts
 //   the message at handshake time; waiting for the first chunk leaves the client
@@ -35,8 +44,10 @@
 import http from 'node:http'
 import type { IncomingMessage, Server, ServerResponse } from 'node:http'
 import type { AddressInfo } from 'node:net'
+import path from 'node:path'
 import { validateListenAuth } from './config.ts'
 import crypto from 'node:crypto'
+import { bridgeHome } from './home.ts'
 import {
   anthropicMessage,
   createOutcome,
@@ -46,11 +57,16 @@ import {
   foldChunk,
   toOpenAiRequest,
 } from './anthropic.ts'
-import { systemRewriterFor } from './fingerprint.ts'
+import { isChannelBlock, systemRewriterFor } from './fingerprint.ts'
+import { DEGRADE_FILE, createDegradeLedger } from './degrade.ts'
 import type { BridgeConfig, ChatChunks, ChatResult, OpenAiRequestBody, Upstream, UpstreamModel } from './types.ts'
 
 const MAX_BODY_BYTES = 32 * 1024 * 1024
 const MODEL_TTL_MS = 60_000
+/** Extra attempts after a dead connection. Measured 2026-10-28: one retry rescued 8/8 such turns. */
+const UPSTREAM_RETRIES = 2
+/** First backoff step; the second attempt waits twice this. */
+const UPSTREAM_RETRY_DELAY_MS = 250
 
 /** A decoded JSON object from the request body; anything else narrows to undefined. */
 const isObject = (value: unknown): value is Record<string, unknown> =>
@@ -272,6 +288,8 @@ export function createBridgeServer({
   /** Model id → upstream metadata (image support, window, …). */
   const prefixSecret = crypto.randomBytes(32)
   const known = new Map<string, UpstreamModel>()
+  // Learned channel-block fallbacks: which client-description sections to drop up front.
+  const degrade = createDegradeLedger({ file: path.join(bridgeHome(), DEGRADE_FILE), log })
   let modelsFetchedAt = 0
   let refreshing: Promise<void> | undefined
 
@@ -336,27 +354,69 @@ export function createBridgeServer({
    */
   const supportsImagesFor = (model: string): boolean => known.get(model)?.supportsImages !== false
 
-  /** A missing response does not prove the upstream did not start or bill the turn. */
-  async function openUpstream(body: OpenAiRequestBody, { signal }: { signal: AbortSignal }): Promise<ChatResult> {
-    let result: ChatResult
-    try {
-      result = await upstream.chat(body, { signal })
-    } catch (error) {
-      if (signal.aborted) throw error
-      const status = (error as { statusCode?: unknown } | null)?.statusCode
-      const cause = causeOf(error)
-      return {
-        ok: false,
-        status: typeof status === 'number' && Number.isInteger(status) && status >= 400 && status <= 599 ? status : 502,
-        // No HTTP status means no answer: a socket-level failure, not an upstream
-        // refusal. The 502 is only the wire-level placeholder the client needs.
-        network: true,
-        message: cause === '' ? messageOf(error) : `${messageOf(error)} (${cause})`,
-      }
+  /**
+   * Whether a thrown error is a socket that died before any response arrived.
+   *
+   * Matched on the transport shapes actually observed against OpenCode Go on 2026-10-28 —
+   * `UND_ERR_SOCKET` ("other side closed"), `EPIPE`, `ECONNRESET`, and OpenSSL's `ERR_SSL_*`
+   * alerts — because the distinction matters: those are safe to resend, while an error
+   * carrying its own `statusCode` or a credential problem is not. `fetch` hides all of them
+   * under the message "fetch failed", which is why the cause chain is walked here.
+   */
+  const isDeadConnection = (error: unknown): boolean => {
+    let current: unknown = error
+    for (let depth = 0; current !== undefined && current !== null && depth < 5; depth++) {
+      const record = current as { code?: unknown; message?: unknown }
+      const code = typeof record.code === 'string' ? record.code : ''
+      const message = messageOf(current)
+      if (/^(UND_ERR_SOCKET|EPIPE|ECONNRESET|ECONNREFUSED|ERR_SSL_.*|UND_ERR_CLOSED)$/.test(code)) return true
+      if (/other side closed|socket hang up/i.test(message)) return true
+      current = (record as { cause?: unknown }).cause
     }
-    if (result.ok === true) return result
-    const status = Number(result.status) || 502
-    return { ...result, status }
+    return false
+  }
+
+  /**
+   * One upstream attempt, retrying only a transport failure that produced no response.
+   *
+   * A thrown `fetch` means the connection died before any status line arrived, so the
+   * upstream never accepted the turn and a retry cannot double-bill it. Anything that
+   * *did* answer — a 4xx/5xx or an answered-then-truncated stream — is returned as-is:
+   * retrying that could bill the same turn twice, and `ChatFailure` is what carries the
+   * fix to the user. Same source, same model, no fallback.
+   */
+  async function openUpstream(body: OpenAiRequestBody, { signal }: { signal: AbortSignal }): Promise<ChatResult> {
+    for (let attempt = 0; ; attempt++) {
+      let result: ChatResult
+      try {
+        result = await upstream.chat(body, { signal })
+      } catch (error) {
+        if (signal.aborted) throw error
+        const status = (error as { statusCode?: unknown } | null)?.statusCode
+        const declared = typeof status === 'number' && Number.isInteger(status) && status >= 400 && status <= 599
+        // Skipped for anything that is not a dead socket: a `statusCode` means we already
+        // know what failed, and our own thrown errors (no credential, bad key) are not
+        // transport failures at all, so resending them would only delay the answer.
+        if (declared || !isDeadConnection(error) || attempt >= UPSTREAM_RETRIES) {
+          const cause = causeOf(error)
+          return {
+            ok: false,
+            status: declared ? (status as number) : 502,
+            // No HTTP status means no answer: a socket-level failure, not an upstream
+            // refusal. The 502 is only the wire-level placeholder the client needs.
+            network: true,
+            message: cause === '' ? messageOf(error) : `${messageOf(error)} (${cause})`,
+          }
+        }
+        log(`upstream connection failed before answering, retrying (${attempt + 1}/${UPSTREAM_RETRIES})`)
+        await new Promise(resolve => setTimeout(resolve, UPSTREAM_RETRY_DELAY_MS * 2 ** attempt))
+        if (signal.aborted) throw error
+        continue
+      }
+      if (result.ok === true) return result
+      const failureStatus = Number(result.status) || 502
+      return { ...result, status: failureStatus }
+    }
   }
 
   async function handleMessages(req: IncomingMessage, res: ServerResponse, body: unknown): Promise<void> {
@@ -409,19 +469,48 @@ export function createBridgeServer({
         clearTimeout(timer)
       }
     }
-    const translated = toOpenAiRequest(body, {
-      model,
-      maxTokensCap: config.maxTokensCap,
-      supportsImages: supportsImagesFor(model),
-      rewriteSystem: systemRewriterFor(model, config.fingerprintRewrite),
-    })
+    const translate = (source: unknown) =>
+      toOpenAiRequest(source, {
+        model,
+        maxTokensCap: config.maxTokensCap,
+        supportsImages: supportsImagesFor(model),
+        rewriteSystem: systemRewriterFor(model, config.fingerprintRewrite),
+      })
+    // A section the channel check has already rejected is dropped before sending, so the
+    // learned fallback costs nothing after the first time.
+    const translated = translate(degrade.planFor(body).body)
     if (translated.error !== undefined) {
       anthropicError(res, 400, translated.error, undefined, reqId)
       log(`${reqId} model=${model} failed status=400 ms=${Date.now() - started} ${translated.error}`)
       return
     }
     if (config.upstreamUsage === false) delete translated.body.stream_options
-    const result = await openWithTimeout(translated.body)
+    let result = await openWithTimeout(translated.body)
+    if (
+      !result.ok &&
+      isChannelBlock(result.message) &&
+      systemRewriterFor(model, config.fingerprintRewrite) !== undefined
+    ) {
+      // Everything above was described as "the client is not official". The text that
+      // makes the upstream say so is client self-description, so drop those sections and
+      // resend once. A channel check is a refusal, not a billed turn, which is what makes
+      // this resend safe while an answered failure stays un-retried.
+      const fallback = degrade.planAll(body)
+      if (fallback.removed.length > 0) {
+        const retried = translate(fallback.body)
+        if (retried.error === undefined) {
+          if (config.upstreamUsage === false) delete retried.body.stream_options
+          const second = await openWithTimeout(retried.body)
+          if (second.ok) {
+            degrade.remember(fallback.removed)
+            log(
+              `${reqId} model=${model} channel block (11128): dropped ${fallback.removed.length} client-description section(s) and retried`,
+            )
+          }
+          result = second
+        }
+      }
+    }
     if (!result.ok) {
       const status = result.status ?? 502
       // The envelope keeps the standard `api_error` type: Anthropic's error types are a

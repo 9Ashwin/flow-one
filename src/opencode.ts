@@ -683,7 +683,10 @@ export async function chat(
 
 /** `fetch` types the body as nullable; a 2xx SSE response always has one. */
 function asReadableStream(body: ReadableStream<Uint8Array> | null): ReadableStream<Uint8Array> {
-  if (body === null) throw new Error('the upstream returned a 2xx response without a body')
+  // Carries a statusCode so the server's retry loop does not treat it as a dead
+  // connection: a 2xx already arrived, so the turn may be billed and must not be resent.
+  if (body === null)
+    throw Object.assign(new Error('the upstream returned a 2xx response without a body'), { statusCode: 502 })
   return body
 }
 

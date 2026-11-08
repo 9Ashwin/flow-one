@@ -381,6 +381,14 @@ prefix):
 | `You are an AI agent powered by DeepSeek Harness` | Changed to `… powered by a DeepSeek harness` | DSH's persona line; split into fragments it is not blocked, so the match is the whole sentence |
 | `through the DeepSeek Harness Web GUI` | Changed to `through the harness Web GUI` | Blocked only when it appears together with the previous line |
 | A whole line `x-anthropic-billing-header: …` (Claude Code 2.1.x puts it on the first line of the system prompt) | The entire line is removed | The key name is the criterion (case-insensitive, any value); renaming or deleting it yields 200 |
+| `Tokens prefixed with @ …` together with `Relative paths resolve from the workspace root` | `explicitly referenced` → `named explicitly` | Each sentence alone is 200; joined by one space they are blocked, and rewriting one word yields 200 |
+
+Behind these literals sits a **structural fallback**, so a new upstream rule no longer needs a
+new release: if a turn is still rejected with `11128`, the bridge drops the sections that only
+describe the client (`You are an AI agent powered by…`, `You are interacting with the user
+through…`, `Tokens prefixed with @…`), resends once, and remembers what worked in
+`degrade.json` so later turns pay no extra round trip. Task instructions, tool guidance and
+runtime facts are never dropped.
 
 To turn it off: `--no-fingerprint-rewrite` or `BRIDGE_FINGERPRINT_REWRITE=0`.
 **Weigh this yourself**: it is a workaround for a vendor-side content control, only so that
@@ -404,9 +412,15 @@ third-party clients such as Claude Code can be used (see the disclaimer at the e
   not accept.
 - **Non-streaming requests are still streamed upstream**, and this bridge consolidates them into
   a single JSON response.
-- **Upstream failures are not automatically retried by the bridge** when the result may be
-  uncertain; `Retry-After` is forwarded when supplied. Tencent credential renewal on 401/403
-  remains supported. Clients can have their own retry policy.
+- **A transport failure that produced no response is retried twice on the same source and
+  model.** This is not a fallback: a dead connection never reached the upstream, so retrying it
+  cannot double-bill, and the route stays exactly what you selected. Measured 2026-10-28 on
+  OpenCode Go with a Claude-Code-sized payload (~2.6 MB): 5–8 of every 20 requests died before
+  the response headers (`UND_ERR_SOCKET other side closed`, `EPIPE`, a TLS alert), and every
+  one of them succeeded on a plain retry. An upstream that **answered** — 4xx/5xx, or a stream
+  that truncates after headers — is never retried, because it may already be billed;
+  `Retry-After` is forwarded when supplied. Tencent credential renewal on 401/403 remains
+  supported. Clients can have their own retry policy.
 - **`count_tokens` is an estimate** (4 characters ≈ 1 token; images count as a fixed value).
 - **The `[claude-code:unrecognized_model]` diagnostic line still appears in `-p` mode.**
   The official workaround is to key `modelOverrides` by Claude model IDs — which amounts to
