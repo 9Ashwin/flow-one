@@ -534,3 +534,41 @@ A few deliberate constraints:
   imports nothing; its whole purpose is to break the `config ↔ opencode` cycle.
 - **Every behavior change comes with a regression test**, and test cases must not touch the real
   home directory (always use a temporary `BRIDGE_HOME`).
+
+## Domestic daily check-in
+
+`fo checkin enable` explicitly pins the current logged-in **cn** account. It does not enable
+other accounts or install a scheduler. WorkBuddy international does not support daily claims.
+`fo checkin run` performs one due attempt; `fo checkin status` reads local status without a
+network request; `fo checkin pause` disables future attempts. Resume with `fo checkin enable`.
+Status is English JSON. A running attempt must finish before pause can acquire the lock.
+
+The implementation uses the domestic billing status endpoint before claiming. Server-confirmed
+success or already-checked-in results persist in `~/.flow-one/checkin.json` (or `BRIDGE_HOME`),
+with UTC+8 dates. Failed attempts never mark success. There are at most three attempts per day,
+at least 15 minutes apart, including attempts interrupted by a process crash. The next day's
+budget resets automatically. Enabling again does not reset the same account's retry budget.
+Expired credentials use the existing renewal mechanism; a rejected login requires `fo login cn`.
+A changed account cannot claim until explicitly enabled. No inference API key is used.
+
+On Windows, register **one** task against the installed CLI after enabling:
+
+```powershell
+./scripts/register-checkin.ps1 -CliPath "$env:APPDATA/npm/node_modules/flow-one/dist/cli.js"
+```
+
+`FlowOne-DailyCheckin-CN` runs every 15 minutes and at user logon. It uses the same user's default
+data directory, runs without elevation, and requires that user to be logged in. Do not register
+it alongside another check-in scheduler for this account. It does not restart the inference
+service or embed another timer in it. While the machine is off, asleep, or logged out, claims
+cannot run; the next available trigger checks the current day, never backfills missed days.
+Pause scheduling with `Disable-ScheduledTask -TaskName FlowOne-DailyCheckin-CN` and resume with
+`Enable-ScheduledTask -TaskName FlowOne-DailyCheckin-CN`. Remove with
+`Unregister-ScheduledTask -TaskName FlowOne-DailyCheckin-CN -Confirm:$false`.
+
+On macOS/Linux the same one-shot CLI can be invoked by an existing user scheduler; this Windows
+registration script is not used there. No macOS/Linux scheduler is installed automatically.
+For concurrent commands sharing a data directory, an OS-owned loopback socket lock prevents
+overlap and releases on process exit. Its port is deterministically chosen in 40000–59999;
+an unrelated listener or hash collision fails closed with a lock-busy error. Different data
+directories and external plugins do not share this lock: keep a single scheduler per account.
