@@ -150,6 +150,8 @@ Usage:
   flow-one login [cn|intl]    log in (both when no product name is given)
   flow-one status             show login status
   flow-one models             list available model IDs
+  flow-one checkin <action>   opt-in domestic (cn) daily check-in: status | enable | pause | run
+                              (run needs an external scheduler; nothing is installed for you)
   flow-one switch             pick a backend model (keeps the unified entry when available)
   flow-one use <cn|intl|oc|ocg>  switch to a configured source
                               when multiple sources are available

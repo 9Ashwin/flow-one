@@ -245,6 +245,7 @@ subscription, and using them reports `AuthError`.
 | `login [cn\|intl]` | Login; with no argument it logs in to both product lines |
 | `status` | Login status, token expiry, service and configuration file locations |
 | `models` | Lists available model IDs (with context window / output limit / effort level) |
+| `checkin <status\|enable\|pause\|run>` | Opt-in domestic (cn) daily check-in; `enable`/`pause`/`status` are local-only, `run` performs one due attempt (see below) |
 
 If you prefer not to use the wizard, every step can be done with flags:
 
@@ -435,8 +436,8 @@ third-party clients such as Claude Code can be used (see the disclaimer at the e
   `…/lib/node_modules/…/dist/cli.js`, and later `git pull`s or repository edits have no effect
   (the symptom is "the CLI has a new feature but the service doesn't"). `fo status` prints the
   service's code path and warns with a reinstall hint when it differs from the current command.
-- Covers conversations and the model catalog only. **Daily check-in for credits is out of
-  scope.**
+- Covers conversations and the model catalog only. Daily check-in for credits is a separate
+  opt-in feature (see "Domestic daily check-in"); it is not available on WorkBuddy International.
 
 ## Tests
 
@@ -557,7 +558,8 @@ On Windows, register **one** task against the installed CLI after enabling:
 ./scripts/register-checkin.ps1 -CliPath "$env:APPDATA/npm/node_modules/flow-one/dist/cli.js"
 ```
 
-`FlowOne-DailyCheckin-CN` runs every 15 minutes and at user logon. It uses the same user's default
+Run that script from a clone of this repository: the npm package ships only `dist/`, so a global
+install has no `scripts/` directory. `FlowOne-DailyCheckin-CN` runs every 15 minutes and at user logon. It uses the same user's default
 data directory, runs without elevation, and requires that user to be logged in. Do not register
 it alongside another check-in scheduler for this account. It does not restart the inference
 service or embed another timer in it. While the machine is off, asleep, or logged out, claims

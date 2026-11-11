@@ -96,6 +96,7 @@ layers** (a lower number may be depended on by a higher number):
 | 1 | `src/opencode.ts` | OpenCode free tier (shape gate) and Go plan (session header) |
 | 2 | `src/sources.ts` | Source table: prefixes, labels, default models, whether login is required |
 | 2 | `src/config.ts` | Parsing and validation of flags/env/defaults |
+| 2 | `src/checkin.ts` | Opt-in domestic daily check-in: billing status/claim protocol, UTC+8 persisted dedup, OS loopback lock |
 | 3 | `src/install.ts` | Writing/restoring Claude Code settings, launchd and systemd services, `install.json` ledger |
 | 3 | `src/upstreams.ts` | Source factories and the chat entry point (prefix resolution, rewriter selection) |
 | 3 | `src/server.ts` | Local reverse proxy: routing, authentication, heartbeat, upstream status passthrough |

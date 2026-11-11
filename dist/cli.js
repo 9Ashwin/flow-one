@@ -6,6 +6,7 @@
  * international edition), `status` (show login state), `models` (list available model
  * IDs). Login and the proxy share one credential file, so whatever
  * `ANTHROPIC_MODEL` should be after `login` can be copied straight from `models`.
+ * `checkin` is the opt-in domestic daily check-in; it touches no inference path.
  */
 import process from 'node:process';
 import { createRequire } from 'node:module';

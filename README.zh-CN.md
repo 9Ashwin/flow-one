@@ -218,6 +218,7 @@ Claude Code 执行不了的工具名。
 | `login [cn\|intl]` | 登录；不带参数时两条产品线都登 |
 | `status` | 登录状态、令牌有效期、服务与配置文件位置 |
 | `models` | 列出可用模型 ID（带上下文窗口 / 输出上限 / 档位） |
+| `checkin <status\|enable\|pause\|run>` | 可选的国内每日签到；`enable` / `pause` / `status` 只动本地，`run` 执行一次到期尝试（见下） |
 
 不想用向导，每一步都能用 flag 完成：
 
@@ -385,7 +386,7 @@ the user through…`、`Tokens prefixed with @…`）剥掉重发一次，并把
   `…/lib/node_modules/…/dist/cli.js` 那份**快照**，之后的 `git pull` 或改仓库都不影响它
   （症状是「命令行有新功能，服务没有」）。`fo status` 会打印服务用的代码路径，
   与当前命令不一致时提示重装。
-- 只覆盖对话与模型清单。**每日签到领积分不在范围内。**
+- 只覆盖对话与模型清单。每日签到是独立的可选功能（见「国内每日签到」），国际版不支持。
 
 ## 测试
 
@@ -461,3 +462,35 @@ make help       # 列出全部目标
   （`scripts/check-modules.ts`）。`src/home.ts` 故意什么都不 import —— 它存在的意义
   就是打断 `config ↔ opencode` 那一环。
 - **每个行为变更都要有回归测试**，且用例不得碰真实家目录（一律用临时的 `BRIDGE_HOME`）。
+
+## 国内每日签到
+
+`fo checkin enable` 显式固定当前已登录的 **cn** 账号：它不会替其它账号启用，也不安装调度器。
+WorkBuddy 国际版不支持每日签到。`fo checkin run` 执行一次到期尝试；`fo checkin status` 只读
+本地状态、不发网络请求；`fo checkin pause` 停止后续尝试，恢复用 `fo checkin enable`。状态
+输出为英文 JSON。正在跑的尝试结束前，`pause` 拿不到锁。
+
+实现先查国内 billing 状态端点，再决定是否领取。服务端确认成功或已签到才写入
+`~/.flow-one/checkin.json`（或 `BRIDGE_HOME`），日期按 UTC+8；失败绝不记成成功。每天最多三次、
+间隔至少 15 分钟（被进程崩溃打断的那次也算）。次日预算自动重置；同账号再次 enable 不重置
+次数。凭据过期走既有续期机制，登录被拒需要重新 `fo login cn`。账号变了必须显式重新启用才能
+领取。不占推理用的 API key。
+
+Windows 上在启用之后给已安装的 CLI 注册**一个**任务：
+
+```powershell
+./scripts/register-checkin.ps1 -CliPath "$env:APPDATA/npm/node_modules/flow-one/dist/cli.js"
+```
+
+该脚本要从本仓库的 clone 里运行：npm 包只带 `dist/`，全局安装没有 `scripts/` 目录。
+`FlowOne-DailyCheckin-CN` 每 15 分钟运行一次，并在用户登录时运行；用同一用户的默认数据目录，
+不提权，且要求该用户已登录。不要给同一账号再挂另一个签到调度器。它不重启推理服务，也不会在
+服务里再塞一个定时器。机器关机、睡眠或注销期间无法签到；下一个可用触发点只检查当天，绝不补
+签。暂停用 `Disable-ScheduledTask -TaskName FlowOne-DailyCheckin-CN`，恢复用
+`Enable-ScheduledTask -TaskName FlowOne-DailyCheckin-CN`，删除用
+`Unregister-ScheduledTask -TaskName FlowOne-DailyCheckin-CN -Confirm:$false`。
+
+macOS/Linux 用已有用户调度器调用同一条一次性命令即可；本改动不注册任何 macOS/Linux 调度器，
+Windows 注册脚本在那两个平台也不用。同一数据目录的并发命令由操作系统持有的回环 socket 锁
+互斥，进程退出即释放；端口按数据目录确定性地落在 40000–59999，被无关监听占用或哈希碰撞时
+失败关闭（lock-busy）。不同数据目录与外部插件不共享这把锁：一个账号只留一个调度器。
