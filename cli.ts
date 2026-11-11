@@ -31,6 +31,7 @@ import { isInteractive } from './src/prompt.ts'
 import { installService, serviceState } from './src/install.ts'
 import { clientFlow, doctorFlow, mainMenu, setupWizard, statusFlow, switchModel, uninstallFlow } from './src/wizard.ts'
 import { useFlow } from './src/use.ts'
+import { checkinCommand } from './src/checkin.ts'
 import type { Config } from './src/config.ts'
 import type { Source, Upstream } from './src/types.ts'
 
@@ -274,6 +275,7 @@ const { version } = createRequire(import.meta.url)('./package.json')
 
 async function main() {
   const argv = process.argv.slice(2).filter(argument => argument !== '--json')
+  if (argv[0] === 'checkin') return await checkinCommand(argv.slice(1))
   // The version is metadata: no credentials, no network, no menu — it must answer the
   // moment someone types it after installing.
   if (argv.includes('--version') || argv.includes('-v')) {

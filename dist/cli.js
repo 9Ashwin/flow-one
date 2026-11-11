@@ -21,6 +21,7 @@ import { isInteractive } from "./src/prompt.js";
 import { installService, serviceState } from "./src/install.js";
 import { clientFlow, doctorFlow, mainMenu, setupWizard, statusFlow, switchModel, uninstallFlow } from "./src/wizard.js";
 import { useFlow } from "./src/use.js";
+import { checkinCommand } from "./src/checkin.js";
 /**
  * Progress and warnings always go to stderr — stdout carries success data only
  * (AGENTS.md, "output split"). Mixing logs into stdout turns `fo models | jq`
@@ -236,6 +237,8 @@ const jsonOut = process.argv.slice(2).includes('--json');
 const { version } = createRequire(import.meta.url)('./package.json');
 async function main() {
     const argv = process.argv.slice(2).filter(argument => argument !== '--json');
+    if (argv[0] === 'checkin')
+        return await checkinCommand(argv.slice(1));
     // The version is metadata: no credentials, no network, no menu — it must answer the
     // moment someone types it after installing.
     if (argv.includes('--version') || argv.includes('-v')) {

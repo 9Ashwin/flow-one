@@ -58,6 +58,7 @@ const LAYERS = new Map<string, number>([
   // source table (it derives default models per source), hence 2 → 2.
   ['src/sources.ts', 2],
   ['src/config.ts', 2],
+  ['src/checkin.ts', 2],
   // Layer 3 — assembly. Turns sources into one upstream.
   ['src/install.ts', 3],
   ['src/dsh.ts', 3],
